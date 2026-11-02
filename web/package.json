@@ -1,0 +1,14 @@
+{
+  "name": "@spillway/web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "lint": "eslint . && tsc --noEmit"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "eslint": "10.14.0",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.72.1"
+  }
+}
