@@ -1,0 +1,69 @@
+{
+  "realm": "spillway",
+  "enabled": true,
+  "roles": {
+    "realm": [
+      { "name": "admin", "description": "Everything (CP-12)" },
+      { "name": "operator", "description": "Policies, overrides, consumers, keys (CP-12)" },
+      { "name": "viewer", "description": "Read-only (CP-12)" }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "admin-ui",
+      "name": "Spillway admin UI",
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "implicitFlowEnabled": false,
+      "redirectUris": ["http://localhost:5173/*", "http://localhost:8080/*"],
+      "webOrigins": ["http://localhost:5173", "http://localhost:8080"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost:5173/*##http://localhost:8080/*"
+      }
+    },
+    {
+      "clientId": "gateway-tests",
+      "name": "Gateway tests (mints test JWTs, GW-18)",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "dev-only-not-secret",
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true
+    }
+  ],
+  "users": [
+    {
+      "username": "test-admin",
+      "enabled": true,
+      "email": "test-admin@spillway.test",
+      "emailVerified": true,
+      "firstName": "Test",
+      "lastName": "Admin",
+      "credentials": [{ "type": "password", "value": "dev-only-not-secret", "temporary": false }],
+      "realmRoles": ["admin"]
+    },
+    {
+      "username": "test-operator",
+      "enabled": true,
+      "email": "test-operator@spillway.test",
+      "emailVerified": true,
+      "firstName": "Test",
+      "lastName": "Operator",
+      "credentials": [{ "type": "password", "value": "dev-only-not-secret", "temporary": false }],
+      "realmRoles": ["operator"]
+    },
+    {
+      "username": "test-viewer",
+      "enabled": true,
+      "email": "test-viewer@spillway.test",
+      "emailVerified": true,
+      "firstName": "Test",
+      "lastName": "Viewer",
+      "credentials": [{ "type": "password", "value": "dev-only-not-secret", "temporary": false }],
+      "realmRoles": ["viewer"]
+    }
+  ]
+}

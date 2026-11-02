@@ -1,0 +1,6 @@
+# Send only what the image builds need; keeps .env files, keys and bin/ out.
+*
+!go.mod
+!go.sum
+!cmd/
+!internal/

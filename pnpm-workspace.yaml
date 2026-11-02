@@ -1,0 +1,12 @@
+packages:
+  - web
+
+# pnpm 12 reads this here, not from .npmrc (ADR-0006).
+saveExact: true
+
+overrides:
+  # GHSA-g3hv-75wg-m249: no patched 10.x; eslint 10.14.0 still asks for ^10.2.6.
+  minimatch: 11.0.4
+
+minimumReleaseAgeExclude:
+  - minimatch@11.0.4

@@ -1,0 +1,123 @@
+# CI on every PR and on main. The ci-ok job is the only required status check
+# in the main ruleset (docs/design.md M0, Stack). Actions are pinned to commit
+# SHAs; Dependabot keeps them current.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: bin
+          key: tools-go-${{ runner.os }}-${{ hashFiles('Makefile') }}
+      - name: Lint
+        run: make lint-go
+      - name: Unit tests and fuzz smoke
+        run: make test FUZZTIME=10s
+      - name: govulncheck
+        run: make tool-govulncheck && bin/govulncheck ./...
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: ESLint and typecheck
+        run: make lint-web
+      - name: pnpm audit
+        run: pnpm audit
+
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: bin
+          key: tools-gitleaks-${{ runner.os }}-${{ hashFiles('Makefile') }}
+      - name: Scan the full history
+        run: make tool-gitleaks && bin/gitleaks git --no-banner --redact .
+
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build linux/amd64 and linux/arm64
+        run: docker buildx build --target gateway --platform linux/amd64,linux/arm64 --build-arg VERSION=${{ github.sha }} .
+      - name: Runs as non-root with a read-only root filesystem (SEC-10)
+        run: |
+          docker buildx build --target gateway --build-arg VERSION=${{ github.sha }} --load -t spillway-gateway:ci .
+          user=$(docker image inspect spillway-gateway:ci --format '{{.Config.User}}')
+          echo "user=$user"
+          test "$user" = 65532:65532
+          docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges spillway-gateway:ci
+
+  # Boots the dev stack from a clean checkout, runs the integration tests and
+  # the stack part of the M0 exit check (ADR-0004).
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: docker compose version
+      - name: make dev
+        run: make dev
+      - name: Integration tests
+        run: make test-integration
+      - name: make verify-m0-stack
+        run: make verify-m0-stack
+      - name: Compose state and logs
+        if: failure()
+        run: |
+          docker compose ps -a
+          docker compose logs --no-color --tail 200
+
+  ci-ok:
+    if: always()
+    needs: [go, web, gitleaks, image, integration]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every job succeeded
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: jq -e 'all(.[]; .result == "success")' <<<"$NEEDS"

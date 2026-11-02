@@ -1,0 +1,215 @@
+# Spillway dev stack. Start it with `make dev`; reset with `docker compose down -v`.
+# Ports come from docs/ports.md and are published on 127.0.0.1 only (SEC-02).
+# Every ${VAR} has a dev default, so bare `docker compose` commands work
+# without the Makefile's --env-file flags (ADR-0004).
+
+name: spillway
+
+x-env-local: &env-local
+  - path: .env.local
+    required: false
+
+x-redis-node: &redis-node
+  image: redis:8.10.3
+  env_file: *env-local
+  tmpfs:
+    - /data
+  ulimits:
+    nofile: 65536
+  healthcheck:
+    test: ["CMD", "redis-cli", "ping"]
+    interval: 2s
+    timeout: 2s
+    retries: 15
+
+services:
+  redis-0:
+    <<: *redis-node
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf", "--cluster-announce-hostname", "redis-0"]
+    volumes: ["./deploy/compose/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro"]
+    ports: ["127.0.0.1:7000:6379"]
+  redis-1:
+    <<: *redis-node
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf", "--cluster-announce-hostname", "redis-1"]
+    volumes: ["./deploy/compose/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro"]
+    ports: ["127.0.0.1:7001:6379"]
+  redis-2:
+    <<: *redis-node
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf", "--cluster-announce-hostname", "redis-2"]
+    volumes: ["./deploy/compose/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro"]
+    ports: ["127.0.0.1:7002:6379"]
+  redis-3:
+    <<: *redis-node
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf", "--cluster-announce-hostname", "redis-3"]
+    volumes: ["./deploy/compose/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro"]
+    ports: ["127.0.0.1:7003:6379"]
+  redis-4:
+    <<: *redis-node
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf", "--cluster-announce-hostname", "redis-4"]
+    volumes: ["./deploy/compose/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro"]
+    ports: ["127.0.0.1:7004:6379"]
+  redis-5:
+    <<: *redis-node
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf", "--cluster-announce-hostname", "redis-5"]
+    volumes: ["./deploy/compose/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro"]
+    ports: ["127.0.0.1:7005:6379"]
+
+  # One-shot: forms the cluster, then exits 0 (ADR-0004).
+  redis-init:
+    image: redis:8.10.3
+    labels: { spillway.oneshot: "true" } # make verify-m0 expects it to have exited 0
+    env_file: *env-local
+    entrypoint: ["sh", "/redis-init.sh"]
+    volumes: ["./deploy/compose/redis/init.sh:/redis-init.sh:ro"]
+    depends_on:
+      redis-0: { condition: service_healthy }
+      redis-1: { condition: service_healthy }
+      redis-2: { condition: service_healthy }
+      redis-3: { condition: service_healthy }
+      redis-4: { condition: service_healthy }
+      redis-5: { condition: service_healthy }
+
+  postgres:
+    image: postgres:18.6
+    env_file: *env-local
+    environment:
+      POSTGRES_USER: spillway
+      POSTGRES_DB: spillway
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dev-only-not-secret}
+    volumes: ["pgdata:/var/lib/postgresql"]
+    ports: ["127.0.0.1:5432:5432"]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "spillway", "-d", "spillway"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  # OIDC provider and JWT issuer. The browser-facing issuer is
+  # http://localhost:8180/auth/realms/spillway; containers reach Keycloak at
+  # keycloak:8080 (ADR-0004).
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.8.1
+    command: ["start-dev", "--import-realm"]
+    env_file: *env-local
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-dev-only-not-secret}
+      KC_HOSTNAME: http://localhost:8180/auth
+      KC_HTTP_RELATIVE_PATH: /auth
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+      KC_HEALTH_ENABLED: "true"
+    volumes: ["./deploy/compose/keycloak/realm.json:/opt/keycloak/data/import/realm.json:ro"]
+    ports: ["127.0.0.1:8180:8080"]
+    healthcheck:
+      # No curl in the image; bash's /dev/tcp asks the management port.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /auth/health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && head -1 <&3 | grep -q ' 200'"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  otel-collector:
+    build: ./deploy/compose/otel-collector
+    command: ["--config=/etc/otelcol/config.yaml"]
+    env_file: *env-local
+    volumes: ["./deploy/compose/otel-collector/config.yaml:/etc/otelcol/config.yaml:ro"]
+    ports: ["127.0.0.1:4317:4317", "127.0.0.1:4318:4318"]
+    healthcheck:
+      test: ["CMD", "/busybox", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:13133/"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  tempo:
+    build: ./deploy/compose/tempo
+    command: ["-config.file=/etc/tempo/tempo.yaml"]
+    env_file: *env-local
+    volumes: ["./deploy/compose/tempo/tempo.yaml:/etc/tempo/tempo.yaml:ro"]
+    tmpfs: ["/var/tempo:uid=10001,gid=10001"]
+    ports: ["127.0.0.1:3200:3200"]
+    healthcheck:
+      test: ["CMD", "/busybox", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3200/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  loki:
+    build: ./deploy/compose/loki
+    command: ["-config.file=/etc/loki/loki.yaml"]
+    env_file: *env-local
+    volumes: ["./deploy/compose/loki/loki.yaml:/etc/loki/loki.yaml:ro"]
+    ports: ["127.0.0.1:3100:3100"]
+    healthcheck:
+      test: ["CMD", "/busybox", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3100/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  prometheus:
+    image: prom/prometheus:v3.15.1
+    env_file: *env-local
+    volumes: ["./deploy/compose/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro"]
+    # Host 9091: 9090 is the control plane's gRPC port (docs/ports.md).
+    ports: ["127.0.0.1:9091:9090"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9090/-/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  grafana:
+    image: grafana/grafana:13.3.0
+    env_file: *env-local
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-dev-only-not-secret}
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    volumes: ["./deploy/compose/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro"]
+    ports: ["127.0.0.1:3000:3000"]
+    depends_on: [prometheus, tempo, loki]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/api/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  # Fault injection (SC-03): fronts the Redis nodes and upstreams through
+  # proxies created at run time; only its API is published. Waiting for
+  # redis-init also lets `up --wait` accept that one-shot's exit (ADR-0006).
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.13.0
+    env_file: *env-local
+    ports: ["127.0.0.1:8474:8474"]
+    ulimits:
+      nofile: 65536
+    depends_on:
+      redis-init: { condition: service_completed_successfully }
+    healthcheck:
+      test: ["CMD", "/toxiproxy-cli", "list"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  # Mock upstreams (go-httpbin): /bytes/1024, /status/503, /delay/1 and so on.
+  upstream-1:
+    <<: &upstream
+      build: ./deploy/compose/upstream
+      env_file: *env-local
+      ulimits:
+        nofile: 65536
+      healthcheck:
+        test: ["CMD", "/busybox", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/status/200"]
+        interval: 2s
+        timeout: 2s
+        retries: 15
+    ports: ["127.0.0.1:9101:8080"]
+  upstream-2:
+    <<: *upstream
+    ports: ["127.0.0.1:9102:8080"]
+  upstream-3:
+    <<: *upstream
+    ports: ["127.0.0.1:9103:8080"]
+
+volumes:
+  pgdata:

@@ -1,0 +1,9 @@
+# Secret scanning for the pre-commit hook (make hooks) and CI.
+# Never widen this allowlist (CLAUDE.md, docs/setup.md Step 8).
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "The one obviously fake dev value used in .env.example and the dev Keycloak realm"
+regexes = ['''^dev-only-not-secret$''']

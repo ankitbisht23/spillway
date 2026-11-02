@@ -14,3 +14,4 @@ Decisions that shape Spillway and are not obvious from the code or from docs/des
 | [0003](0003-benchmark-results.md) | Benchmark results on a `bench-results` branch | Accepted | 2026-11-02 |
 | [0004](0004-dev-networking.md) | Dev networking: every process in compose, Redis Cluster by hostname | Accepted | 2026-11-02 |
 | [0005](0005-config-and-identity.md) | Config and identity streams; one config schema | Accepted | 2026-11-02 |
+| [0006](0006-dev-containers.md) | Dev containers: healthchecks, mock upstreams, image layout | Accepted | 2026-11-03 |

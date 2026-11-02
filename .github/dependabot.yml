@@ -1,0 +1,25 @@
+# Version updates (docs/design.md M0). One grouped PR per ecosystem per week.
+# Not covered: the tool versions and GOTOOLCHAIN in the Makefile, and
+# .node-version; bump those by hand.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule: { interval: weekly }
+    groups: { gomod: { patterns: ["*"] } }
+  - package-ecosystem: npm
+    directory: /
+    schedule: { interval: weekly }
+    groups: { npm: { patterns: ["*"] } }
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }
+    groups: { github-actions: { patterns: ["*"] } }
+  - package-ecosystem: docker
+    directories: ["/", "/deploy/compose/*"]
+    schedule: { interval: weekly }
+    groups: { docker: { patterns: ["*"] } }
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule: { interval: weekly }
+    groups: { docker-compose: { patterns: ["*"] } }
