@@ -11,7 +11,7 @@ FUZZTIME ?= 5s
 # Committed dev defaults first, then local overrides if present (ADR-0004).
 COMPOSE := docker compose --env-file .env.example $(if $(wildcard .env.local),--env-file .env.local)
 
-.PHONY: tools hooks dev test fuzz test-integration lint bench verify-m0 verify-m0-stack
+.PHONY: tools hooks dev test fuzz test-integration lint lint-go lint-web bench verify-m0 verify-m0-stack
 
 # Host-run processes and tests reach Redis Cluster nodes through this map
 # (ADR-0004). Set only here, never in compose or .env files.
@@ -73,9 +73,13 @@ fuzz:
 test-integration: dev
 	SPILLWAY_REDIS_ADDR_MAP=$(REDIS_ADDR_MAP) go test -tags integration -count=1 ./test/integration/...
 
-lint: tool-golangci-lint
+lint: lint-go lint-web
+
+lint-go: tool-golangci-lint
 	$(BIN)/golangci-lint run ./...
 	go mod tidy -diff
+
+lint-web:
 	pnpm -C web lint
 
 bench:
