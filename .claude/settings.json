@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(make *)", "Bash(go *)", "Bash(pnpm *)", "Bash(./bin/*)",
+      "Bash(docker compose *)", "Bash(docker buildx *)", "Bash(docker ps *)", "Bash(docker logs *)",
+      "Bash(docker kill *)", "Bash(docker pause *)", "Bash(docker unpause *)", "Bash(docker info *)",
+      "Bash(git status)", "Bash(git status *)", "Bash(git diff *)", "Bash(git log *)", "Bash(git show *)",
+      "Bash(git branch *)", "Bash(git switch *)", "Bash(git checkout -b *)", "Bash(git add *)", "Bash(git mv *)",
+      "Bash(git commit *)", "Bash(git fetch *)",
+      "Bash(gh pr *)", "Bash(gh run *)", "Bash(gh workflow *)", "Bash(gh auth status)",
+      "Bash(kind *)", "Bash(kubectl --context kind-spillway *)", "Bash(helm --kube-context kind-spillway *)", "Bash(k6 *)"
+    ],
+    "ask": [
+      "Bash(git push *)", "Bash(gh pr merge)", "Bash(gh pr merge *)", "Bash(gh workflow disable *)",
+      "Bash(docker compose run *)", "Bash(docker compose exec *)"
+    ],
+    "deny": [
+      "Read(./.env)", "Read(./.env.local)", "Read(./.env.demo)",
+      "Read(./**/*.pem)", "Read(./**/*.key)", "Read(./deploy/certs/**)",
+      "Read(~/.ssh/**)", "Read(~/.kube/**)", "Read(~/.config/gh/**)", "Read(~/.config/gh-personal/**)",
+      "Read(~/.docker/config.json)", "Read(~/.aws/**)", "Read(~/.config/gcloud/**)",
+      "Read(~/Library/Application Support/mkcert/**)", "Read(~/.local/share/mkcert/**)",
+      "Read(~/.npmrc)", "Read(~/.netrc)", "Read(~/.git-credentials)",
+      "Bash(git push *--force*)", "Bash(git push -f*)", "Bash(git push * -f)", "Bash(git push * -f *)", "Bash(git push * +*)",
+      "Bash(git add -f *)", "Bash(git add * -f)", "Bash(git add * -f *)", "Bash(git add --force *)", "Bash(git add * --force*)",
+      "Bash(git commit *--no-verify*)", "Bash(git commit -n *)", "Bash(git commit * -n)", "Bash(git commit * -n *)",
+      "Bash(docker compose config*)", "Bash(docker compose * config*)",
+      "Bash(docker compose exec * env*)", "Bash(docker compose exec * printenv*)",
+      "Bash(kubectl * secret*)", "Bash(kubectl * exec * env*)", "Bash(kubectl * exec * printenv*)",
+      "Bash(helm * get values*)", "Bash(helm * get all*)", "Bash(helm * get manifest*)",
+      "Bash(kind get kubeconfig*)"
+    ]
+  }
+}

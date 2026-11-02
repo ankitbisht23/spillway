@@ -1,0 +1,30 @@
+# Secrets and machine-local config
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+/kubeconfig*
+.kube/
+deploy/certs/
+.claude/settings.local.json
+
+# Go
+/bin/
+/dist/
+*.test
+*.out
+coverage.html
+
+# Web
+node_modules/
+web/dist/
+.vite/
+playwright-report/
+test-results/
+
+# Editors and OS
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
