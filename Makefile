@@ -8,7 +8,14 @@ export GOTOOLCHAIN := go1.27.3
 BIN := $(CURDIR)/bin
 FUZZTIME ?= 5s
 
-.PHONY: tools hooks test fuzz lint bench
+# Committed dev defaults first, then local overrides if present (ADR-0004).
+COMPOSE := docker compose --env-file .env.example $(if $(wildcard .env.local),--env-file .env.local)
+
+.PHONY: tools hooks dev test fuzz test-integration lint bench
+
+# Host-run processes and tests reach Redis Cluster nodes through this map
+# (ADR-0004). Set only here, never in compose or .env files.
+REDIS_ADDR_MAP := redis-0:6379=127.0.0.1:7000,redis-1:6379=127.0.0.1:7001,redis-2:6379=127.0.0.1:7002,redis-3:6379=127.0.0.1:7003,redis-4:6379=127.0.0.1:7004,redis-5:6379=127.0.0.1:7005
 
 # Pinned project tools, installed into ./bin (ADR-0002). Each tool has a stamp
 # file named after its version, so changing a version reinstalls only that tool.
@@ -43,6 +50,11 @@ hooks: tool-gitleaks
 		'exec "$$(git rev-parse --show-toplevel)/bin/gitleaks" git --pre-commit --staged --redact --no-banner' > "$$hook"; \
 	chmod +x "$$hook"; echo "installed $$hook"
 
+# Boots the dev stack and returns once every service is healthy and every
+# one-shot service has exited 0.
+dev:
+	$(COMPOSE) up -d --build --wait --wait-timeout 300
+
 # Unit and property tests, then a short run of every fuzz target. No Docker.
 test:
 	go test -race -count=1 ./...
@@ -56,6 +68,10 @@ fuzz:
 		echo "fuzz $$pkg $$fn ($(FUZZTIME))"; \
 		go test -run '^$$' -fuzz "^$$fn$$" -fuzztime $(FUZZTIME) "$$pkg"; \
 	done
+
+# Tests against the compose stack (build tag integration); boots it first.
+test-integration: dev
+	SPILLWAY_REDIS_ADDR_MAP=$(REDIS_ADDR_MAP) go test -tags integration -count=1 ./test/integration/...
 
 lint: tool-golangci-lint
 	$(BIN)/golangci-lint run ./...

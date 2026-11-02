@@ -1,0 +1,86 @@
+# Spillway dev stack. Start it with `make dev`; reset with `docker compose down -v`.
+# Ports come from docs/ports.md and are published on 127.0.0.1 only (SEC-02).
+# Every ${VAR} has a dev default, so bare `docker compose` commands work
+# without the Makefile's --env-file flags (ADR-0004).
+
+name: spillway
+
+x-env-local: &env-local
+  - path: .env.local
+    required: false
+
+x-redis-node: &redis-node
+  image: redis:8.10.3
+  env_file: *env-local
+  tmpfs:
+    - /data
+  ulimits:
+    nofile: 65536
+  healthcheck:
+    test: ["CMD", "redis-cli", "ping"]
+    interval: 2s
+    timeout: 2s
+    retries: 15
+
+services:
+  redis-0:
+    <<: *redis-node
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf", "--cluster-announce-hostname", "redis-0"]
+    volumes: ["./deploy/compose/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro"]
+    ports: ["127.0.0.1:7000:6379"]
+  redis-1:
+    <<: *redis-node
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf", "--cluster-announce-hostname", "redis-1"]
+    volumes: ["./deploy/compose/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro"]
+    ports: ["127.0.0.1:7001:6379"]
+  redis-2:
+    <<: *redis-node
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf", "--cluster-announce-hostname", "redis-2"]
+    volumes: ["./deploy/compose/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro"]
+    ports: ["127.0.0.1:7002:6379"]
+  redis-3:
+    <<: *redis-node
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf", "--cluster-announce-hostname", "redis-3"]
+    volumes: ["./deploy/compose/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro"]
+    ports: ["127.0.0.1:7003:6379"]
+  redis-4:
+    <<: *redis-node
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf", "--cluster-announce-hostname", "redis-4"]
+    volumes: ["./deploy/compose/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro"]
+    ports: ["127.0.0.1:7004:6379"]
+  redis-5:
+    <<: *redis-node
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf", "--cluster-announce-hostname", "redis-5"]
+    volumes: ["./deploy/compose/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro"]
+    ports: ["127.0.0.1:7005:6379"]
+
+  # One-shot: forms the cluster, then exits 0 (ADR-0004).
+  redis-init:
+    image: redis:8.10.3
+    env_file: *env-local
+    entrypoint: ["sh", "/redis-init.sh"]
+    volumes: ["./deploy/compose/redis/init.sh:/redis-init.sh:ro"]
+    depends_on:
+      redis-0: { condition: service_healthy }
+      redis-1: { condition: service_healthy }
+      redis-2: { condition: service_healthy }
+      redis-3: { condition: service_healthy }
+      redis-4: { condition: service_healthy }
+      redis-5: { condition: service_healthy }
+
+  # Fault injection (SC-03): fronts the Redis nodes and upstreams through
+  # proxies created at run time; only its API is published. Waiting for
+  # redis-init also lets `up --wait` accept that one-shot's exit (ADR-0006).
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.13.0
+    env_file: *env-local
+    ports: ["127.0.0.1:8474:8474"]
+    ulimits:
+      nofile: 65536
+    depends_on:
+      redis-init: { condition: service_completed_successfully }
+    healthcheck:
+      test: ["CMD", "/toxiproxy-cli", "list"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
