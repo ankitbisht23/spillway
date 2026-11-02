@@ -190,5 +190,25 @@ services:
       timeout: 2s
       retries: 15
 
+  # Mock upstreams (go-httpbin): /bytes/1024, /status/503, /delay/1 and so on.
+  upstream-1:
+    <<: &upstream
+      build: ./deploy/compose/upstream
+      env_file: *env-local
+      ulimits:
+        nofile: 65536
+      healthcheck:
+        test: ["CMD", "/busybox", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/status/200"]
+        interval: 2s
+        timeout: 2s
+        retries: 15
+    ports: ["127.0.0.1:9101:8080"]
+  upstream-2:
+    <<: *upstream
+    ports: ["127.0.0.1:9102:8080"]
+  upstream-3:
+    <<: *upstream
+    ports: ["127.0.0.1:9103:8080"]
+
 volumes:
   pgdata:
