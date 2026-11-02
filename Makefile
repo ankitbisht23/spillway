@@ -11,7 +11,7 @@ FUZZTIME ?= 5s
 # Committed dev defaults first, then local overrides if present (ADR-0004).
 COMPOSE := docker compose --env-file .env.example $(if $(wildcard .env.local),--env-file .env.local)
 
-.PHONY: tools hooks dev test fuzz test-integration lint bench
+.PHONY: tools hooks dev test fuzz test-integration lint bench verify-m0 verify-m0-stack
 
 # Host-run processes and tests reach Redis Cluster nodes through this map
 # (ADR-0004). Set only here, never in compose or .env files.
@@ -80,3 +80,11 @@ lint: tool-golangci-lint
 
 bench:
 	go test -run '^$$' -bench . -benchmem ./...
+
+# M0 exit checks (docs/design.md): the dev stack, then CI and the main ruleset
+# on GitHub. CI runs only the stack part, since it can't check its own result.
+verify-m0: dev
+	@SPILLWAY_REDIS_ADDR_MAP=$(REDIS_ADDR_MAP) test/verify/m0.sh all
+
+verify-m0-stack: dev
+	@SPILLWAY_REDIS_ADDR_MAP=$(REDIS_ADDR_MAP) test/verify/m0.sh stack

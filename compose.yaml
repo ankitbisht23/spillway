@@ -57,6 +57,7 @@ services:
   # One-shot: forms the cluster, then exits 0 (ADR-0004).
   redis-init:
     image: redis:8.10.3
+    labels: { spillway.oneshot: "true" } # make verify-m0 expects it to have exited 0
     env_file: *env-local
     entrypoint: ["sh", "/redis-init.sh"]
     volumes: ["./deploy/compose/redis/init.sh:/redis-init.sh:ro"]
