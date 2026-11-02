@@ -107,6 +107,72 @@ services:
       retries: 30
       start_period: 30s
 
+  otel-collector:
+    build: ./deploy/compose/otel-collector
+    command: ["--config=/etc/otelcol/config.yaml"]
+    env_file: *env-local
+    volumes: ["./deploy/compose/otel-collector/config.yaml:/etc/otelcol/config.yaml:ro"]
+    ports: ["127.0.0.1:4317:4317", "127.0.0.1:4318:4318"]
+    healthcheck:
+      test: ["CMD", "/busybox", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:13133/"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  tempo:
+    build: ./deploy/compose/tempo
+    command: ["-config.file=/etc/tempo/tempo.yaml"]
+    env_file: *env-local
+    volumes: ["./deploy/compose/tempo/tempo.yaml:/etc/tempo/tempo.yaml:ro"]
+    tmpfs: ["/var/tempo:uid=10001,gid=10001"]
+    ports: ["127.0.0.1:3200:3200"]
+    healthcheck:
+      test: ["CMD", "/busybox", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3200/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  loki:
+    build: ./deploy/compose/loki
+    command: ["-config.file=/etc/loki/loki.yaml"]
+    env_file: *env-local
+    volumes: ["./deploy/compose/loki/loki.yaml:/etc/loki/loki.yaml:ro"]
+    ports: ["127.0.0.1:3100:3100"]
+    healthcheck:
+      test: ["CMD", "/busybox", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3100/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  prometheus:
+    image: prom/prometheus:v3.15.1
+    env_file: *env-local
+    volumes: ["./deploy/compose/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro"]
+    # Host 9091: 9090 is the control plane's gRPC port (docs/ports.md).
+    ports: ["127.0.0.1:9091:9090"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9090/-/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  grafana:
+    image: grafana/grafana:13.3.0
+    env_file: *env-local
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-dev-only-not-secret}
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    volumes: ["./deploy/compose/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro"]
+    ports: ["127.0.0.1:3000:3000"]
+    depends_on: [prometheus, tempo, loki]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/api/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
   # Fault injection (SC-03): fronts the Redis nodes and upstreams through
   # proxies created at run time; only its API is published. Waiting for
   # redis-init also lets `up --wait` accept that one-shot's exit (ADR-0006).
