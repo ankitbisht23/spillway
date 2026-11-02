@@ -68,6 +68,45 @@ services:
       redis-4: { condition: service_healthy }
       redis-5: { condition: service_healthy }
 
+  postgres:
+    image: postgres:18.6
+    env_file: *env-local
+    environment:
+      POSTGRES_USER: spillway
+      POSTGRES_DB: spillway
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dev-only-not-secret}
+    volumes: ["pgdata:/var/lib/postgresql"]
+    ports: ["127.0.0.1:5432:5432"]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "spillway", "-d", "spillway"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  # OIDC provider and JWT issuer. The browser-facing issuer is
+  # http://localhost:8180/auth/realms/spillway; containers reach Keycloak at
+  # keycloak:8080 (ADR-0004).
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.8.1
+    command: ["start-dev", "--import-realm"]
+    env_file: *env-local
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-dev-only-not-secret}
+      KC_HOSTNAME: http://localhost:8180/auth
+      KC_HTTP_RELATIVE_PATH: /auth
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+      KC_HEALTH_ENABLED: "true"
+    volumes: ["./deploy/compose/keycloak/realm.json:/opt/keycloak/data/import/realm.json:ro"]
+    ports: ["127.0.0.1:8180:8080"]
+    healthcheck:
+      # No curl in the image; bash's /dev/tcp asks the management port.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /auth/health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && head -1 <&3 | grep -q ' 200'"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
   # Fault injection (SC-03): fronts the Redis nodes and upstreams through
   # proxies created at run time; only its API is published. Waiting for
   # redis-init also lets `up --wait` accept that one-shot's exit (ADR-0006).
@@ -84,3 +123,6 @@ services:
       interval: 2s
       timeout: 2s
       retries: 15
+
+volumes:
+  pgdata:
