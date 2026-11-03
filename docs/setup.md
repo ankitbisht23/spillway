@@ -146,7 +146,7 @@ Use Homebrew on every platform (it runs on Linux and WSL2 too), so one command i
    echo 'export PATH=$PATH:$(go env GOPATH)/bin' >> ~/.zshrc && source ~/.zshrc     # macOS
    echo 'export PATH=$PATH:$(go env GOPATH)/bin' >> ~/.bashrc && source ~/.bashrc   # Linux, WSL2
    ```
-5. Trust a local certificate authority for HTTPS on localhost (asks for your password once; the agent then mints certs with `mkcert localhost`):
+5. Trust a local certificate authority for HTTPS on localhost (asks for your password once). `make certs` mints the gateway's certificate with the pinned mkcert in `./bin` either way; this step makes browsers and curl trust it:
 
    ```bash
    mkcert -install
