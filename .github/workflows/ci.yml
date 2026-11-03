@@ -89,7 +89,7 @@ jobs:
           user=$(docker image inspect spillway-gateway:ci --format '{{.Config.User}}')
           echo "user=$user"
           test "$user" = 65532:65532
-          docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges spillway-gateway:ci
+          docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges spillway-gateway:ci version
 
   # Boots the dev stack from a clean checkout, runs the integration tests and
   # the stack part of the M0 exit check (ADR-0004).
