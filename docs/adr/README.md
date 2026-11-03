@@ -18,3 +18,4 @@ Decisions that shape Spillway and are not obvious from the code or from docs/des
 | [0007](0007-route-matching.md) | Route matching: precedence and path rules | Accepted | 2026-11-03 |
 | [0008](0008-gateway-settings-and-upstream-pools.md) | Gateway settings and upstream pools | Accepted | 2026-11-04 |
 | [0009](0009-request-framing.md) | Request framing: re-frame instead of rejecting Content-Length with Transfer-Encoding | Accepted | 2026-11-04 |
+| [0010](0010-admin-port-and-compose-gateway.md) | Admin port and the gateway in compose | Accepted | 2026-11-04 |
