@@ -90,8 +90,9 @@ func TestParseMemoryMax(t *testing.T) {
 }
 
 // TestServe runs the gateway against a local upstream: traffic is proxied on
-// the plain-HTTP and TLS listeners, HTTP/2 over TLS, the admin port answers /readyz, /metrics and the healthcheck, and on
-// shutdown readiness fails while an in-flight request still completes.
+// the plain-HTTP and TLS listeners, HTTP/2 over TLS, the admin port answers
+// /readyz, /metrics and the healthcheck, and on shutdown readiness fails
+// while an in-flight request still completes.
 func TestServe(t *testing.T) {
 	arrived, release := make(chan struct{}), make(chan struct{})
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
