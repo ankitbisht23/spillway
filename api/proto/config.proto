@@ -40,6 +40,53 @@ message Route {
   string upstream = 3;
   // Breaks ties between otherwise equal routes; higher wins (ADR-0007).
   int32 priority = 4;
+  // Removed from the front of the cleaned path before forwarding (GW-02);
+  // whole segments of match.path or match.path_prefix, such as "/v1".
+  string strip_prefix = 5;
+  // Put in front of the path after strip_prefix is removed (GW-02).
+  string add_prefix = 6;
+  // Applied to the request sent upstream (GW-02).
+  HeaderTransform request_headers = 7;
+  // Applied to the upstream's response (GW-02).
+  HeaderTransform response_headers = 8;
+  // Larger request bodies get 413; 0 means no limit (GW-03).
+  int64 max_body_bytes = 9;
+  // Larger request headers get 431; 0 means the server's 64 KiB limit
+  // (GW-03).
+  int32 max_header_bytes = 10;
+  Timeouts timeouts = 11;
+}
+
+// HeaderTransform changes headers: remove first, then set, then add (GW-02).
+// Framing, hop-by-hop, Host, Forwarded and X-Forwarded-* headers belong to
+// the gateway and cannot be named (SEC-07).
+message HeaderTransform {
+  // Each replaces every value of its header.
+  repeated HeaderValue set = 1;
+  // Each adds a value, keeping the existing ones.
+  repeated HeaderValue add = 2;
+  // Header names to delete.
+  repeated string remove = 3;
+}
+
+// HeaderValue is one header value.
+message HeaderValue {
+  string name = 1;
+  string value = 2;
+}
+
+// Timeouts bound a route's upstream request (GW-11). Each is a Go duration
+// such as "200ms" or "3s"; unset ones take their defaults (ADR-0011).
+message Timeouts {
+  // Opening one upstream connection.
+  string connect = 1;
+  // One upstream attempt.
+  string per_try = 2;
+  // The whole request, response body included; at most 59s.
+  string total = 3;
+  // No body bytes moving in either direction for this long aborts the
+  // request.
+  string idle = 4;
 }
 
 // RouteMatch is what a request must match; ADR-0007 gives the precedence.

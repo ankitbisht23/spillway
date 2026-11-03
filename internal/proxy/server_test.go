@@ -9,12 +9,19 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ankitbisht23/spillway/internal/config"
 )
 
 func TestServerLimits(t *testing.T) {
 	srv := NewServer(http.NotFoundHandler(), slog.New(slog.DiscardHandler))
 	if srv.ReadHeaderTimeout <= 0 || srv.ReadTimeout <= 0 || srv.WriteTimeout <= 0 || srv.IdleTimeout <= 0 || srv.MaxHeaderBytes <= 0 {
 		t.Fatalf("a GW-28 limit is unset: %+v", srv)
+	}
+	// Route limits (GW-03, GW-11) are validated against these.
+	if config.MaxHeaderBytes != srv.MaxHeaderBytes || config.MaxTotalTimeout >= srv.WriteTimeout {
+		t.Errorf("config allows max_header_bytes up to %d and total up to %v; the server has %d and a %v write timeout",
+			config.MaxHeaderBytes, config.MaxTotalTimeout, srv.MaxHeaderBytes, srv.WriteTimeout)
 	}
 
 	srv.ReadHeaderTimeout = 200 * time.Millisecond // keep the slow-client test fast

@@ -33,13 +33,29 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "CONNECT is not supported", http.StatusMethodNotAllowed)
 		return
 	}
-	// Route on the cleaned path and forward that same path, so the upstream
-	// never sees a path that would have matched another route (ADR-0007).
+	// Route on the cleaned path and forward that same path, changed only by
+	// the route's own prefix rewrite (GW-02), so the upstream never sees a
+	// path that would have matched another route (ADR-0007).
 	path := router.CleanPath(r.URL.Path)
 	route, _, ok := h.snapshot().Match(r.Host, r.Method, path, r.Header)
 	if !ok {
 		http.Error(w, "no route", http.StatusNotFound)
 		return
+	}
+	// Size limits (GW-03), before anything reaches the upstream.
+	if route.MaxHeaderBytes > 0 && headerBytes(r) > route.MaxHeaderBytes {
+		http.Error(w, http.StatusText(http.StatusRequestHeaderFieldsTooLarge), http.StatusRequestHeaderFieldsTooLarge)
+		return
+	}
+	if route.MaxBodyBytes > 0 {
+		if r.ContentLength > route.MaxBodyBytes {
+			http.Error(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
+			return
+		}
+		// For bodies of unknown length; proxyError answers 413. The
+		// transport reads the body on its own goroutine, which must not
+		// touch w, so w is not passed.
+		r.Body = http.MaxBytesReader(nil, r.Body, route.MaxBodyBytes)
 	}
 	p := h.pools.pool(route.Upstream)
 	addr, err := p.pick()
@@ -48,6 +64,22 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable)
 		return
 	}
+
+	// Timeouts (GW-11). Until retries arrive (GW-12, M4) the one attempt
+	// spans the whole request, so per_try and total bound the same span.
+	t := route.Timeouts
+	ctx, cancel := context.WithTimeout(r.Context(), min(t.PerTry, t.Total))
+	defer cancel()
+	ctx = context.WithValue(ctx, connectTimeoutKey{}, t.Connect)
+	var idle *idleTimer
+	if t.Idle > 0 {
+		ctx, idle = withIdleTimeout(ctx, t.Idle)
+		defer idle.Stop()
+		r.Body = idleBody{r.Body, idle}
+	}
+	r = r.WithContext(ctx)
+
+	upstreamPath := route.UpstreamPath(path)
 	rp := &httputil.ReverseProxy{
 		Transport: p.transport,
 		// Hop-by-hop headers, and any X-Forwarded-* the client sent, are
@@ -56,11 +88,24 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			pr.Out.URL.Scheme = "http"
 			pr.Out.URL.Host = addr
 			pr.Out.URL.User = nil // an absolute-form URL's userinfo would become an Authorization header
-			pr.Out.URL.Path = path
+			pr.Out.URL.Path = upstreamPath
 			pr.Out.URL.RawPath = ""
 			pr.Out.Host = pr.In.Host
 			pr.Out.Header.Del("Forwarded")
 			pr.SetXForwarded()
+			route.RequestHeaders.Apply(pr.Out.Header)
+		},
+		// Hop-by-hop headers are already removed from resp, except on a 101.
+		ModifyResponse: func(resp *http.Response) error {
+			route.ResponseHeaders.Apply(resp.Header)
+			if idle != nil {
+				if resp.StatusCode == http.StatusSwitchingProtocols {
+					idle.Stop() // an upgraded connection's body must stay writable; total still bounds it
+				} else {
+					resp.Body = idleBody{resp.Body, idle}
+				}
+			}
+			return nil
 		},
 		ErrorHandler: h.proxyError,
 		ErrorLog:     h.errLog,
@@ -68,16 +113,34 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	rp.ServeHTTP(w, r)
 }
 
-// proxyError answers a failed upstream request: 504 for a timeout, 502
-// otherwise. A client that went away gets nothing.
+// headerBytes is the size of r's header fields as HTTP/1.1 sends them,
+// "Name: value\r\n" each, Host included (GW-03).
+func headerBytes(r *http.Request) int {
+	n := len("Host: \r\n") + len(r.Host)
+	for name, values := range r.Header {
+		for _, v := range values {
+			n += len(name) + len(v) + len(": \r\n")
+		}
+	}
+	return n
+}
+
+// proxyError answers a failed upstream request: 413 for a body over the
+// route's limit, 504 for a timeout, 502 otherwise. A client that went away
+// gets nothing.
 func (h *Handler) proxyError(w http.ResponseWriter, r *http.Request, err error) {
-	if errors.Is(err, context.Canceled) && r.Context().Err() != nil {
+	cause := context.Cause(r.Context())
+	if errors.Is(cause, context.Canceled) {
+		return
+	}
+	if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
+		http.Error(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
 		return
 	}
 	status := http.StatusBadGateway
 	var ne net.Error
-	if errors.Is(err, context.DeadlineExceeded) || errors.As(err, &ne) && ne.Timeout() {
-		status = http.StatusGatewayTimeout
+	if cause != nil || errors.Is(err, context.DeadlineExceeded) || errors.As(err, &ne) && ne.Timeout() {
+		status = http.StatusGatewayTimeout // the route's deadline, idle timeout or connect timeout
 	}
 	level := slog.LevelWarn
 	if errors.Is(err, ErrNotAllowed) {

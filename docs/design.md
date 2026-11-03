@@ -613,7 +613,7 @@ Exit (`make verify-m0`): `make dev` boots from a clean clone with every service 
 - [x] Radix-tree router: host, method, path, headers (GW-01)
 - [ ] Reverse proxy on a tuned `http.Transport`: pooling, keep-alive, HTTP/2; pools and health state in registries keyed by stable IDs, reconciled on each snapshot swap (GW-04, GW-06, GW-29)
 - [ ] `make certs` (mkcert localhost cert into gitignored `deploy/certs/`) and the TLS listener with hot-reloaded certificates; plain-HTTP listener for dev and benchmarks only, off by default (GW-04, SEC-01)
-- [ ] Transforms, size limits, timeouts (GW-02, GW-03, GW-11)
+- [x] Transforms, size limits, timeouts (GW-02, GW-03, GW-11)
 - [x] Hop-by-hop headers stripped, `X-Forwarded-*` set by the gateway, requests with both `Content-Length` and `Transfer-Encoding` re-framed with `Transfer-Encoding: chunked` winning; differing `Content-Length` values rejected with 400, any other `Transfer-Encoding` with 501 (SEC-07, ADR-0009)
 - [x] `api/proto/config.proto` as the one config schema: YAML → JSON → proto (protojson) → compiled snapshot → atomic swap on file change; `buf lint` and `buf breaking` in CI (GW-21, CP-05, CP-21)
 - [x] Upstream allow-list checked at YAML load and at dial time via `net.Dialer.Control`; the dev list includes the compose subnet (SEC-06)

@@ -199,9 +199,24 @@ type Route struct {
 	// Name of the upstream that serves the route.
 	Upstream string `protobuf:"bytes,3,opt,name=upstream,proto3" json:"upstream,omitempty"`
 	// Breaks ties between otherwise equal routes; higher wins (ADR-0007).
-	Priority      int32 `protobuf:"varint,4,opt,name=priority,proto3" json:"priority,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Priority int32 `protobuf:"varint,4,opt,name=priority,proto3" json:"priority,omitempty"`
+	// Removed from the front of the cleaned path before forwarding (GW-02);
+	// whole segments of match.path or match.path_prefix, such as "/v1".
+	StripPrefix string `protobuf:"bytes,5,opt,name=strip_prefix,json=stripPrefix,proto3" json:"strip_prefix,omitempty"`
+	// Put in front of the path after strip_prefix is removed (GW-02).
+	AddPrefix string `protobuf:"bytes,6,opt,name=add_prefix,json=addPrefix,proto3" json:"add_prefix,omitempty"`
+	// Applied to the request sent upstream (GW-02).
+	RequestHeaders *HeaderTransform `protobuf:"bytes,7,opt,name=request_headers,json=requestHeaders,proto3" json:"request_headers,omitempty"`
+	// Applied to the upstream's response (GW-02).
+	ResponseHeaders *HeaderTransform `protobuf:"bytes,8,opt,name=response_headers,json=responseHeaders,proto3" json:"response_headers,omitempty"`
+	// Larger request bodies get 413; 0 means no limit (GW-03).
+	MaxBodyBytes int64 `protobuf:"varint,9,opt,name=max_body_bytes,json=maxBodyBytes,proto3" json:"max_body_bytes,omitempty"`
+	// Larger request headers get 431; 0 means the server's 64 KiB limit
+	// (GW-03).
+	MaxHeaderBytes int32     `protobuf:"varint,10,opt,name=max_header_bytes,json=maxHeaderBytes,proto3" json:"max_header_bytes,omitempty"`
+	Timeouts       *Timeouts `protobuf:"bytes,11,opt,name=timeouts,proto3" json:"timeouts,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *Route) Reset() {
@@ -262,6 +277,249 @@ func (x *Route) GetPriority() int32 {
 	return 0
 }
 
+func (x *Route) GetStripPrefix() string {
+	if x != nil {
+		return x.StripPrefix
+	}
+	return ""
+}
+
+func (x *Route) GetAddPrefix() string {
+	if x != nil {
+		return x.AddPrefix
+	}
+	return ""
+}
+
+func (x *Route) GetRequestHeaders() *HeaderTransform {
+	if x != nil {
+		return x.RequestHeaders
+	}
+	return nil
+}
+
+func (x *Route) GetResponseHeaders() *HeaderTransform {
+	if x != nil {
+		return x.ResponseHeaders
+	}
+	return nil
+}
+
+func (x *Route) GetMaxBodyBytes() int64 {
+	if x != nil {
+		return x.MaxBodyBytes
+	}
+	return 0
+}
+
+func (x *Route) GetMaxHeaderBytes() int32 {
+	if x != nil {
+		return x.MaxHeaderBytes
+	}
+	return 0
+}
+
+func (x *Route) GetTimeouts() *Timeouts {
+	if x != nil {
+		return x.Timeouts
+	}
+	return nil
+}
+
+// HeaderTransform changes headers: remove first, then set, then add (GW-02).
+// Framing, hop-by-hop, Host, Forwarded and X-Forwarded-* headers belong to
+// the gateway and cannot be named (SEC-07).
+type HeaderTransform struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Each replaces every value of its header.
+	Set []*HeaderValue `protobuf:"bytes,1,rep,name=set,proto3" json:"set,omitempty"`
+	// Each adds a value, keeping the existing ones.
+	Add []*HeaderValue `protobuf:"bytes,2,rep,name=add,proto3" json:"add,omitempty"`
+	// Header names to delete.
+	Remove        []string `protobuf:"bytes,3,rep,name=remove,proto3" json:"remove,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *HeaderTransform) Reset() {
+	*x = HeaderTransform{}
+	mi := &file_config_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HeaderTransform) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HeaderTransform) ProtoMessage() {}
+
+func (x *HeaderTransform) ProtoReflect() protoreflect.Message {
+	mi := &file_config_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HeaderTransform.ProtoReflect.Descriptor instead.
+func (*HeaderTransform) Descriptor() ([]byte, []int) {
+	return file_config_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *HeaderTransform) GetSet() []*HeaderValue {
+	if x != nil {
+		return x.Set
+	}
+	return nil
+}
+
+func (x *HeaderTransform) GetAdd() []*HeaderValue {
+	if x != nil {
+		return x.Add
+	}
+	return nil
+}
+
+func (x *HeaderTransform) GetRemove() []string {
+	if x != nil {
+		return x.Remove
+	}
+	return nil
+}
+
+// HeaderValue is one header value.
+type HeaderValue struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Value         string                 `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *HeaderValue) Reset() {
+	*x = HeaderValue{}
+	mi := &file_config_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HeaderValue) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HeaderValue) ProtoMessage() {}
+
+func (x *HeaderValue) ProtoReflect() protoreflect.Message {
+	mi := &file_config_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HeaderValue.ProtoReflect.Descriptor instead.
+func (*HeaderValue) Descriptor() ([]byte, []int) {
+	return file_config_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *HeaderValue) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *HeaderValue) GetValue() string {
+	if x != nil {
+		return x.Value
+	}
+	return ""
+}
+
+// Timeouts bound a route's upstream request (GW-11). Each is a Go duration
+// such as "200ms" or "3s"; unset ones take their defaults (ADR-0011).
+type Timeouts struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Opening one upstream connection.
+	Connect string `protobuf:"bytes,1,opt,name=connect,proto3" json:"connect,omitempty"`
+	// One upstream attempt.
+	PerTry string `protobuf:"bytes,2,opt,name=per_try,json=perTry,proto3" json:"per_try,omitempty"`
+	// The whole request, response body included; at most 59s.
+	Total string `protobuf:"bytes,3,opt,name=total,proto3" json:"total,omitempty"`
+	// No body bytes moving in either direction for this long aborts the
+	// request.
+	Idle          string `protobuf:"bytes,4,opt,name=idle,proto3" json:"idle,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Timeouts) Reset() {
+	*x = Timeouts{}
+	mi := &file_config_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Timeouts) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Timeouts) ProtoMessage() {}
+
+func (x *Timeouts) ProtoReflect() protoreflect.Message {
+	mi := &file_config_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Timeouts.ProtoReflect.Descriptor instead.
+func (*Timeouts) Descriptor() ([]byte, []int) {
+	return file_config_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *Timeouts) GetConnect() string {
+	if x != nil {
+		return x.Connect
+	}
+	return ""
+}
+
+func (x *Timeouts) GetPerTry() string {
+	if x != nil {
+		return x.PerTry
+	}
+	return ""
+}
+
+func (x *Timeouts) GetTotal() string {
+	if x != nil {
+		return x.Total
+	}
+	return ""
+}
+
+func (x *Timeouts) GetIdle() string {
+	if x != nil {
+		return x.Idle
+	}
+	return ""
+}
+
 // RouteMatch is what a request must match; ADR-0007 gives the precedence.
 type RouteMatch struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -281,7 +539,7 @@ type RouteMatch struct {
 
 func (x *RouteMatch) Reset() {
 	*x = RouteMatch{}
-	mi := &file_config_proto_msgTypes[4]
+	mi := &file_config_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -293,7 +551,7 @@ func (x *RouteMatch) String() string {
 func (*RouteMatch) ProtoMessage() {}
 
 func (x *RouteMatch) ProtoReflect() protoreflect.Message {
-	mi := &file_config_proto_msgTypes[4]
+	mi := &file_config_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -306,7 +564,7 @@ func (x *RouteMatch) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RouteMatch.ProtoReflect.Descriptor instead.
 func (*RouteMatch) Descriptor() ([]byte, []int) {
-	return file_config_proto_rawDescGZIP(), []int{4}
+	return file_config_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *RouteMatch) GetHost() string {
@@ -358,7 +616,7 @@ type HeaderMatch struct {
 
 func (x *HeaderMatch) Reset() {
 	*x = HeaderMatch{}
-	mi := &file_config_proto_msgTypes[5]
+	mi := &file_config_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -370,7 +628,7 @@ func (x *HeaderMatch) String() string {
 func (*HeaderMatch) ProtoMessage() {}
 
 func (x *HeaderMatch) ProtoReflect() protoreflect.Message {
-	mi := &file_config_proto_msgTypes[5]
+	mi := &file_config_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -383,7 +641,7 @@ func (x *HeaderMatch) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeaderMatch.ProtoReflect.Descriptor instead.
 func (*HeaderMatch) Descriptor() ([]byte, []int) {
-	return file_config_proto_rawDescGZIP(), []int{5}
+	return file_config_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *HeaderMatch) GetName() string {
@@ -420,12 +678,33 @@ const file_config_proto_rawDesc = "" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12:\n" +
 	"\tendpoints\x18\x02 \x03(\v2\x1c.spillway.config.v1.EndpointR\tendpoints\"$\n" +
 	"\bEndpoint\x12\x18\n" +
-	"\aaddress\x18\x01 \x01(\tR\aaddress\"\x89\x01\n" +
+	"\aaddress\x18\x01 \x01(\tR\aaddress\"\xf3\x03\n" +
 	"\x05Route\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x124\n" +
 	"\x05match\x18\x02 \x01(\v2\x1e.spillway.config.v1.RouteMatchR\x05match\x12\x1a\n" +
 	"\bupstream\x18\x03 \x01(\tR\bupstream\x12\x1a\n" +
-	"\bpriority\x18\x04 \x01(\x05R\bpriority\"\xaa\x01\n" +
+	"\bpriority\x18\x04 \x01(\x05R\bpriority\x12!\n" +
+	"\fstrip_prefix\x18\x05 \x01(\tR\vstripPrefix\x12\x1d\n" +
+	"\n" +
+	"add_prefix\x18\x06 \x01(\tR\taddPrefix\x12L\n" +
+	"\x0frequest_headers\x18\a \x01(\v2#.spillway.config.v1.HeaderTransformR\x0erequestHeaders\x12N\n" +
+	"\x10response_headers\x18\b \x01(\v2#.spillway.config.v1.HeaderTransformR\x0fresponseHeaders\x12$\n" +
+	"\x0emax_body_bytes\x18\t \x01(\x03R\fmaxBodyBytes\x12(\n" +
+	"\x10max_header_bytes\x18\n" +
+	" \x01(\x05R\x0emaxHeaderBytes\x128\n" +
+	"\btimeouts\x18\v \x01(\v2\x1c.spillway.config.v1.TimeoutsR\btimeouts\"\x8f\x01\n" +
+	"\x0fHeaderTransform\x121\n" +
+	"\x03set\x18\x01 \x03(\v2\x1f.spillway.config.v1.HeaderValueR\x03set\x121\n" +
+	"\x03add\x18\x02 \x03(\v2\x1f.spillway.config.v1.HeaderValueR\x03add\x12\x16\n" +
+	"\x06remove\x18\x03 \x03(\tR\x06remove\"7\n" +
+	"\vHeaderValue\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value\"g\n" +
+	"\bTimeouts\x12\x18\n" +
+	"\aconnect\x18\x01 \x01(\tR\aconnect\x12\x17\n" +
+	"\aper_try\x18\x02 \x01(\tR\x06perTry\x12\x14\n" +
+	"\x05total\x18\x03 \x01(\tR\x05total\x12\x12\n" +
+	"\x04idle\x18\x04 \x01(\tR\x04idle\"\xaa\x01\n" +
 	"\n" +
 	"RouteMatch\x12\x12\n" +
 	"\x04host\x18\x01 \x01(\tR\x04host\x12\x18\n" +
@@ -451,26 +730,34 @@ func file_config_proto_rawDescGZIP() []byte {
 	return file_config_proto_rawDescData
 }
 
-var file_config_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_config_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_config_proto_goTypes = []any{
-	(*Config)(nil),      // 0: spillway.config.v1.Config
-	(*Upstream)(nil),    // 1: spillway.config.v1.Upstream
-	(*Endpoint)(nil),    // 2: spillway.config.v1.Endpoint
-	(*Route)(nil),       // 3: spillway.config.v1.Route
-	(*RouteMatch)(nil),  // 4: spillway.config.v1.RouteMatch
-	(*HeaderMatch)(nil), // 5: spillway.config.v1.HeaderMatch
+	(*Config)(nil),          // 0: spillway.config.v1.Config
+	(*Upstream)(nil),        // 1: spillway.config.v1.Upstream
+	(*Endpoint)(nil),        // 2: spillway.config.v1.Endpoint
+	(*Route)(nil),           // 3: spillway.config.v1.Route
+	(*HeaderTransform)(nil), // 4: spillway.config.v1.HeaderTransform
+	(*HeaderValue)(nil),     // 5: spillway.config.v1.HeaderValue
+	(*Timeouts)(nil),        // 6: spillway.config.v1.Timeouts
+	(*RouteMatch)(nil),      // 7: spillway.config.v1.RouteMatch
+	(*HeaderMatch)(nil),     // 8: spillway.config.v1.HeaderMatch
 }
 var file_config_proto_depIdxs = []int32{
-	1, // 0: spillway.config.v1.Config.upstreams:type_name -> spillway.config.v1.Upstream
-	3, // 1: spillway.config.v1.Config.routes:type_name -> spillway.config.v1.Route
-	2, // 2: spillway.config.v1.Upstream.endpoints:type_name -> spillway.config.v1.Endpoint
-	4, // 3: spillway.config.v1.Route.match:type_name -> spillway.config.v1.RouteMatch
-	5, // 4: spillway.config.v1.RouteMatch.headers:type_name -> spillway.config.v1.HeaderMatch
-	5, // [5:5] is the sub-list for method output_type
-	5, // [5:5] is the sub-list for method input_type
-	5, // [5:5] is the sub-list for extension type_name
-	5, // [5:5] is the sub-list for extension extendee
-	0, // [0:5] is the sub-list for field type_name
+	1,  // 0: spillway.config.v1.Config.upstreams:type_name -> spillway.config.v1.Upstream
+	3,  // 1: spillway.config.v1.Config.routes:type_name -> spillway.config.v1.Route
+	2,  // 2: spillway.config.v1.Upstream.endpoints:type_name -> spillway.config.v1.Endpoint
+	7,  // 3: spillway.config.v1.Route.match:type_name -> spillway.config.v1.RouteMatch
+	4,  // 4: spillway.config.v1.Route.request_headers:type_name -> spillway.config.v1.HeaderTransform
+	4,  // 5: spillway.config.v1.Route.response_headers:type_name -> spillway.config.v1.HeaderTransform
+	6,  // 6: spillway.config.v1.Route.timeouts:type_name -> spillway.config.v1.Timeouts
+	5,  // 7: spillway.config.v1.HeaderTransform.set:type_name -> spillway.config.v1.HeaderValue
+	5,  // 8: spillway.config.v1.HeaderTransform.add:type_name -> spillway.config.v1.HeaderValue
+	8,  // 9: spillway.config.v1.RouteMatch.headers:type_name -> spillway.config.v1.HeaderMatch
+	10, // [10:10] is the sub-list for method output_type
+	10, // [10:10] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_config_proto_init() }
@@ -484,7 +771,7 @@ func file_config_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_config_proto_rawDesc), len(file_config_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   6,
+			NumMessages:   9,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
