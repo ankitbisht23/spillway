@@ -22,8 +22,15 @@ type Snapshot struct {
 
 // Route is a compiled route.
 type Route struct {
-	Name     string
-	Upstream *Upstream
+	Name            string
+	Upstream        *Upstream
+	AddPrefix       string // see UpstreamPath
+	RequestHeaders  HeaderTransform
+	ResponseHeaders HeaderTransform
+	MaxBodyBytes    int64 // 0 means no limit
+	MaxHeaderBytes  int   // 0 means the server's limit
+	Timeouts        Timeouts
+	strip           int // leading path segments that strip_prefix removes
 }
 
 // Upstream is a compiled upstream.
@@ -84,8 +91,12 @@ func Compile(c *configpb.Config) (*Snapshot, error) {
 		for _, h := range m.GetHeaders() {
 			rr.Headers = append(rr.Headers, router.HeaderMatch{Name: h.GetName(), Exact: h.GetExact(), Regex: h.GetRegex()})
 		}
+		route := Route{Name: r.GetName(), Upstream: up}
+		if err := route.compileTransforms(r, rr.Path); err != nil {
+			return nil, fmt.Errorf("route %q: %w", r.GetName(), err)
+		}
 		routes = append(routes, rr)
-		s.Routes = append(s.Routes, Route{Name: r.GetName(), Upstream: up})
+		s.Routes = append(s.Routes, route)
 	}
 
 	var err error

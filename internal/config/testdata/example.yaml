@@ -11,6 +11,16 @@ routes:
   - name: orders-api
     match: { host: api.example.com, path_prefix: /v1/orders, methods: [GET, POST] }
     upstream: orders
+    strip_prefix: /v1
+    add_prefix: /api
+    request_headers:
+      set: [{ name: x-gateway, value: spillway }]
+      add: [{ name: x-tag, value: a }]
+      remove: [x-debug]
+    response_headers: { remove: [server] }
+    max_body_bytes: 1048576
+    max_header_bytes: 8192
+    timeouts: { connect: 200ms, per_try: 1s, total: 3s, idle: 500ms }
   - name: order-by-id
     match:
       path: /v1/orders/:id
