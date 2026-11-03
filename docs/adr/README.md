@@ -20,3 +20,4 @@ Decisions that shape Spillway and are not obvious from the code or from docs/des
 | [0009](0009-request-framing.md) | Request framing: re-frame instead of rejecting Content-Length with Transfer-Encoding | Accepted | 2026-11-04 |
 | [0010](0010-admin-port-and-compose-gateway.md) | Admin port and the gateway in compose | Accepted | 2026-11-04 |
 | [0011](0011-route-transforms-limits-timeouts.md) | Route transforms, size limits and timeouts | Accepted | 2026-11-04 |
+| [0012](0012-tls-listener-and-certificates.md) | TLS listener and certificates | Accepted | 2026-11-04 |
