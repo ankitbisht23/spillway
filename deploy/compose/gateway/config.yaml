@@ -1,0 +1,14 @@
+# Config for the compose gateways (CP-05): every path goes to the three mock
+# upstreams, e.g. http://127.0.0.1:8000/bytes/1024. The directory is mounted,
+# so saving this file (even by rename) reloads the gateways within a second.
+version: 1
+upstreams:
+  - name: httpbin
+    endpoints:
+      - address: upstream-1:8080
+      - address: upstream-2:8080
+      - address: upstream-3:8080
+routes:
+  - name: default
+    match: { path_prefix: / }
+    upstream: httpbin

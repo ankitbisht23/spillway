@@ -1,5 +1,5 @@
-# Prometheus scrapes admin ports (Observability). Spillway's gateway and control
-# plane join as they land (M1, M5).
+# Prometheus scrapes admin ports (Observability). Spillway's control plane joins
+# in M5.
 global:
   scrape_interval: 5s
 
@@ -16,3 +16,6 @@ scrape_configs:
   - job_name: loki
     static_configs:
       - targets: ["loki:3100"]
+  - job_name: gateway
+    static_configs:
+      - targets: ["gateway-1:8001"]

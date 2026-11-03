@@ -211,5 +211,54 @@ services:
     <<: *upstream
     ports: ["127.0.0.1:9103:8080"]
 
+  # The gateway (ADR-0004, ADR-0010). Only gateway-1 publishes host ports;
+  # gateway-2 … gateway-5 join with --profile replicas. The config directory
+  # is mounted, not the file, so a save by rename reaches the container.
+  gateway-1:
+    <<: &gateway
+      build: { context: ., target: gateway }
+      image: spillway-gateway:dev
+      env_file: *env-local
+      environment:
+        SPILLWAY_GATEWAY_CONFIG: /etc/spillway/config.yaml
+        SPILLWAY_GATEWAY_HTTP_ADDR: ":8000"
+        SPILLWAY_GATEWAY_ADMIN_ADDR: ":8001" # all interfaces in the container, so Prometheus can scrape it
+        SPILLWAY_GATEWAY_ALLOWED_NETWORKS: 172.29.0.0/16 # the compose network below (SEC-06)
+      volumes: ["./deploy/compose/gateway:/etc/spillway:ro"]
+      read_only: true
+      ulimits:
+        nofile: 65536
+      depends_on:
+        redis-init: { condition: service_completed_successfully } # start order only; readiness never checks Redis (GW-24, ADR-0006)
+        upstream-1: { condition: service_healthy }
+        upstream-2: { condition: service_healthy }
+        upstream-3: { condition: service_healthy }
+      healthcheck:
+        test: ["CMD", "/gateway", "healthcheck"]
+        interval: 2s
+        timeout: 3s
+        retries: 15
+    ports: ["127.0.0.1:8000:8000", "127.0.0.1:8001:8001"]
+  gateway-2:
+    <<: *gateway
+    profiles: [replicas]
+  gateway-3:
+    <<: *gateway
+    profiles: [replicas]
+  gateway-4:
+    <<: *gateway
+    profiles: [replicas]
+  gateway-5:
+    <<: *gateway
+    profiles: [replicas]
+
+# A fixed subnet, so the gateways' upstream allow-list can be exactly this
+# network (SEC-06, ADR-0010).
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.29.0.0/16
+
 volumes:
   pgdata:
