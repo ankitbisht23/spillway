@@ -229,6 +229,7 @@ services:
       ulimits:
         nofile: 65536
       depends_on:
+        redis-init: { condition: service_completed_successfully } # start order only; readiness never checks Redis (GW-24, ADR-0006)
         upstream-1: { condition: service_healthy }
         upstream-2: { condition: service_healthy }
         upstream-3: { condition: service_healthy }

@@ -22,13 +22,13 @@ GW-24 asks for `/healthz` and `/readyz`; GW-25 and OB-07 ask for a separate admi
   | `/healthz` | 200 while the process runs |
   | `/readyz` | 200 while a config snapshot is loaded and shutdown has not started, else 503; Redis never counts |
   | `/metrics` | Go runtime (`go_*`) and process (`process_*`) collectors, and `gw_config_version`, read from the current snapshot at scrape time |
-  | `/debug/pprof/` | `net/http/pprof`, registered on the admin mux only, never on `http.DefaultServeMux` |
+  | `/debug/pprof/` | `net/http/pprof`, registered on the admin mux. Importing the package also registers it on `http.DefaultServeMux`, which no Spillway server serves |
 
   On the traffic port these paths are routed like any other path.
 - **Admin server limits.** Read-header timeout 10 s and idle timeout 120 s, but no write timeout, so CPU profiles and traces can run longer than the traffic port's 60 s.
 - **Shutdown.** On SIGTERM or SIGINT, `/readyz` turns 503 at once, the traffic server gets up to 10 s to finish in-flight requests, then the admin server closes. The drain period between the two is GW-23, M4.
 - **`gateway healthcheck`.** The binary GETs `/readyz` on the address in `SPILLWAY_GATEWAY_ADMIN_ADDR`, asking a wildcard host (`:8001`, `0.0.0.0`) on `127.0.0.1`, with a 2 s timeout; it exits 0 on 200 and 1 otherwise. The compose healthcheck runs `/gateway healthcheck`.
-- **Compose services.** `gateway-1` is built from the root `Dockerfile` target `gateway` as `spillway-gateway:dev`; `gateway-2` … `gateway-5` are the same service under the profile `replicas` and publish no host ports. Each has a read-only root filesystem, `nofile` 65536, and waits for the three mock upstreams to be healthy. The directory `deploy/compose/gateway/` is mounted read-only at `/etc/spillway`, not the file, because editors that save by rename would leave a file mount on the old inode and the gateway would never reload.
+- **Compose services.** `gateway-1` is built from the root `Dockerfile` target `gateway` as `spillway-gateway:dev`; `gateway-2` … `gateway-5` are the same service under the profile `replicas` and publish no host ports. Each has a read-only root filesystem, `nofile` 65536, and waits for the three mock upstreams to be healthy and for `redis-init` to exit 0, as ADR-0006 planned; that orders startup only, and readiness never checks Redis (GW-24). The directory `deploy/compose/gateway/` is mounted read-only at `/etc/spillway`, not the file, because editors that save by rename would leave a file mount on the old inode and the gateway would never reload.
 - **Compose network.** The default network is pinned to `172.29.0.0/16`, and `SPILLWAY_GATEWAY_ALLOWED_NETWORKS` is exactly that subnet.
 - **Scraping.** Prometheus scrapes `gateway-1:8001` as job `gateway`. Replicas are added when a test needs their metrics (the M3 accuracy harness).
 
