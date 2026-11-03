@@ -17,10 +17,7 @@ import (
 	"github.com/ankitbisht23/spillway/internal/config"
 )
 
-const (
-	connectTimeout = 5 * time.Second // until per-route connect timeouts (GW-11)
-	lookupTimeout  = 5 * time.Second
-)
+const lookupTimeout = 5 * time.Second
 
 // Resolver looks up a host's addresses; *net.Resolver implements it.
 type Resolver interface {
@@ -58,7 +55,7 @@ func NewRegistry(allow Allowlist, resolver Resolver, log *slog.Logger) *Registry
 	r := &Registry{
 		allow:    allow,
 		resolver: resolver,
-		dialer:   &net.Dialer{Timeout: connectTimeout, KeepAlive: 30 * time.Second, Control: allow.control},
+		dialer:   &net.Dialer{KeepAlive: 30 * time.Second, Control: allow.control},
 		log:      log,
 	}
 	r.pools.Store(&map[string]*pool{})
@@ -148,7 +145,7 @@ func (r *Registry) refresh() {
 func (r *Registry) newPool(name string) *pool {
 	p := &pool{name: name, transport: &http.Transport{
 		Proxy:                  nil, // never HTTP_PROXY from the environment
-		DialContext:            r.dialer.DialContext,
+		DialContext:            r.dial,
 		MaxIdleConnsPerHost:    512,
 		IdleConnTimeout:        90 * time.Second,
 		ExpectContinueTimeout:  time.Second,
@@ -157,6 +154,17 @@ func (r *Registry) newPool(name string) *pool {
 	}}
 	p.addrs.Store(&[]string{})
 	return p
+}
+
+// dial opens an upstream connection within the connect timeout of the route
+// whose request asked for it (GW-11).
+func (r *Registry) dial(ctx context.Context, network, address string) (net.Conn, error) {
+	if timeout, ok := ctx.Value(connectTimeoutKey{}).(time.Duration); ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+	return r.dialer.DialContext(ctx, network, address)
 }
 
 func (r *Registry) setEndpoints(p *pool, endpoints []string) {

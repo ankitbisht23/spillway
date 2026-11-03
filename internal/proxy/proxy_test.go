@@ -53,12 +53,13 @@ func (f *fakeResolver) set(host string, ips ...string) {
 }
 
 // upstream is a test server that echoes what it received and counts the
-// connections it accepted and closed.
+// requests it served and the connections it accepted and closed.
 type upstream struct {
 	*httptest.Server
-	name   string
-	conns  atomic.Int64
-	closed atomic.Int64
+	name     string
+	requests atomic.Int64
+	conns    atomic.Int64
+	closed   atomic.Int64
 }
 
 type echo struct {
@@ -75,6 +76,7 @@ func newUpstream(t *testing.T, name string) *upstream {
 	t.Helper()
 	u := &upstream{name: name}
 	u.Server = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		u.requests.Add(1)
 		body, _ := io.ReadAll(r.Body)
 		w.Header().Set("Connection", "X-Upstream-Secret")
 		w.Header().Set("X-Upstream-Secret", "1")
@@ -301,12 +303,30 @@ func TestProxyErrorStatus(t *testing.T) {
 		{&net.OpError{Op: "dial", Err: &net.DNSError{IsTimeout: true}}, http.StatusGatewayTimeout},
 		{fmt.Errorf("wrapped: %w", context.DeadlineExceeded), http.StatusGatewayTimeout},
 		{errors.New("connection reset"), http.StatusBadGateway},
+		{fmt.Errorf("write error: %w", &http.MaxBytesError{Limit: 10}), http.StatusRequestEntityTooLarge},
 	} {
 		w := httptest.NewRecorder()
 		h.proxyError(w, httptest.NewRequestWithContext(t.Context(), "GET", "/", nil), tt.err)
 		if w.Code != tt.want {
 			t.Errorf("proxyError(%v) = %d, want %d", tt.err, w.Code, tt.want)
 		}
+	}
+
+	// The idle timeout cancels the request context: 504. A client that went
+	// away also cancels it, and gets nothing.
+	ctx, cancel := context.WithCancelCause(t.Context())
+	cancel(errStreamIdle)
+	w := httptest.NewRecorder()
+	h.proxyError(w, httptest.NewRequestWithContext(ctx, "GET", "/", nil), context.Canceled)
+	if w.Code != http.StatusGatewayTimeout {
+		t.Errorf("idle timeout: %d, want 504", w.Code)
+	}
+	ctx, stop := context.WithCancel(t.Context())
+	stop()
+	w = httptest.NewRecorder()
+	h.proxyError(w, httptest.NewRequestWithContext(ctx, "GET", "/", nil), context.Canceled)
+	if w.Body.Len() != 0 {
+		t.Errorf("client gone: answered %d %q", w.Code, w.Body)
 	}
 }
 
