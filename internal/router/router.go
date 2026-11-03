@@ -69,13 +69,22 @@ type param struct {
 	seg  int // segment index in the path
 }
 
+// RouteError is the error New returns for an invalid route.
+type RouteError struct {
+	Index int // index of the route in the list given to New
+	Err   error
+}
+
+func (e *RouteError) Error() string { return fmt.Sprintf("route %d: %v", e.Index, e.Err) }
+func (e *RouteError) Unwrap() error { return e.Err }
+
 // New compiles routes into a Router.
 func New(routes []Route) (*Router, error) {
 	r := &Router{hosts: map[string]*node{}, any: &node{}}
 	for i, rt := range routes {
 		e, segs, err := compile(i, rt)
 		if err != nil {
-			return nil, fmt.Errorf("route %d: %w", i, err)
+			return nil, &RouteError{Index: i, Err: err}
 		}
 		n := r.any
 		if rt.Host != "" {
