@@ -494,7 +494,7 @@ The gateway is an internet-facing edge, so defaults are closed: TLS on, admin su
 - **SEC-04** (M5) JWT algorithm allowlist (no `none`, no HS256 against public keys); `iss` checked against the configured issuer; JWKS fetched over TLS from the configured JWKS URL only. Plain-HTTP issuers and JWKS URLs are accepted only with `dev_mode: true` (compose, ADR-0004), never in Helm.
 - **SEC-05** (M2) `X-Forwarded-For` trusted only from a configured proxy CIDR list, so clients cannot spoof IP-based limits.
 - **SEC-06** (M1 YAML and dial, M5 API, M7 kind ranges) Upstream addresses checked against allowed networks to block SSRF through config, at config load and again at connection time via `net.Dialer.Control`, so DNS re-resolution (GW-06) cannot reach a blocked address; link-local and cloud metadata addresses always rejected. The dev allow-list includes the compose subnet; kind ranges are added in M7.
-- **SEC-07** (M1) Hop-by-hop headers stripped; `X-Forwarded-*` set by the gateway; conflicting `Content-Length` and `Transfer-Encoding` rejected to prevent request smuggling.
+- **SEC-07** (M1) Hop-by-hop headers stripped; `X-Forwarded-*` set by the gateway; requests with both `Content-Length` and `Transfer-Encoding` are re-framed: `Transfer-Encoding: chunked` wins, `Content-Length` is dropped and the upstream receives the body with the gateway's own framing (RFC 9112 §6.3); differing `Content-Length` values are rejected with 400 and any `Transfer-Encoding` other than a single `chunked` with 501 (ADR-0009).
 - **SEC-08** (M5) RBAC enforced server-side on every admin endpoint; audit log is append-only.
 - **SEC-09** (M0, M5) Secrets (DB password, Redis auth, TLS keys) come from env or mounted files, never from config snapshots.
 - **SEC-10** (M0) `govulncheck` and `pnpm audit` in CI; images run as non-root with a read-only root filesystem (the gateway gets a writable volume for its on-disk snapshot, CP-07).
@@ -614,7 +614,7 @@ Exit (`make verify-m0`): `make dev` boots from a clean clone with every service 
 - [ ] Reverse proxy on a tuned `http.Transport`: pooling, keep-alive, HTTP/2; pools and health state in registries keyed by stable IDs, reconciled on each snapshot swap (GW-04, GW-06, GW-29)
 - [ ] `make certs` (mkcert localhost cert into gitignored `deploy/certs/`) and the TLS listener with hot-reloaded certificates; plain-HTTP listener for dev and benchmarks only, off by default (GW-04, SEC-01)
 - [ ] Transforms, size limits, timeouts (GW-02, GW-03, GW-11)
-- [ ] Hop-by-hop headers stripped, `X-Forwarded-*` set by the gateway, conflicting `Content-Length` / `Transfer-Encoding` rejected (SEC-07)
+- [x] Hop-by-hop headers stripped, `X-Forwarded-*` set by the gateway, requests with both `Content-Length` and `Transfer-Encoding` re-framed with `Transfer-Encoding: chunked` winning; differing `Content-Length` values rejected with 400, any other `Transfer-Encoding` with 501 (SEC-07, ADR-0009)
 - [x] `api/proto/config.proto` as the one config schema: YAML → JSON → proto (protojson) → compiled snapshot → atomic swap on file change; `buf lint` and `buf breaking` in CI (GW-21, CP-05, CP-21)
 - [ ] Upstream allow-list checked at YAML load and at dial time via `net.Dialer.Control`; the dev list includes the compose subnet (SEC-06)
 - [ ] Request IDs, trace passthrough, JSON access logs (stdout and OTLP), RED metrics with `reason` and capped `tenant` labels, `/healthz` and `/readyz` (config loaded, not draining), admin port bound to an internal interface (GW-22, GW-24, GW-25, OB-01, OB-03, OB-07, SEC-02)

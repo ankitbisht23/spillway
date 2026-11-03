@@ -1,6 +1,6 @@
 # 0009. Request framing: re-frame instead of rejecting Content-Length with Transfer-Encoding
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-11-04
 - **Requirement IDs:** SEC-07
 
@@ -18,7 +18,7 @@ Rejecting with 400, as SEC-07 says, would mean reading each request's raw header
 
 ## Decision
 
-Proposed: keep Go's behaviour and change SEC-07's text from "conflicting `Content-Length` and `Transfer-Encoding` rejected" to:
+Keep Go's behaviour. SEC-07's text changes from "conflicting `Content-Length` and `Transfer-Encoding` rejected" to:
 
 > Requests with both `Content-Length` and `Transfer-Encoding` are re-framed: `Transfer-Encoding: chunked` wins, `Content-Length` is dropped and the upstream receives the body with the gateway's own framing (RFC 9112 §6.3); differing `Content-Length` values are rejected with 400 and any `Transfer-Encoding` other than a single `chunked` with 501.
 
