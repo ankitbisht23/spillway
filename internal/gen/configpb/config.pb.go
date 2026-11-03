@@ -215,8 +215,12 @@ type Route struct {
 	// (GW-03).
 	MaxHeaderBytes int32     `protobuf:"varint,10,opt,name=max_header_bytes,json=maxHeaderBytes,proto3" json:"max_header_bytes,omitempty"`
 	Timeouts       *Timeouts `protobuf:"bytes,11,opt,name=timeouts,proto3" json:"timeouts,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Strict-Transport-Security max-age for the route's responses over TLS, as
+	// a Go duration in whole seconds such as "8760h"; unset sends no header
+	// (SEC-01).
+	HstsMaxAge    string `protobuf:"bytes,12,opt,name=hsts_max_age,json=hstsMaxAge,proto3" json:"hsts_max_age,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Route) Reset() {
@@ -324,6 +328,13 @@ func (x *Route) GetTimeouts() *Timeouts {
 		return x.Timeouts
 	}
 	return nil
+}
+
+func (x *Route) GetHstsMaxAge() string {
+	if x != nil {
+		return x.HstsMaxAge
+	}
+	return ""
 }
 
 // HeaderTransform changes headers: remove first, then set, then add (GW-02).
@@ -678,7 +689,7 @@ const file_config_proto_rawDesc = "" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12:\n" +
 	"\tendpoints\x18\x02 \x03(\v2\x1c.spillway.config.v1.EndpointR\tendpoints\"$\n" +
 	"\bEndpoint\x12\x18\n" +
-	"\aaddress\x18\x01 \x01(\tR\aaddress\"\xf3\x03\n" +
+	"\aaddress\x18\x01 \x01(\tR\aaddress\"\x95\x04\n" +
 	"\x05Route\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x124\n" +
 	"\x05match\x18\x02 \x01(\v2\x1e.spillway.config.v1.RouteMatchR\x05match\x12\x1a\n" +
@@ -692,7 +703,9 @@ const file_config_proto_rawDesc = "" +
 	"\x0emax_body_bytes\x18\t \x01(\x03R\fmaxBodyBytes\x12(\n" +
 	"\x10max_header_bytes\x18\n" +
 	" \x01(\x05R\x0emaxHeaderBytes\x128\n" +
-	"\btimeouts\x18\v \x01(\v2\x1c.spillway.config.v1.TimeoutsR\btimeouts\"\x8f\x01\n" +
+	"\btimeouts\x18\v \x01(\v2\x1c.spillway.config.v1.TimeoutsR\btimeouts\x12 \n" +
+	"\fhsts_max_age\x18\f \x01(\tR\n" +
+	"hstsMaxAge\"\x8f\x01\n" +
 	"\x0fHeaderTransform\x121\n" +
 	"\x03set\x18\x01 \x03(\v2\x1f.spillway.config.v1.HeaderValueR\x03set\x121\n" +
 	"\x03add\x18\x02 \x03(\v2\x1f.spillway.config.v1.HeaderValueR\x03add\x12\x16\n" +

@@ -55,6 +55,10 @@ message Route {
   // (GW-03).
   int32 max_header_bytes = 10;
   Timeouts timeouts = 11;
+  // Strict-Transport-Security max-age for the route's responses over TLS, as
+  // a Go duration in whole seconds such as "8760h"; unset sends no header
+  // (SEC-01).
+  string hsts_max_age = 12;
 }
 
 // HeaderTransform changes headers: remove first, then set, then add (GW-02).

@@ -21,6 +21,7 @@ routes:
     max_body_bytes: 1048576
     max_header_bytes: 8192
     timeouts: { connect: 200ms, per_try: 1s, total: 3s, idle: 500ms }
+    hsts_max_age: 8760h
   - name: order-by-id
     match:
       path: /v1/orders/:id
