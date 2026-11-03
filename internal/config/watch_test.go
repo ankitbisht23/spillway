@@ -3,6 +3,8 @@ package config
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -21,7 +23,7 @@ func newTestWatcher(t *testing.T, content string) (*Watcher, string, *bytes.Buff
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	write(t, path, content)
 	var logs bytes.Buffer
-	w, err := NewWatcher(path, slog.New(slog.NewTextHandler(&logs, nil)))
+	w, err := NewWatcher(path, slog.New(slog.NewTextHandler(&logs, nil)), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,10 +45,10 @@ func write(t *testing.T, path, content string) {
 func TestNewWatcherRejectsInvalidFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	write(t, path, "routes: [")
-	if _, err := NewWatcher(path, slog.New(slog.DiscardHandler)); err == nil {
+	if _, err := NewWatcher(path, slog.New(slog.DiscardHandler), nil); err == nil {
 		t.Error("NewWatcher accepted an invalid file")
 	}
-	if _, err := NewWatcher(filepath.Join(t.TempDir(), "missing.yaml"), slog.New(slog.DiscardHandler)); err == nil {
+	if _, err := NewWatcher(filepath.Join(t.TempDir(), "missing.yaml"), slog.New(slog.DiscardHandler), nil); err == nil {
 		t.Error("NewWatcher accepted a missing file")
 	}
 }
@@ -136,5 +138,35 @@ func TestRunPollsTheFile(t *testing.T) {
 	<-done
 	if !strings.Contains(logs.String(), "version=2") {
 		t.Errorf("no load logged:\n%s", logs.String())
+	}
+}
+
+func TestApplyHookCanRejectSnapshot(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	write(t, path, configYAML(1, "/a"))
+	var applied []int64
+	w, err := NewWatcher(path, slog.New(slog.DiscardHandler), func(s *Snapshot) error {
+		applied = append(applied, s.Version)
+		if s.Version == 2 {
+			return errors.New("rejected")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, path, configYAML(2, "/b"))
+	if err := w.reload(); err == nil || !strings.Contains(err.Error(), "rejected") {
+		t.Errorf("reload error = %v, want the hook's error", err)
+	}
+	if w.Snapshot().Version != 1 {
+		t.Errorf("version = %d, want 1 kept", w.Snapshot().Version)
+	}
+	write(t, path, configYAML(3, "/c"))
+	if err := w.reload(); err != nil || w.Snapshot().Version != 3 {
+		t.Errorf("reload = %v, version %d; want 3", err, w.Snapshot().Version)
+	}
+	if fmt.Sprint(applied) != "[1 2 3]" {
+		t.Errorf("hook saw versions %v, want [1 2 3]", applied)
 	}
 }

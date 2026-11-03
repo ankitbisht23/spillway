@@ -16,13 +16,17 @@ import (
 type Watcher struct {
 	path    string
 	log     *slog.Logger
+	apply   func(*Snapshot) error
 	current atomic.Pointer[Snapshot]
 	sum     [sha256.Size]byte // content last tried, good or bad
 }
 
-// NewWatcher loads the file once; an invalid file is an error.
-func NewWatcher(path string, log *slog.Logger) (*Watcher, error) {
-	w := &Watcher{path: path, log: log}
+// NewWatcher loads the file once; an invalid file is an error. apply, if not
+// nil, runs on each new snapshot before it is swapped in; an error rejects the
+// snapshot. The gateway uses it to check upstreams and reconcile runtime
+// state (GW-29).
+func NewWatcher(path string, log *slog.Logger, apply func(*Snapshot) error) (*Watcher, error) {
+	w := &Watcher{path: path, log: log, apply: apply}
 	if err := w.reload(); err != nil {
 		return nil, err
 	}
@@ -69,6 +73,11 @@ func (w *Watcher) reload() error {
 	s, err := Compile(c)
 	if err != nil {
 		return fmt.Errorf("config: %w", err)
+	}
+	if w.apply != nil {
+		if err := w.apply(s); err != nil {
+			return fmt.Errorf("config: %w", err)
+		}
 	}
 	w.current.Store(s)
 	w.log.Info("config loaded", "path", w.path, "version", s.Version, "routes", len(s.Routes), "upstreams", len(s.Upstreams))
