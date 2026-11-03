@@ -618,7 +618,7 @@ Exit (`make verify-m0`): `make dev` boots from a clean clone with every service 
 - [x] `api/proto/config.proto` as the one config schema: YAML → JSON → proto (protojson) → compiled snapshot → atomic swap on file change; `buf lint` and `buf breaking` in CI (GW-21, CP-05, CP-21)
 - [ ] Upstream allow-list checked at YAML load and at dial time via `net.Dialer.Control`; the dev list includes the compose subnet (SEC-06)
 - [ ] Request IDs, trace passthrough, JSON access logs (stdout and OTLP), RED metrics with `reason` and capped `tenant` labels, `/healthz` and `/readyz` (config loaded, not draining), admin port bound to an internal interface (GW-22, GW-24, GW-25, OB-01, OB-03, OB-07, SEC-02)
-- [ ] Server timeouts and container-aware runtime settings (GW-27, GW-28)
+- [x] Server timeouts and container-aware runtime settings (GW-27, GW-28)
 - [ ] Gateway as compose services: `gateway-1`, plus `gateway-2` … `gateway-5` under the `replicas` profile; only `gateway-1` publishes host ports (ADR-0004)
 - [ ] `cmd/loadgen` v1: constant arrival rate (open model), HDR histograms, JSON results for `bench.yml`; reports achieved vs target rate and fails the run when achieved < 99% of target (saturated generator)
 - [ ] Fuzz tests for the router and config parser; `bench.yml` (manual trigger) on GitHub Actions; first baseline pushed to `bench-results` (NFR-01, ADR-0003)
