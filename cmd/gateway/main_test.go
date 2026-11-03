@@ -118,8 +118,10 @@ func TestServe(t *testing.T) {
 	if code, body := get(t, traffic+"/x"); code != http.StatusOK || body != "upstream" {
 		t.Errorf("GET /x = %d %q, want 200 from the upstream", code, body)
 	}
-	if _, body := get(t, traffic+"/metrics"); body != "upstream" {
-		t.Errorf("traffic port /metrics = %q, want it proxied like any path", body)
+	for _, p := range []string{"/healthz", "/readyz", "/metrics", "/debug/pprof/"} {
+		if _, body := get(t, traffic+p); body != "upstream" {
+			t.Errorf("traffic port %s = %q, want it proxied like any path", p, body)
+		}
 	}
 
 	slow := make(chan int)
