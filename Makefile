@@ -52,11 +52,12 @@ hooks: tool-gitleaks
 	chmod +x "$$hook"; echo "installed $$hook"
 
 # Dev TLS certificate for the gateways (GW-04, SEC-01), minted once into the
-# gitignored deploy/certs; delete that directory to mint a new one. mkcert
-# creates its local CA on first use; `mkcert -install` (docs/setup.md) only
-# makes browsers trust it. The key is made readable to all, because the
-# gateway containers run as uid 65532 and, on Linux, a bind mount keeps the
-# host's owner and mode (ADR-0012).
+# gitignored deploy/certs. To mint a new one, delete the two files (not the
+# directory, which the containers mount) and run this again; running
+# gateways load it within a second. mkcert creates its local CA on first use;
+# `mkcert -install` (docs/setup.md) only makes browsers trust it. The key is
+# made readable to all, because the gateway containers run as uid 65532 and,
+# on Linux, a bind mount keeps the host's owner and mode (ADR-0012).
 certs: deploy/certs/gateway.pem
 
 deploy/certs/gateway.pem: | tool-mkcert

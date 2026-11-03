@@ -3,10 +3,13 @@
 package integration
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -50,6 +53,40 @@ func TestGateway(t *testing.T) {
 		if time.Now().After(deadline) {
 			t.Fatalf("Prometheus does not report gateway-1 up: %s", body)
 		}
+	}
+}
+
+// TestGatewayTLS checks gateway-1's TLS port 8443: HTTP/2 over TLS 1.2 or
+// later with the certificate from make certs, which the test trusts directly
+// (GW-04, SEC-01).
+func TestGatewayTLS(t *testing.T) {
+	pem, err := os.ReadFile("../../deploy/certs/gateway.pem")
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(pem) {
+		t.Fatal("deploy/certs/gateway.pem has no certificate")
+	}
+	client := &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{
+		TLSClientConfig:   &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12},
+		ForceAttemptHTTP2: true,
+	}}
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://127.0.0.1:8443/bytes/1024", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK || len(body) != 1024 || resp.ProtoMajor != 2 {
+		t.Errorf("GET :8443/bytes/1024 = %d %s with %d bytes, want 200 HTTP/2.0 with 1024", resp.StatusCode, resp.Proto, len(body))
 	}
 }
 
