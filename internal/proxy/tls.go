@@ -70,23 +70,24 @@ func (c *Certs) TLSConfig() *tls.Config {
 	}
 }
 
-// reload swaps in the pair if either file changed. The same bad content is
-// reported once, not on every poll. Writing a new pair one file at a time may
-// log one failed load before the second file lands.
+// reload swaps in the pair if either file changed. The same bad content, or
+// the same unreadable file (hashed as empty), is reported once, not on every
+// poll. Writing a new pair one file at a time may log one failed load before
+// the second file lands.
 func (c *Certs) reload() error {
-	certPEM, err := os.ReadFile(c.certFile)
-	if err != nil {
-		return fmt.Errorf("certificate: %w", err)
-	}
-	keyPEM, err := os.ReadFile(c.keyFile)
-	if err != nil {
-		return fmt.Errorf("certificate key: %w", err)
-	}
+	certPEM, certErr := os.ReadFile(c.certFile)
+	keyPEM, keyErr := os.ReadFile(c.keyFile)
 	sum := [2][sha256.Size]byte{sha256.Sum256(certPEM), sha256.Sum256(keyPEM)}
 	if c.current.Load() != nil && sum == c.sum {
 		return nil
 	}
 	c.sum = sum
+	if certErr != nil {
+		return fmt.Errorf("certificate: %w", certErr)
+	}
+	if keyErr != nil {
+		return fmt.Errorf("certificate key: %w", keyErr)
+	}
 	cert, err := tls.X509KeyPair(certPEM, keyPEM)
 	if err != nil {
 		return fmt.Errorf("certificate: %w", err)

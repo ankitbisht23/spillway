@@ -133,17 +133,23 @@ func TestCertsReload(t *testing.T) {
 	<-stopped
 
 	// A certificate that does not match the key is refused, and so is a
-	// missing key file.
+	// missing key file; each is reported once, not on every poll.
 	key3 := filepath.Join(t.TempDir(), "key.pem")
 	roots.AddCert(testcert.Write(t, certFile, key3, 3))
 	if err := c.reload(); err == nil {
 		t.Error("a certificate with another certificate's key loaded")
+	}
+	if err := c.reload(); err != nil {
+		t.Errorf("the same mismatched pair reported again: %v", err)
 	}
 	if err := os.Remove(keyFile); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.reload(); err == nil {
 		t.Error("a missing key file loaded")
+	}
+	if err := c.reload(); err != nil {
+		t.Errorf("the same missing key file reported again: %v", err)
 	}
 	if s := serial(); s != 2 {
 		t.Errorf("serial %d after bad pairs, want 2 kept", s)
