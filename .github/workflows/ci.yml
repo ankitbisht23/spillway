@@ -21,6 +21,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0 # buf breaking compares with origin/main
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -31,6 +32,8 @@ jobs:
           key: tools-go-${{ runner.os }}-${{ hashFiles('Makefile') }}
       - name: Lint
         run: make lint-go
+      - name: buf lint, generated code, buf breaking (CP-21)
+        run: make lint-proto
       - name: Unit tests and fuzz smoke
         run: make test FUZZTIME=10s
       - name: govulncheck

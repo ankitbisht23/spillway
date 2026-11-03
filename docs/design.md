@@ -615,7 +615,7 @@ Exit (`make verify-m0`): `make dev` boots from a clean clone with every service 
 - [ ] `make certs` (mkcert localhost cert into gitignored `deploy/certs/`) and the TLS listener with hot-reloaded certificates; plain-HTTP listener for dev and benchmarks only, off by default (GW-04, SEC-01)
 - [ ] Transforms, size limits, timeouts (GW-02, GW-03, GW-11)
 - [ ] Hop-by-hop headers stripped, `X-Forwarded-*` set by the gateway, conflicting `Content-Length` / `Transfer-Encoding` rejected (SEC-07)
-- [ ] `api/proto/config.proto` as the one config schema: YAML → JSON → proto (protojson) → compiled snapshot → atomic swap on file change; `buf lint` and `buf breaking` in CI (GW-21, CP-05, CP-21)
+- [x] `api/proto/config.proto` as the one config schema: YAML → JSON → proto (protojson) → compiled snapshot → atomic swap on file change; `buf lint` and `buf breaking` in CI (GW-21, CP-05, CP-21)
 - [ ] Upstream allow-list checked at YAML load and at dial time via `net.Dialer.Control`; the dev list includes the compose subnet (SEC-06)
 - [ ] Request IDs, trace passthrough, JSON access logs (stdout and OTLP), RED metrics with `reason` and capped `tenant` labels, `/healthz` and `/readyz` (config loaded, not draining), admin port bound to an internal interface (GW-22, GW-24, GW-25, OB-01, OB-03, OB-07, SEC-02)
 - [ ] Server timeouts and container-aware runtime settings (GW-27, GW-28)

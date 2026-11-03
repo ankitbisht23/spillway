@@ -1,0 +1,8 @@
+# make proto: Go code from api/proto into internal/gen (committed; make
+# lint-proto checks it is up to date). The plugin comes from ./bin.
+version: v2
+plugins:
+  - local: protoc-gen-go
+    out: .
+    opt:
+      - module=github.com/ankitbisht23/spillway

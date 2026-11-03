@@ -1,0 +1,66 @@
+// Spillway's one config schema (CP-21, ADR-0005). YAML files, the admin API
+// and Postgres snapshots all use its protojson form, with the proto's
+// snake_case field names. Fields are added as milestones need them, and only
+// in ways that `buf breaking` accepts.
+syntax = "proto3";
+
+package spillway.config.v1;
+
+option go_package = "github.com/ankitbisht23/spillway/internal/gen/configpb";
+
+// Config is the config section of a snapshot.
+message Config {
+  // Config version; each publish increases it (CP-02).
+  int64 version = 1;
+  repeated Upstream upstreams = 2;
+  repeated Route routes = 3;
+}
+
+// Upstream is a cluster of endpoints that routes send traffic to (GW-06).
+message Upstream {
+  // Unique; routes refer to the upstream by name, and it is its stable ID
+  // (GW-29).
+  string name = 1;
+  repeated Endpoint endpoints = 2;
+}
+
+// Endpoint is one address of an upstream.
+message Endpoint {
+  // host:port, unique within the upstream. DNS names are re-resolved on an
+  // interval (GW-06).
+  string address = 1;
+}
+
+// Route matches requests and sends them to an upstream (GW-01).
+message Route {
+  // Unique.
+  string name = 1;
+  RouteMatch match = 2;
+  // Name of the upstream that serves the route.
+  string upstream = 3;
+  // Breaks ties between otherwise equal routes; higher wins (ADR-0007).
+  int32 priority = 4;
+}
+
+// RouteMatch is what a request must match; ADR-0007 gives the precedence.
+message RouteMatch {
+  // Exact host, case-insensitive, without a port; empty matches any host.
+  string host = 1;
+  // Empty matches any method.
+  repeated string methods = 2;
+  // Exactly one of path and path_prefix is set. A segment ":name" matches any
+  // non-empty segment; a prefix matches whole segments.
+  string path = 3;
+  string path_prefix = 4;
+  // All must match.
+  repeated HeaderMatch headers = 5;
+}
+
+// HeaderMatch matches when any value of the header equals exact or fully
+// matches regex (RE2).
+message HeaderMatch {
+  string name = 1;
+  // Exactly one of exact and regex is set.
+  string exact = 2;
+  string regex = 3;
+}

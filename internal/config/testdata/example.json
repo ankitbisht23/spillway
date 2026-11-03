@@ -1,0 +1,24 @@
+{
+  "version": "42",
+  "upstreams": [
+    {"name": "orders", "endpoints": [{"address": "orders-1:8080"}, {"address": "10.0.0.7:8080"}]},
+    {"name": "catalog", "endpoints": [{"address": "catalog:9000"}]}
+  ],
+  "routes": [
+    {
+      "name": "orders-api",
+      "match": {"host": "api.example.com", "path_prefix": "/v1/orders", "methods": ["GET", "POST"]},
+      "upstream": "orders"
+    },
+    {
+      "name": "order-by-id",
+      "match": {
+        "path": "/v1/orders/:id",
+        "headers": [{"name": "x-canary", "exact": "on"}, {"name": "x-version", "regex": "v[12]"}]
+      },
+      "upstream": "orders",
+      "priority": 2
+    },
+    {"name": "catalog", "match": {"path_prefix": "/"}, "upstream": "catalog"}
+  ]
+}
