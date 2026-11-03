@@ -64,6 +64,7 @@ func TestCompile(t *testing.T) {
 		MaxBodyBytes:    1 << 20,
 		MaxHeaderBytes:  8192,
 		Timeouts:        Timeouts{Connect: 200 * time.Millisecond, PerTry: time.Second, Total: 3 * time.Second, Idle: 500 * time.Millisecond},
+		HSTS:            "max-age=31536000",
 		strip:           1,
 	}
 	if !reflect.DeepEqual(orders, wantOrders) {
@@ -72,8 +73,8 @@ func TestCompile(t *testing.T) {
 	if want := (Timeouts{Connect: 5 * time.Second, PerTry: 15 * time.Second, Total: 15 * time.Second}); catalog.Timeouts != want {
 		t.Errorf("catalog timeouts = %+v, want the defaults %+v", catalog.Timeouts, want)
 	}
-	if catalog.MaxBodyBytes != 0 || catalog.MaxHeaderBytes != 0 {
-		t.Errorf("catalog limits = %d, %d; want none", catalog.MaxBodyBytes, catalog.MaxHeaderBytes)
+	if catalog.MaxBodyBytes != 0 || catalog.MaxHeaderBytes != 0 || catalog.HSTS != "" {
+		t.Errorf("catalog limits = %d, %d, HSTS %q; want none", catalog.MaxBodyBytes, catalog.MaxHeaderBytes, catalog.HSTS)
 	}
 	tests := []struct {
 		host, method, path string
@@ -159,6 +160,9 @@ func TestRejects(t *testing.T) {
 		{"negative timeout", route("timeouts: {total: -1s}"), "timeouts.total"},
 		{"total over the write timeout", route("timeouts: {total: 60s}"), "timeouts.total: 1m0s is more than 59s"},
 		{"unknown timeout", route("timeouts: {read: 1s}"), `unknown field "read"`},
+		{"hsts_max_age not a duration", route("hsts_max_age: '31536000'"), `hsts_max_age: "31536000" is not a duration in whole seconds`},
+		{"negative hsts_max_age", route("hsts_max_age: -1s"), "hsts_max_age"},
+		{"hsts_max_age not whole seconds", route("hsts_max_age: 1500ms"), "hsts_max_age"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -98,6 +98,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// Hop-by-hop headers are already removed from resp, except on a 101.
 		ModifyResponse: func(resp *http.Response) error {
 			route.ResponseHeaders.Apply(resp.Header)
+			if route.HSTS != "" && r.TLS != nil {
+				resp.Header.Set("Strict-Transport-Security", route.HSTS) // SEC-01; replaces the upstream's
+			}
 			if idle != nil {
 				if resp.StatusCode == http.StatusSwitchingProtocols {
 					idle.Stop() // an upgraded connection's body must stay writable; total still bounds it

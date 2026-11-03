@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -74,8 +75,8 @@ func (r *Route) UpstreamPath(path string) string {
 	return path
 }
 
-// compileTransforms fills in r's transforms, limits and timeouts; path is the
-// route's match.path or match.path_prefix.
+// compileTransforms fills in r's transforms, limits, timeouts and HSTS; path
+// is the route's match.path or match.path_prefix.
 func (r *Route) compileTransforms(c *configpb.Route, path string) error {
 	if p := c.GetStripPrefix(); p != "" {
 		if !isPrefix(p) || path != p && !strings.HasPrefix(path, p+"/") {
@@ -104,6 +105,13 @@ func (r *Route) compileTransforms(c *configpb.Route, path string) error {
 	}
 	if r.Timeouts, err = compileTimeouts(c.GetTimeouts()); err != nil {
 		return fmt.Errorf("timeouts.%w", err)
+	}
+	if v := c.GetHstsMaxAge(); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d < 0 || d%time.Second != 0 {
+			return fmt.Errorf("hsts_max_age: %q is not a duration in whole seconds such as 8760h", v)
+		}
+		r.HSTS = "max-age=" + strconv.FormatInt(int64(d/time.Second), 10)
 	}
 	return nil
 }

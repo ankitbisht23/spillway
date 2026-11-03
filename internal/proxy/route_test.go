@@ -322,3 +322,38 @@ func TestIdleTimeoutUpgrade(t *testing.T) {
 		t.Errorf("after the idle timeout the upgraded connection answered %q, %v", line, err)
 	}
 }
+
+// TestHSTS: a route with hsts_max_age sends Strict-Transport-Security on its
+// responses over TLS, replacing the upstream's, and the gateway adds none over
+// plain HTTP or on other routes (SEC-01).
+func TestHSTS(t *testing.T) {
+	u := serveUpstream(t, "orders", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Strict-Transport-Security", "max-age=1")
+		_ = json.NewEncoder(w).Encode(echo{Header: r.Header})
+	})
+	g := newGateway(t, newResolver(u), fmt.Sprintf(`
+upstreams: [{name: orders, endpoints: [{address: 'orders:%s'}]}]
+routes:
+  - {name: hsts, upstream: orders, match: {path_prefix: /hsts}, hsts_max_age: 8760h}
+  - {name: other, upstream: orders, match: {path_prefix: /other}}
+`, u.port()))
+	tg := &gateway{Server: httptest.NewUnstartedServer(g.Config.Handler)}
+	tg.EnableHTTP2 = true
+	tg.StartTLS()
+	t.Cleanup(tg.Close)
+
+	for _, tt := range []struct {
+		gw                *gateway
+		path, hsts, proto string
+	}{
+		{tg, "/hsts", "max-age=31536000", "https"},
+		{tg, "/other", "max-age=1", "https"},
+		{g, "/hsts", "max-age=1", "http"},
+	} {
+		status, h, e := tt.gw.get(t, tt.path, nil)
+		if status != http.StatusOK || h.Get("Strict-Transport-Security") != tt.hsts || e.Header.Get("X-Forwarded-Proto") != tt.proto {
+			t.Errorf("%s %s: status %d, Strict-Transport-Security %q, X-Forwarded-Proto %q; want 200, %q, %q",
+				tt.proto, tt.path, status, h.Get("Strict-Transport-Security"), e.Header.Get("X-Forwarded-Proto"), tt.hsts, tt.proto)
+		}
+	}
+}

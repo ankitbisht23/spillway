@@ -30,7 +30,8 @@ type Route struct {
 	MaxBodyBytes    int64 // 0 means no limit
 	MaxHeaderBytes  int   // 0 means the server's limit
 	Timeouts        Timeouts
-	strip           int // leading path segments that strip_prefix removes
+	HSTS            string // Strict-Transport-Security value for TLS responses; empty means none
+	strip           int    // leading path segments that strip_prefix removes
 }
 
 // Upstream is a compiled upstream.

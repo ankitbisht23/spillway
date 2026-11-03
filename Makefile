@@ -11,7 +11,7 @@ FUZZTIME ?= 5s
 # Committed dev defaults first, then local overrides if present (ADR-0004).
 COMPOSE := docker compose --env-file .env.example $(if $(wildcard .env.local),--env-file .env.local)
 
-.PHONY: tools hooks dev test fuzz test-integration proto lint lint-go lint-web lint-proto bench verify-m0 verify-m0-stack
+.PHONY: tools hooks certs dev test fuzz test-integration proto lint lint-go lint-web lint-proto bench verify-m0 verify-m0-stack
 
 # Host-run processes and tests reach Redis Cluster nodes through this map
 # (ADR-0004). Set only here, never in compose or .env files.
@@ -40,6 +40,7 @@ $(eval $(call tool,govulncheck,golang.org/x/vuln/cmd/govulncheck,v1.9.0))
 $(eval $(call tool,protoc-gen-go,google.golang.org/protobuf/cmd/protoc-gen-go,v1.36.12))
 $(eval $(call tool,protoc-gen-go-grpc,google.golang.org/grpc/cmd/protoc-gen-go-grpc,v1.6.2))
 $(eval $(call tool,oapi-codegen,github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen,v2.8.2))
+$(eval $(call tool,mkcert,filippo.io/mkcert,v1.4.4))
 
 tools: $(TOOL_STAMPS)
 
@@ -50,9 +51,24 @@ hooks: tool-gitleaks
 		'exec "$$(git rev-parse --show-toplevel)/bin/gitleaks" git --pre-commit --staged --redact --no-banner' > "$$hook"; \
 	chmod +x "$$hook"; echo "installed $$hook"
 
+# Dev TLS certificate for the gateways (GW-04, SEC-01), minted once into the
+# gitignored deploy/certs. To mint a new one, delete the two files (not the
+# directory, which the containers mount) and run this again; running
+# gateways load it within a second. mkcert creates its local CA on first use;
+# `mkcert -install` (docs/setup.md) only makes browsers trust it. The key is
+# made readable to all, because the gateway containers run as uid 65532 and,
+# on Linux, a bind mount keeps the host's owner and mode (ADR-0012).
+certs: deploy/certs/gateway.pem
+
+deploy/certs/gateway.pem: | tool-mkcert
+	@mkdir -p deploy/certs
+	$(BIN)/mkcert -cert-file $@ -key-file deploy/certs/gateway-key.pem \
+		localhost 127.0.0.1 ::1 gateway-1 gateway-2 gateway-3 gateway-4 gateway-5
+	chmod 644 deploy/certs/gateway-key.pem
+
 # Boots the dev stack and returns once every service is healthy and every
 # one-shot service has exited 0.
-dev:
+dev: certs
 	$(COMPOSE) up -d --build --wait --wait-timeout 300
 
 # Unit and property tests, then a short run of every fuzz target. No Docker.

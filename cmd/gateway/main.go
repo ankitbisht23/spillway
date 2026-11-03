@@ -70,6 +70,15 @@ func serve(ctx context.Context, s settings, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	srv := proxy.NewServer(proxy.NewHandler(cfg.Snapshot, pools, log), log)
+	if s.tlsCert != "" {
+		certs, err := proxy.NewCerts(s.tlsCert, s.tlsKey, log)
+		if err != nil {
+			return err
+		}
+		go certs.Run(ctx, time.Second)
+		srv.TLSConfig = certs.TLSConfig()
+	}
 	go cfg.Run(ctx, time.Second)
 	go pools.Run(ctx, s.dnsRefresh)
 
@@ -84,25 +93,41 @@ func serve(ctx context.Context, s settings, log *slog.Logger) error {
 	admin := telemetry.NewAdminServer(reg, func() bool { return cfg.Snapshot() != nil && !draining.Load() }, log)
 
 	lc := &net.ListenConfig{}
-	ln, err := lc.Listen(ctx, "tcp", s.httpAddr)
-	if err != nil {
-		return err
-	}
 	aln, err := lc.Listen(ctx, "tcp", s.adminAddr)
 	if err != nil {
-		_ = ln.Close()
 		return err
 	}
-	srv := proxy.NewServer(proxy.NewHandler(cfg.Snapshot, pools, log), log)
-	errc := make(chan error, 2)
-	go func() { errc <- srv.Serve(ln) }()
+	errc := make(chan error, 3)
 	go func() { errc <- admin.Serve(aln) }()
-	log.Info("listening", "http", ln.Addr().String(), "admin", aln.Addr().String())
+	// Closing a server also closes the listeners handed to it.
+	closeAll := func() {
+		_ = srv.Close()
+		_ = admin.Close()
+	}
+	addrs := []any{"admin", aln.Addr().String()}
+	if s.httpAddr != "" {
+		ln, err := lc.Listen(ctx, "tcp", s.httpAddr)
+		if err != nil {
+			closeAll()
+			return err
+		}
+		go func() { errc <- srv.Serve(ln) }()
+		addrs = append(addrs, "http", ln.Addr().String())
+	}
+	if srv.TLSConfig != nil {
+		ln, err := lc.Listen(ctx, "tcp", s.tlsAddr)
+		if err != nil {
+			closeAll()
+			return err
+		}
+		go func() { errc <- srv.ServeTLS(ln, "", "") }() // HTTP/2 or HTTP/1.1, by ALPN
+		addrs = append(addrs, "tls", ln.Addr().String())
+	}
+	log.Info("listening", addrs...)
 
 	select {
 	case err := <-errc:
-		_ = srv.Close()
-		_ = admin.Close()
+		closeAll()
 		return err
 	case <-ctx.Done():
 	}

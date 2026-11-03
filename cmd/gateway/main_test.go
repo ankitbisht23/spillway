@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"io"
 	"log/slog"
 	"net"
@@ -15,6 +17,7 @@ import (
 	"time"
 
 	"github.com/ankitbisht23/spillway/internal/proxy"
+	"github.com/ankitbisht23/spillway/internal/testcert"
 )
 
 func TestLoadSettings(t *testing.T) {
@@ -36,8 +39,16 @@ func TestLoadSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.configPath != "/etc/spillway/config.yaml" || s.httpAddr != ":8000" || s.adminAddr != "127.0.0.1:8001" || len(s.allow) != 1 || s.dnsRefresh != 30*time.Second {
+	if s.configPath != "/etc/spillway/config.yaml" || s.httpAddr != ":8000" || s.tlsCert != "" || s.adminAddr != "127.0.0.1:8001" || len(s.allow) != 1 || s.dnsRefresh != 30*time.Second {
 		t.Errorf("settings = %+v", s)
+	}
+	tlsOnly := map[string]string{"SPILLWAY_GATEWAY_HTTP_ADDR": "", "SPILLWAY_GATEWAY_TLS_CERT": "/c.pem", "SPILLWAY_GATEWAY_TLS_KEY": "/k.pem"}
+	if s, err := loadSettings(env(tlsOnly)); err != nil || s.httpAddr != "" || s.tlsAddr != ":8443" || s.tlsCert != "/c.pem" || s.tlsKey != "/k.pem" {
+		t.Errorf("TLS only: %+v, %v", s, err)
+	}
+	tlsOnly["SPILLWAY_GATEWAY_TLS_ADDR"] = "127.0.0.1:9443"
+	if s, err := loadSettings(env(tlsOnly)); err != nil || s.tlsAddr != "127.0.0.1:9443" {
+		t.Errorf("TLS address 127.0.0.1:9443: %+v, %v", s, err)
 	}
 	if s, err := loadSettings(env(map[string]string{"SPILLWAY_GATEWAY_DNS_REFRESH": "5s"})); err != nil || s.dnsRefresh != 5*time.Second {
 		t.Errorf("DNS refresh 5s: %+v, %v", s, err)
@@ -46,14 +57,19 @@ func TestLoadSettings(t *testing.T) {
 		t.Errorf("admin address :8001: %+v, %v", s, err)
 	}
 
-	for name, over := range map[string]map[string]string{
-		"SPILLWAY_GATEWAY_CONFIG":           {"SPILLWAY_GATEWAY_CONFIG": ""},
-		"SPILLWAY_GATEWAY_HTTP_ADDR":        {"SPILLWAY_GATEWAY_HTTP_ADDR": ""},
-		"SPILLWAY_GATEWAY_ALLOWED_NETWORKS": {"SPILLWAY_GATEWAY_ALLOWED_NETWORKS": ""},
-		"SPILLWAY_GATEWAY_DNS_REFRESH":      {"SPILLWAY_GATEWAY_DNS_REFRESH": "0s"},
+	for _, tt := range []struct {
+		over map[string]string
+		want string // the error's prefix
+	}{
+		{map[string]string{"SPILLWAY_GATEWAY_CONFIG": ""}, "SPILLWAY_GATEWAY_CONFIG"},
+		{map[string]string{"SPILLWAY_GATEWAY_HTTP_ADDR": ""}, "no listener"},
+		{map[string]string{"SPILLWAY_GATEWAY_TLS_CERT": "/c.pem"}, "SPILLWAY_GATEWAY_TLS_CERT and SPILLWAY_GATEWAY_TLS_KEY"},
+		{map[string]string{"SPILLWAY_GATEWAY_TLS_KEY": "/k.pem"}, "SPILLWAY_GATEWAY_TLS_CERT and SPILLWAY_GATEWAY_TLS_KEY"},
+		{map[string]string{"SPILLWAY_GATEWAY_ALLOWED_NETWORKS": ""}, "SPILLWAY_GATEWAY_ALLOWED_NETWORKS"},
+		{map[string]string{"SPILLWAY_GATEWAY_DNS_REFRESH": "0s"}, "SPILLWAY_GATEWAY_DNS_REFRESH"},
 	} {
-		if _, err := loadSettings(env(over)); err == nil || !strings.HasPrefix(err.Error(), name) {
-			t.Errorf("%v: error = %v, want one naming %s", over, err, name)
+		if _, err := loadSettings(env(tt.over)); err == nil || !strings.HasPrefix(err.Error(), tt.want) {
+			t.Errorf("%v: error = %v, want one starting %q", tt.over, err, tt.want)
 		}
 	}
 }
@@ -73,9 +89,10 @@ func TestParseMemoryMax(t *testing.T) {
 	}
 }
 
-// TestServe runs the gateway against a local upstream: traffic is proxied,
-// the admin port answers /readyz, /metrics and the healthcheck, and on
-// shutdown readiness fails while an in-flight request still completes.
+// TestServe runs the gateway against a local upstream: traffic is proxied on
+// the plain-HTTP and TLS listeners, HTTP/2 over TLS, the admin port answers
+// /readyz, /metrics and the healthcheck, and on shutdown readiness fails
+// while an in-flight request still completes.
 func TestServe(t *testing.T) {
 	arrived, release := make(chan struct{}), make(chan struct{})
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -92,9 +109,14 @@ func TestServe(t *testing.T) {
 	if err := os.WriteFile(cfg, []byte(yaml), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	certFile, keyFile := filepath.Join(t.TempDir(), "cert.pem"), filepath.Join(t.TempDir(), "key.pem")
+	cert := testcert.Write(t, certFile, keyFile, 1)
 	s := settings{
 		configPath: cfg,
 		httpAddr:   freeAddr(t),
+		tlsAddr:    freeAddr(t),
+		tlsCert:    certFile,
+		tlsKey:     keyFile,
 		adminAddr:  freeAddr(t),
 		allow:      proxy.Allowlist{netip.MustParsePrefix("127.0.0.0/8")},
 		dnsRefresh: time.Minute,
@@ -117,6 +139,9 @@ func TestServe(t *testing.T) {
 	}
 	if code, body := get(t, traffic+"/x"); code != http.StatusOK || body != "upstream" {
 		t.Errorf("GET /x = %d %q, want 200 from the upstream", code, body)
+	}
+	if proto, body := getTLS(t, "https://"+s.tlsAddr+"/x", cert); proto != "HTTP/2.0" || body != "upstream" {
+		t.Errorf("GET /x over TLS = %s %q, want HTTP/2.0 from the upstream", proto, body)
 	}
 	for _, p := range []string{"/healthz", "/readyz", "/metrics", "/debug/pprof/"} {
 		if _, body := get(t, traffic+p); body != "upstream" {
@@ -176,6 +201,29 @@ func get(t *testing.T, url string) (int, string) {
 	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(resp.Body)
 	return resp.StatusCode, string(body)
+}
+
+// getTLS returns the protocol and body of a GET that trusts only cert and
+// offers HTTP/2.
+func getTLS(t *testing.T, url string, cert *x509.Certificate) (string, string) {
+	t.Helper()
+	roots := x509.NewCertPool()
+	roots.AddCert(cert)
+	client := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{
+		TLSClientConfig:   &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12},
+		ForceAttemptHTTP2: true,
+	}}
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(resp.Body)
+	return resp.Proto, string(body)
 }
 
 func waitFor(t *testing.T, what string, cond func() bool) {
