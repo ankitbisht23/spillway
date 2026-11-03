@@ -11,7 +11,7 @@ FUZZTIME ?= 5s
 # Committed dev defaults first, then local overrides if present (ADR-0004).
 COMPOSE := docker compose --env-file .env.example $(if $(wildcard .env.local),--env-file .env.local)
 
-.PHONY: tools hooks dev test fuzz test-integration lint lint-go lint-web bench verify-m0 verify-m0-stack
+.PHONY: tools hooks dev test fuzz test-integration proto lint lint-go lint-web lint-proto bench verify-m0 verify-m0-stack
 
 # Host-run processes and tests reach Redis Cluster nodes through this map
 # (ADR-0004). Set only here, never in compose or .env files.
@@ -73,7 +73,12 @@ fuzz:
 test-integration: dev
 	SPILLWAY_REDIS_ADDR_MAP=$(REDIS_ADDR_MAP) go test -tags integration -count=1 ./test/integration/...
 
-lint: lint-go lint-web
+# Go code from api/proto into internal/gen (CP-21); the generated code is
+# committed, so builds need no protoc or buf.
+proto: tool-buf tool-protoc-gen-go
+	PATH="$(BIN):$$PATH" $(BIN)/buf generate
+
+lint: lint-go lint-web lint-proto
 
 lint-go: tool-golangci-lint
 	$(BIN)/golangci-lint run ./...
@@ -81,6 +86,17 @@ lint-go: tool-golangci-lint
 
 lint-web:
 	pnpm -C web lint
+
+# buf lint; internal/gen matches what api/proto generates; no breaking change
+# against origin/main, skipped while main has no buf.yaml (the first M1 PR).
+lint-proto: tool-buf tool-protoc-gen-go
+	$(BIN)/buf lint
+	@tmp=$$(mktemp -d) && trap 'rm -rf "$$tmp"' EXIT && \
+	PATH="$(BIN):$$PATH" $(BIN)/buf generate -o "$$tmp" && \
+	diff -r "$$tmp/internal/gen" internal/gen || { echo "internal/gen is stale: run make proto"; exit 1; }
+	@if git cat-file -e origin/main:buf.yaml 2>/dev/null; then \
+		$(BIN)/buf breaking --against '.git#ref=origin/main'; \
+	else echo "buf breaking: origin/main has no buf.yaml yet, skipped"; fi
 
 bench:
 	go test -run '^$$' -bench . -benchmem ./...

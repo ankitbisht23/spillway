@@ -1,0 +1,14 @@
+# buf lint and buf breaking for api/proto (CP-21). make lint-proto runs both.
+version: v2
+modules:
+  - path: api/proto
+lint:
+  use:
+    - STANDARD
+  except:
+    # docs/design.md fixes the file at api/proto/config.proto (CP-21), so the
+    # versioned package does not sit in a versioned directory.
+    - PACKAGE_DIRECTORY_MATCH
+breaking:
+  use:
+    - FILE
