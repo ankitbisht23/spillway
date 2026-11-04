@@ -123,12 +123,13 @@ func isPrefix(p string) bool {
 }
 
 // gatewayHeaders are the headers a transform may not name, besides
-// X-Forwarded-*: the gateway owns framing, hop-by-hop handling and forwarding
-// headers, and a transform must not undo that (SEC-07).
+// X-Forwarded-*: the gateway owns framing, hop-by-hop handling, forwarding
+// headers (SEC-07) and the request ID (GW-22), and a transform must not undo
+// that.
 var gatewayHeaders = map[string]bool{
 	"Connection": true, "Proxy-Connection": true, "Keep-Alive": true, "Proxy-Authenticate": true,
 	"Proxy-Authorization": true, "Te": true, "Trailer": true, "Transfer-Encoding": true, "Upgrade": true,
-	"Host": true, "Content-Length": true, "Forwarded": true,
+	"Host": true, "Content-Length": true, "Forwarded": true, "X-Request-Id": true,
 }
 
 func compileHeaders(t *configpb.HeaderTransform) (HeaderTransform, error) {
