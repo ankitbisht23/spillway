@@ -1,18 +1,25 @@
 # NFR-01 throughput benchmark (docs/design.md, Benchmark method; ADR-0003,
-# ADR-0015). Manual trigger only until M7 adds the nightly schedule and the
-# regression gate (NFR-05). Each architecture runs test/load/bench.sh on its
-# own 4-vCPU runner and pushes the run set's JSON to the bench-results branch
-# as results/<arch>/<UTC-timestamp>.json, valid or not; an invalid run set
-# then fails its job. Actions are pinned to commit SHAs.
+# ADR-0015, ADR-0016). Manual trigger only until M7 adds the nightly schedule
+# and the regression gate (NFR-05). Each architecture runs test/load/bench.sh
+# on its own 4-vCPU runner at its own target rate and pushes the run set's
+# JSON to the bench-results branch as results/<arch>/<UTC-timestamp>.json,
+# valid or not; an invalid run set then fails its job. Actions are pinned to
+# commit SHAs.
 name: bench
 
 on:
   workflow_dispatch:
+    # About 90% of the slowest run in the first, saturated run set on each
+    # runner, so the gateway runs below capacity (ADR-0016).
     inputs:
-      rate:
-        description: Target rate, requests per second
+      rate_x64:
+        description: Target rate on x64, requests per second
         type: number
-        default: 10000
+        default: 4600
+      rate_arm64:
+        description: Target rate on arm64, requests per second
+        type: number
+        default: 8800
 
 permissions:
   contents: write # push to bench-results (ADR-0003)
@@ -22,14 +29,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [ubuntu-latest, ubuntu-24.04-arm]
+        include:
+          - runner: ubuntu-latest
+            rate: ${{ inputs.rate_x64 }}
+          - runner: ubuntu-24.04-arm
+            rate: ${{ inputs.rate_arm64 }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: 5 runs of 30 s warm-up and 3 min measured
         env:
-          BENCH_RATE: ${{ inputs.rate }}
+          BENCH_RATE: ${{ matrix.rate }}
         run: test/load/bench.sh > result.json
       # Commits the file onto bench-results without a checkout, creating the
       # branch on the first run, and retries when the other architecture's
