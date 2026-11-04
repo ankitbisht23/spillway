@@ -4,11 +4,13 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -163,5 +165,43 @@ func TestCertsReload(t *testing.T) {
 
 	if _, err := NewCerts(certFile, key3, slog.New(slog.DiscardHandler)); err == nil {
 		t.Error("NewCerts loaded without a key file")
+	}
+}
+
+// TestHandshakeErrorLog: a failed TLS handshake is logged without the
+// client's address, which can be personal data (ADR-0013).
+func TestHandshakeErrorLog(t *testing.T) {
+	c, _, _, _ := newCerts(t, 1)
+	logs := &logBuffer{}
+	srv := NewServer(http.NotFoundHandler(), slog.New(slog.NewJSONHandler(logs, nil)))
+	srv.TLSConfig = c.TLSConfig()
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = srv.ServeTLS(ln, "", "") }()
+	t.Cleanup(func() { _ = srv.Close() })
+
+	conn := dial(t, ln.Addr().String())
+	_, _ = io.WriteString(conn, "GET / HTTP/1.1\r\nHost: x\r\n\r\n") // plain HTTP to the TLS port
+	_, _ = io.ReadAll(conn)
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		logs.mu.Lock()
+		got := logs.buf.String()
+		logs.mu.Unlock()
+		if strings.Contains(got, "TLS handshake error") {
+			if strings.Contains(got, "127.0.0.1") || !strings.Contains(got, "client sent an HTTP request to an HTTPS server") {
+				t.Errorf("want the error without the client's address, got %s", got)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no handshake error logged: %s", got)
+		}
+	}
+	for _, a := range []string{"203.0.113.7:51234", "[2001:db8::1]:443", "[fe80::1%en0]:443", "[::ffff:192.0.2.1]:80"} {
+		if got := address.ReplaceAllString("from "+a+": EOF", "<address>"); got != "from <address>: EOF" {
+			t.Errorf("%s redacted as %q", a, got)
+		}
 	}
 }

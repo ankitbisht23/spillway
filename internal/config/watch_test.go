@@ -114,6 +114,17 @@ func TestReloadSkipsUnchangedContent(t *testing.T) {
 	if err := w.reload(); err != nil {
 		t.Errorf("same bad content reported again: %v", err)
 	}
+
+	// So is a missing file.
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.reload(); err == nil {
+		t.Fatal("missing file: no error")
+	}
+	if err := w.reload(); err != nil {
+		t.Errorf("missing file reported again: %v", err)
+	}
 }
 
 func TestRunPollsTheFile(t *testing.T) {

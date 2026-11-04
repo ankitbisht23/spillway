@@ -202,14 +202,16 @@ func TestForwarding(t *testing.T) {
 	g := newGateway(t, newResolver(u), oneUpstream(u))
 
 	status, respHeader, e := g.get(t, "/v1//orders/./a/../42?x=1&y=2", http.Header{
-		"X-Forwarded-For":   {"6.6.6.6"},
-		"X-Forwarded-Host":  {"evil.example"},
-		"X-Forwarded-Proto": {"https"},
-		"Forwarded":         {"for=6.6.6.6"},
-		"Connection":        {"X-Client-Secret"},
-		"X-Client-Secret":   {"1"},
-		"Te":                {"gzip, trailers"},
-		"X-Kept":            {"yes"},
+		"X-Forwarded-For":    {"6.6.6.6"},
+		"X-Forwarded-Host":   {"evil.example"},
+		"X-Forwarded-Proto":  {"https"},
+		"X-Forwarded-Port":   {"443"},
+		"X-Forwarded-Prefix": {"/admin"},
+		"Forwarded":          {"for=6.6.6.6"},
+		"Connection":         {"X-Client-Secret"},
+		"X-Client-Secret":    {"1"},
+		"Te":                 {"gzip, trailers"},
+		"X-Kept":             {"yes"},
 	})
 	if status != http.StatusOK {
 		t.Fatalf("status %d", status)
@@ -222,6 +224,8 @@ func TestForwarding(t *testing.T) {
 		{"X-Forwarded-For (set by the gateway)", e.Header.Get("X-Forwarded-For"), "127.0.0.1"},
 		{"X-Forwarded-Host", e.Header.Get("X-Forwarded-Host"), host},
 		{"X-Forwarded-Proto", e.Header.Get("X-Forwarded-Proto"), "http"},
+		{"X-Forwarded-Port (any other X-Forwarded-* is removed)", e.Header.Get("X-Forwarded-Port"), ""},
+		{"X-Forwarded-Prefix", e.Header.Get("X-Forwarded-Prefix"), ""},
 		{"Forwarded", e.Header.Get("Forwarded"), ""},
 		{"header named in Connection", e.Header.Get("X-Client-Secret"), ""},
 		{"Te (only trailers passes)", e.Header.Get("Te"), "trailers"},
@@ -251,6 +255,53 @@ func TestUserinfoNotForwarded(t *testing.T) {
 	}
 	if got := e.Header.Get("Authorization"); got != "" {
 		t.Errorf("upstream got Authorization %q from the URL's userinfo", got)
+	}
+}
+
+// TestH2CUpgradeIgnored: an h2c upgrade reaches the upstream as a plain
+// HTTP/1.1 request, so no HTTP/2 tunnel can carry requests past routing
+// (ADR-0008: upstreams speak HTTP/1.1 only).
+func TestH2CUpgradeIgnored(t *testing.T) {
+	u := newUpstream(t, "orders")
+	g := newGateway(t, newResolver(u), oneUpstream(u))
+	for _, upgrade := range []string{"h2c", "foo, H2C"} {
+		status, _, e := g.get(t, "/", http.Header{
+			"Connection":     {"Upgrade, HTTP2-Settings"},
+			"Upgrade":        {upgrade},
+			"Http2-Settings": {"AAMAAABkAARAAAAAAAIAAAAA"},
+		})
+		if status != http.StatusOK || e.Header.Get("Upgrade") != "" || e.Header.Get("Connection") != "" {
+			t.Errorf("Upgrade %q: status %d, upstream got Upgrade %q and Connection %q; want 200 and neither",
+				upgrade, status, e.Header.Get("Upgrade"), e.Header.Get("Connection"))
+		}
+	}
+}
+
+// TestHTTP2QueryWithSpace: a raw space in an HTTP/2 query, which would split
+// the upstream's HTTP/1.1 request line, gets the 400 that HTTP/1.1 gets.
+func TestHTTP2QueryWithSpace(t *testing.T) {
+	u := newUpstream(t, "orders")
+	g := newGateway(t, newResolver(u), oneUpstream(u))
+	tg := &gateway{Server: httptest.NewUnstartedServer(g.Config.Handler)}
+	tg.EnableHTTP2 = true
+	tg.StartTLS()
+	t.Cleanup(tg.Close)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, tg.URL+"/a", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.URL.RawQuery = "x=1 HTTP/1.0"
+	resp, err := tg.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.ProtoMajor != 2 || resp.StatusCode != http.StatusBadRequest || u.conns.Load() != 0 {
+		t.Errorf("%s answered %d and the upstream got %d connections; want HTTP/2, 400 and none", resp.Proto, resp.StatusCode, u.conns.Load())
+	}
+	if status, _, e := tg.get(t, "/a?x=%20&y=2", nil); status != http.StatusOK || e.RawQuery != "x=%20&y=2" {
+		t.Errorf("encoded space: status %d, upstream query %q; want 200 and the query unchanged", status, e.RawQuery)
 	}
 }
 
@@ -456,6 +507,47 @@ func TestRemovedUpstreamStillServesOldSnapshot(t *testing.T) {
 	addr, err := g.reg.pool(route.Upstream).pick()
 	if err != nil || !strings.HasSuffix(addr, ":"+a.port()) {
 		t.Errorf("pick = %q, %v; want upstream a's address", addr, err)
+	}
+}
+
+// heldResolver resolves every name to 127.0.0.1, after closing looking and
+// waiting for release.
+type heldResolver struct{ looking, release chan struct{} }
+
+func (h heldResolver) LookupNetIP(context.Context, string, string) ([]netip.Addr, error) {
+	close(h.looking)
+	<-h.release
+	return []netip.Addr{netip.MustParseAddr("127.0.0.1")}, nil
+}
+
+// TestRebuiltPoolDoesNotHoldUpReload: while a request on an old snapshot
+// resolves the names of an upstream that a reload removed, another reload
+// goes ahead (GW-29).
+func TestRebuiltPoolDoesNotHoldUpReload(t *testing.T) {
+	res := heldResolver{make(chan struct{}), make(chan struct{})}
+	reg := NewRegistry(loopback, res, slog.New(slog.DiscardHandler))
+	old := snapshot(t, "upstreams: [{name: gone, endpoints: [{address: 'gone:80'}]}]\nroutes: [{name: r, upstream: gone, match: {path_prefix: /}}]")
+	next := snapshot(t, "upstreams: [{name: u, endpoints: [{address: '127.0.0.1:80'}]}]\nroutes: [{name: r, upstream: u, match: {path_prefix: /}}]")
+
+	picked := make(chan error, 1)
+	go func() {
+		_, err := reg.pool(old.Upstreams["gone"]).pick()
+		picked <- err
+	}()
+	<-res.looking
+	applied := make(chan error, 1)
+	go func() { applied <- reg.Apply(next) }()
+	select {
+	case err := <-applied:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Error("the reload waited for the request's DNS lookup")
+	}
+	close(res.release)
+	if err := <-picked; err != nil {
+		t.Errorf("rebuilt pool: %v", err)
 	}
 }
 

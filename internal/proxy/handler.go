@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"strings"
 	"time"
 
 	"github.com/ankitbisht23/spillway/internal/config"
@@ -65,6 +66,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) serve(w http.ResponseWriter, r *http.Request, q *telemetry.Request) {
 	if r.Method == http.MethodConnect {
 		http.Error(w, "CONNECT is not supported", http.StatusMethodNotAllowed)
+		return
+	}
+	// Go's HTTP/2 server lets a raw space into the query, where it would
+	// split the upstream's HTTP/1.1 request line; over HTTP/1.1 the same
+	// target is already a 400.
+	if strings.Contains(r.URL.RawQuery, " ") {
+		http.Error(w, "invalid request target", http.StatusBadRequest)
 		return
 	}
 	// Route on the cleaned path and forward that same path, changed only by
@@ -124,8 +132,9 @@ func (h *Handler) serve(w http.ResponseWriter, r *http.Request, q *telemetry.Req
 			h.rec.UpstreamAttempt(p.name, 1, time.Since(start)) // one attempt until retries (GW-12, M4)
 			return resp, err
 		}),
-		// Hop-by-hop headers, and any X-Forwarded-* the client sent, are
-		// already removed from pr.Out when Rewrite runs (SEC-07).
+		// Hop-by-hop headers are already removed from pr.Out when Rewrite
+		// runs, and so are X-Forwarded-For, -Host and -Proto, but not the
+		// other X-Forwarded-* the client sent (SEC-07).
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.Out.URL.Scheme = "http"
 			pr.Out.URL.Host = addr
@@ -134,7 +143,22 @@ func (h *Handler) serve(w http.ResponseWriter, r *http.Request, q *telemetry.Req
 			pr.Out.URL.RawPath = ""
 			pr.Out.Host = pr.In.Host
 			pr.Out.Header.Del("Forwarded")
+			for name := range pr.Out.Header {
+				if strings.HasPrefix(name, "X-Forwarded-") {
+					delete(pr.Out.Header, name)
+				}
+			}
 			pr.SetXForwarded()
+			// Upstreams speak HTTP/1.1 only (ADR-0008): an h2c upgrade would
+			// open an HTTP/2 tunnel whose requests skip routing, so it is
+			// ignored, as RFC 9110 §7.8 lets a server do.
+			for p := range strings.SplitSeq(pr.Out.Header.Get("Upgrade"), ",") {
+				if strings.EqualFold(strings.TrimSpace(p), "h2c") {
+					pr.Out.Header.Del("Connection")
+					pr.Out.Header.Del("Upgrade")
+					break
+				}
+			}
 			pr.Out.Header.Set(telemetry.RequestIDHeader, q.ID) // GW-22
 			route.RequestHeaders.Apply(pr.Out.Header)
 		},
