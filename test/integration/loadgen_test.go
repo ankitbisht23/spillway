@@ -11,7 +11,8 @@ import (
 
 // TestLoadgen runs the loadgen compose service inside the compose network
 // against gateway-1's plain-HTTP and TLS listeners (ADR-0004, ADR-0014):
-// each run is valid, every request gets a 2xx, over HTTP/1.1 and HTTP/2.
+// each run is valid, and every request sent gets a 2xx, over HTTP/1.1 and
+// HTTP/2.
 func TestLoadgen(t *testing.T) {
 	for _, tt := range []struct {
 		name, proto string
@@ -41,8 +42,10 @@ func TestLoadgen(t *testing.T) {
 			if err := json.Unmarshal(out, &r); err != nil {
 				t.Fatalf("loadgen result: %v\n%s", err, out)
 			}
-			if !r.Valid || r.Protocol != tt.proto || r.Requests.Sent != 600 || r.Status["2xx"] != 600 {
-				t.Errorf("result: %s\nwant valid, %s, 600 requests sent and answered 2xx", out, tt.proto)
+			// Valid allows up to 1% of the 600 due requests to be dropped,
+			// such as the last one when the container's timer fires late.
+			if !r.Valid || r.Protocol != tt.proto || r.Status["2xx"] != r.Requests.Sent {
+				t.Errorf("result: %s\nwant valid, %s, every request sent answered 2xx", out, tt.proto)
 			}
 		})
 	}

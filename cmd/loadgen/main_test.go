@@ -167,7 +167,8 @@ func TestStalledServer(t *testing.T) {
 	defer srv.Close()
 
 	r, _, code, stderr := loadgen(t, "-url", srv.URL, "-rate", "100", "-warmup", "0s", "-duration", "1s")
-	if code != 0 || !r.Valid || r.Requests.Sent != 100 || r.Status["2xx"] != 100 {
+	// Valid allows the last due request to be dropped if the timer fires late.
+	if code != 0 || !r.Valid || r.Status["2xx"] != r.Requests.Sent {
 		t.Fatalf("exit code %d, result %+v: %s", code, r, stderr)
 	}
 	// 50 of the 100 requests are due during the stall, up to 500 ms before it ends.
