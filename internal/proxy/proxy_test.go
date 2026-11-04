@@ -18,7 +18,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/ankitbisht23/spillway/internal/config"
+	"github.com/ankitbisht23/spillway/internal/telemetry"
 )
 
 var loopback = Allowlist{netip.MustParsePrefix("127.0.0.0/8"), netip.MustParsePrefix("::1/128")}
@@ -114,18 +117,22 @@ func snapshot(t *testing.T, yaml string) *config.Snapshot {
 	return s
 }
 
-// gateway serves h through a real HTTP server; current is the snapshot.
+// gateway serves h through a real HTTP server; current is the snapshot. It
+// access-logs every request to logs and keeps its metrics in metrics.
 type gateway struct {
 	*httptest.Server
 	reg     *Registry
 	current atomic.Pointer[config.Snapshot]
+	metrics *prometheus.Registry
+	logs    *logBuffer
 }
 
 func newGateway(t *testing.T, res Resolver, yaml string) *gateway {
 	t.Helper()
-	g := &gateway{reg: NewRegistry(loopback, res, slog.New(slog.DiscardHandler))}
+	g := &gateway{reg: NewRegistry(loopback, res, slog.New(slog.DiscardHandler)), metrics: prometheus.NewRegistry(), logs: &logBuffer{}}
 	g.apply(t, yaml)
-	g.Server = httptest.NewServer(NewHandler(g.current.Load, g.reg, slog.New(slog.DiscardHandler)))
+	rec := telemetry.NewRecorder(g.metrics, slog.New(slog.NewJSONHandler(g.logs, nil)), 1)
+	g.Server = httptest.NewServer(NewHandler(g.current.Load, g.reg, rec, slog.New(slog.DiscardHandler)))
 	t.Cleanup(g.Close)
 	return g
 }
@@ -294,21 +301,23 @@ routes:
 }
 
 func TestProxyErrorStatus(t *testing.T) {
-	h := NewHandler(nil, nil, slog.New(slog.DiscardHandler))
+	h := NewHandler(nil, nil, nil, slog.New(slog.DiscardHandler))
 	for _, tt := range []struct {
-		err  error
-		want int
+		err    error
+		want   int
+		reason string
 	}{
-		{&net.OpError{Op: "dial", Err: fmt.Errorf("dial x: %w", ErrNotAllowed)}, http.StatusBadGateway},
-		{&net.OpError{Op: "dial", Err: &net.DNSError{IsTimeout: true}}, http.StatusGatewayTimeout},
-		{fmt.Errorf("wrapped: %w", context.DeadlineExceeded), http.StatusGatewayTimeout},
-		{errors.New("connection reset"), http.StatusBadGateway},
-		{fmt.Errorf("write error: %w", &http.MaxBytesError{Limit: 10}), http.StatusRequestEntityTooLarge},
+		{&net.OpError{Op: "dial", Err: fmt.Errorf("dial x: %w", ErrNotAllowed)}, http.StatusBadGateway, telemetry.ReasonUpstream},
+		{&net.OpError{Op: "dial", Err: &net.DNSError{IsTimeout: true}}, http.StatusGatewayTimeout, telemetry.ReasonUpstream},
+		{fmt.Errorf("wrapped: %w", context.DeadlineExceeded), http.StatusGatewayTimeout, telemetry.ReasonUpstream},
+		{errors.New("connection reset"), http.StatusBadGateway, telemetry.ReasonUpstream},
+		{fmt.Errorf("write error: %w", &http.MaxBytesError{Limit: 10}), http.StatusRequestEntityTooLarge, telemetry.ReasonNone},
 	} {
 		w := httptest.NewRecorder()
-		h.proxyError(w, httptest.NewRequestWithContext(t.Context(), "GET", "/", nil), tt.err)
-		if w.Code != tt.want {
-			t.Errorf("proxyError(%v) = %d, want %d", tt.err, w.Code, tt.want)
+		q := telemetry.Request{Origin: telemetry.OriginUpstream}
+		h.proxyError(w, httptest.NewRequestWithContext(t.Context(), "GET", "/", nil), tt.err, &q)
+		if w.Code != tt.want || q.Origin != telemetry.OriginGateway || q.Reason != tt.reason {
+			t.Errorf("proxyError(%v) = %d, origin %s, reason %s; want %d, gateway, %s", tt.err, w.Code, q.Origin, q.Reason, tt.want, tt.reason)
 		}
 	}
 
@@ -317,14 +326,14 @@ func TestProxyErrorStatus(t *testing.T) {
 	ctx, cancel := context.WithCancelCause(t.Context())
 	cancel(errStreamIdle)
 	w := httptest.NewRecorder()
-	h.proxyError(w, httptest.NewRequestWithContext(ctx, "GET", "/", nil), context.Canceled)
+	h.proxyError(w, httptest.NewRequestWithContext(ctx, "GET", "/", nil), context.Canceled, &telemetry.Request{})
 	if w.Code != http.StatusGatewayTimeout {
 		t.Errorf("idle timeout: %d, want 504", w.Code)
 	}
 	ctx, stop := context.WithCancel(t.Context())
 	stop()
 	w = httptest.NewRecorder()
-	h.proxyError(w, httptest.NewRequestWithContext(ctx, "GET", "/", nil), context.Canceled)
+	h.proxyError(w, httptest.NewRequestWithContext(ctx, "GET", "/", nil), context.Canceled, &telemetry.Request{})
 	if w.Body.Len() != 0 {
 		t.Errorf("client gone: answered %d %q", w.Code, w.Body)
 	}

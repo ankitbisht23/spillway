@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"go.opentelemetry.io/otel"
 
 	"github.com/ankitbisht23/spillway/internal/config"
 	"github.com/ankitbisht23/spillway/internal/proxy"
@@ -59,6 +60,24 @@ func run(log *slog.Logger) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	if s.otlpEndpoint != "" {
+		// Logs go to stdout and to the OTel Collector (OB-03). Export errors
+		// go to stdout only, never back into the export queue.
+		stdout := log
+		otel.SetErrorHandler(otel.ErrorHandlerFunc(func(err error) { stdout.Warn("OTLP export failed", "err", err) }))
+		h, shutdown, err := telemetry.NewOTLPLogHandler(ctx, s.otlpEndpoint, "spillway-gateway", version)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := shutdown(ctx); err != nil {
+				stdout.Warn("OTLP log flush failed", "err", err)
+			}
+		}()
+		log = slog.New(slog.NewMultiHandler(log.Handler(), h))
+	}
 	return serve(ctx, s, log)
 }
 
@@ -70,7 +89,9 @@ func serve(ctx context.Context, s settings, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	srv := proxy.NewServer(proxy.NewHandler(cfg.Snapshot, pools, log), log)
+	reg := telemetry.NewRegistry()
+	rec := telemetry.NewRecorder(reg, log, s.accessLogSampleRate)
+	srv := proxy.NewServer(proxy.NewHandler(cfg.Snapshot, pools, rec, log), log)
 	if s.tlsCert != "" {
 		certs, err := proxy.NewCerts(s.tlsCert, s.tlsKey, log)
 		if err != nil {
@@ -81,8 +102,8 @@ func serve(ctx context.Context, s settings, log *slog.Logger) error {
 	}
 	go cfg.Run(ctx, time.Second)
 	go pools.Run(ctx, s.dnsRefresh)
+	go rec.Run(ctx, time.Minute) // tenants are ranked per minute (OB-01)
 
-	reg := telemetry.NewRegistry()
 	reg.MustRegister(prometheus.NewGaugeFunc(prometheus.GaugeOpts{
 		Name: "gw_config_version",
 		Help: "Version of the config snapshot in use.",

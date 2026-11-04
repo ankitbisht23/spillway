@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"log"
@@ -8,27 +9,60 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"time"
 
 	"github.com/ankitbisht23/spillway/internal/config"
 	"github.com/ankitbisht23/spillway/internal/router"
+	"github.com/ankitbisht23/spillway/internal/telemetry"
 )
 
 // Handler routes each request on the current snapshot and proxies it to the
-// route's upstream.
+// route's upstream, and records every request it answers.
 type Handler struct {
 	snapshot func() *config.Snapshot
 	pools    *Registry
+	rec      *telemetry.Recorder
 	log      *slog.Logger
 	errLog   *log.Logger
 }
 
 // NewHandler returns a Handler that reads the current snapshot from snapshot
-// once per request (GW-21).
-func NewHandler(snapshot func() *config.Snapshot, pools *Registry, log *slog.Logger) *Handler {
-	return &Handler{snapshot: snapshot, pools: pools, log: log, errLog: slog.NewLogLogger(log.Handler(), slog.LevelWarn)}
+// once per request (GW-21) and records requests with rec (OB-01, OB-03).
+func NewHandler(snapshot func() *config.Snapshot, pools *Registry, rec *telemetry.Recorder, log *slog.Logger) *Handler {
+	return &Handler{snapshot: snapshot, pools: pools, rec: rec, log: log, errLog: slog.NewLogLogger(log.Handler(), slog.LevelWarn)}
 }
 
+// statusClientClosed is recorded for a request whose client went away before
+// it was answered, as nginx does.
+const statusClientClosed = 499
+
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	q := telemetry.Request{
+		ID:      telemetry.RequestID(r.Header.Values(telemetry.RequestIDHeader)),
+		TraceID: telemetry.TraceID(r.Header), // traceparent itself goes upstream unchanged (GW-22)
+		Route:   telemetry.NoRoute,
+		Method:  r.Method,
+		Origin:  telemetry.OriginGateway,
+		Reason:  telemetry.ReasonNone,
+		Tenant:  telemetry.NoTenant, // tenants arrive in M5
+	}
+	rw := &responseRecorder{ResponseWriter: w, requestID: q.ID}
+	body := &countingBody{ReadCloser: r.Body}
+	r.Body = body
+	// Deferred, so that a response cut off mid-body, which ends the handler
+	// with a panic, is recorded too. Only a client that went away gets no
+	// answer (proxyError).
+	defer func() {
+		q.Status = cmp.Or(rw.status, statusClientClosed)
+		q.Latency, q.BytesIn, q.BytesOut = time.Since(start), body.n.Load(), rw.bytes
+		h.rec.Request(r.Context(), &q)
+	}()
+	h.serve(rw, r, &q)
+}
+
+// serve answers r and notes in q what the access log and metrics need.
+func (h *Handler) serve(w http.ResponseWriter, r *http.Request, q *telemetry.Request) {
 	if r.Method == http.MethodConnect {
 		http.Error(w, "CONNECT is not supported", http.StatusMethodNotAllowed)
 		return
@@ -42,6 +76,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no route", http.StatusNotFound)
 		return
 	}
+	q.Route = route.Name
 	// Size limits (GW-03), before anything reaches the upstream.
 	if route.MaxHeaderBytes > 0 && headerBytes(r) > route.MaxHeaderBytes {
 		http.Error(w, http.StatusText(http.StatusRequestHeaderFieldsTooLarge), http.StatusRequestHeaderFieldsTooLarge)
@@ -58,9 +93,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(nil, r.Body, route.MaxBodyBytes)
 	}
 	p := h.pools.pool(route.Upstream)
+	q.Upstream = p.name
 	addr, err := p.pick()
 	if err != nil {
-		h.log.Warn("no upstream address", "route", route.Name, "upstream", p.name)
+		q.Reason = telemetry.ReasonUpstream
+		h.log.Warn("no upstream address", "route", route.Name, "upstream", p.name, "request_id", q.ID)
 		http.Error(w, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable)
 		return
 	}
@@ -81,7 +118,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	upstreamPath := route.UpstreamPath(path)
 	rp := &httputil.ReverseProxy{
-		Transport: p.transport,
+		Transport: roundTripFunc(func(out *http.Request) (*http.Response, error) {
+			start := time.Now()
+			resp, err := p.transport.RoundTrip(out)
+			h.rec.UpstreamAttempt(p.name, 1, time.Since(start)) // one attempt until retries (GW-12, M4)
+			return resp, err
+		}),
 		// Hop-by-hop headers, and any X-Forwarded-* the client sent, are
 		// already removed from pr.Out when Rewrite runs (SEC-07).
 		Rewrite: func(pr *httputil.ProxyRequest) {
@@ -93,11 +135,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			pr.Out.Host = pr.In.Host
 			pr.Out.Header.Del("Forwarded")
 			pr.SetXForwarded()
+			pr.Out.Header.Set(telemetry.RequestIDHeader, q.ID) // GW-22
 			route.RequestHeaders.Apply(pr.Out.Header)
 		},
 		// Hop-by-hop headers are already removed from resp, except on a 101.
 		ModifyResponse: func(resp *http.Response) error {
+			q.Origin = telemetry.OriginUpstream
 			route.ResponseHeaders.Apply(resp.Header)
+			// Replaces any the upstream sent. responseRecorder sets it too,
+			// but a 101 is written without WriteHeader (GW-22).
+			resp.Header.Set(telemetry.RequestIDHeader, q.ID)
 			if route.HSTS != "" && r.TLS != nil {
 				resp.Header.Set("Strict-Transport-Security", route.HSTS) // SEC-01; replaces the upstream's
 			}
@@ -110,7 +157,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			return nil
 		},
-		ErrorHandler: h.proxyError,
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) { h.proxyError(w, r, err, q) },
 		ErrorLog:     h.errLog,
 	}
 	rp.ServeHTTP(w, r)
@@ -130,8 +177,9 @@ func headerBytes(r *http.Request) int {
 
 // proxyError answers a failed upstream request: 413 for a body over the
 // route's limit, 504 for a timeout, 502 otherwise. A client that went away
-// gets nothing.
-func (h *Handler) proxyError(w http.ResponseWriter, r *http.Request, err error) {
+// gets nothing. It notes in q that the gateway answered, and why.
+func (h *Handler) proxyError(w http.ResponseWriter, r *http.Request, err error, q *telemetry.Request) {
+	q.Origin, q.Reason = telemetry.OriginGateway, telemetry.ReasonNone
 	cause := context.Cause(r.Context())
 	if errors.Is(cause, context.Canceled) {
 		return
@@ -140,6 +188,7 @@ func (h *Handler) proxyError(w http.ResponseWriter, r *http.Request, err error) 
 		http.Error(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
 		return
 	}
+	q.Reason = telemetry.ReasonUpstream
 	status := http.StatusBadGateway
 	var ne net.Error
 	if cause != nil || errors.Is(err, context.DeadlineExceeded) || errors.As(err, &ne) && ne.Timeout() {
@@ -149,6 +198,6 @@ func (h *Handler) proxyError(w http.ResponseWriter, r *http.Request, err error) 
 	if errors.Is(err, ErrNotAllowed) {
 		level = slog.LevelError // the dial-time check caught what resolution let through
 	}
-	h.log.Log(r.Context(), level, "upstream request failed", "status", status, "err", err)
+	h.log.Log(r.Context(), level, "upstream request failed", "status", status, "err", err, "request_id", q.ID)
 	http.Error(w, http.StatusText(status), status)
 }
