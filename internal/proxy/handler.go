@@ -142,6 +142,16 @@ func (h *Handler) serve(w http.ResponseWriter, r *http.Request, q *telemetry.Req
 				}
 			}
 			pr.SetXForwarded()
+			// Upstreams speak HTTP/1.1 only (ADR-0008): an h2c upgrade would
+			// open an HTTP/2 tunnel whose requests skip routing, so it is
+			// ignored, as RFC 9110 §7.8 lets a server do.
+			for p := range strings.SplitSeq(pr.Out.Header.Get("Upgrade"), ",") {
+				if strings.EqualFold(strings.TrimSpace(p), "h2c") {
+					pr.Out.Header.Del("Connection")
+					pr.Out.Header.Del("Upgrade")
+					break
+				}
+			}
 			pr.Out.Header.Set(telemetry.RequestIDHeader, q.ID) // GW-22
 			route.RequestHeaders.Apply(pr.Out.Header)
 		},

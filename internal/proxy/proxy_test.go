@@ -258,6 +258,25 @@ func TestUserinfoNotForwarded(t *testing.T) {
 	}
 }
 
+// TestH2CUpgradeIgnored: an h2c upgrade reaches the upstream as a plain
+// HTTP/1.1 request, so no HTTP/2 tunnel can carry requests past routing
+// (ADR-0008: upstreams speak HTTP/1.1 only).
+func TestH2CUpgradeIgnored(t *testing.T) {
+	u := newUpstream(t, "orders")
+	g := newGateway(t, newResolver(u), oneUpstream(u))
+	for _, upgrade := range []string{"h2c", "foo, H2C"} {
+		status, _, e := g.get(t, "/", http.Header{
+			"Connection":     {"Upgrade, HTTP2-Settings"},
+			"Upgrade":        {upgrade},
+			"Http2-Settings": {"AAMAAABkAARAAAAAAAIAAAAA"},
+		})
+		if status != http.StatusOK || e.Header.Get("Upgrade") != "" || e.Header.Get("Connection") != "" {
+			t.Errorf("Upgrade %q: status %d, upstream got Upgrade %q and Connection %q; want 200 and neither",
+				upgrade, status, e.Header.Get("Upgrade"), e.Header.Get("Connection"))
+		}
+	}
+}
+
 func TestGatewayErrors(t *testing.T) {
 	u := newUpstream(t, "orders")
 	res := newResolver(u)
