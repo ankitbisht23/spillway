@@ -202,14 +202,16 @@ func TestForwarding(t *testing.T) {
 	g := newGateway(t, newResolver(u), oneUpstream(u))
 
 	status, respHeader, e := g.get(t, "/v1//orders/./a/../42?x=1&y=2", http.Header{
-		"X-Forwarded-For":   {"6.6.6.6"},
-		"X-Forwarded-Host":  {"evil.example"},
-		"X-Forwarded-Proto": {"https"},
-		"Forwarded":         {"for=6.6.6.6"},
-		"Connection":        {"X-Client-Secret"},
-		"X-Client-Secret":   {"1"},
-		"Te":                {"gzip, trailers"},
-		"X-Kept":            {"yes"},
+		"X-Forwarded-For":    {"6.6.6.6"},
+		"X-Forwarded-Host":   {"evil.example"},
+		"X-Forwarded-Proto":  {"https"},
+		"X-Forwarded-Port":   {"443"},
+		"X-Forwarded-Prefix": {"/admin"},
+		"Forwarded":          {"for=6.6.6.6"},
+		"Connection":         {"X-Client-Secret"},
+		"X-Client-Secret":    {"1"},
+		"Te":                 {"gzip, trailers"},
+		"X-Kept":             {"yes"},
 	})
 	if status != http.StatusOK {
 		t.Fatalf("status %d", status)
@@ -222,6 +224,8 @@ func TestForwarding(t *testing.T) {
 		{"X-Forwarded-For (set by the gateway)", e.Header.Get("X-Forwarded-For"), "127.0.0.1"},
 		{"X-Forwarded-Host", e.Header.Get("X-Forwarded-Host"), host},
 		{"X-Forwarded-Proto", e.Header.Get("X-Forwarded-Proto"), "http"},
+		{"X-Forwarded-Port (any other X-Forwarded-* is removed)", e.Header.Get("X-Forwarded-Port"), ""},
+		{"X-Forwarded-Prefix", e.Header.Get("X-Forwarded-Prefix"), ""},
 		{"Forwarded", e.Header.Get("Forwarded"), ""},
 		{"header named in Connection", e.Header.Get("X-Client-Secret"), ""},
 		{"Te (only trailers passes)", e.Header.Get("Te"), "trailers"},

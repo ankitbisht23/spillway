@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"strings"
 	"time"
 
 	"github.com/ankitbisht23/spillway/internal/config"
@@ -124,8 +125,9 @@ func (h *Handler) serve(w http.ResponseWriter, r *http.Request, q *telemetry.Req
 			h.rec.UpstreamAttempt(p.name, 1, time.Since(start)) // one attempt until retries (GW-12, M4)
 			return resp, err
 		}),
-		// Hop-by-hop headers, and any X-Forwarded-* the client sent, are
-		// already removed from pr.Out when Rewrite runs (SEC-07).
+		// Hop-by-hop headers are already removed from pr.Out when Rewrite
+		// runs, and so are X-Forwarded-For, -Host and -Proto, but not the
+		// other X-Forwarded-* the client sent (SEC-07).
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.Out.URL.Scheme = "http"
 			pr.Out.URL.Host = addr
@@ -134,6 +136,11 @@ func (h *Handler) serve(w http.ResponseWriter, r *http.Request, q *telemetry.Req
 			pr.Out.URL.RawPath = ""
 			pr.Out.Host = pr.In.Host
 			pr.Out.Header.Del("Forwarded")
+			for name := range pr.Out.Header {
+				if strings.HasPrefix(name, "X-Forwarded-") {
+					delete(pr.Out.Header, name)
+				}
+			}
 			pr.SetXForwarded()
 			pr.Out.Header.Set(telemetry.RequestIDHeader, q.ID) // GW-22
 			route.RequestHeaders.Apply(pr.Out.Header)
