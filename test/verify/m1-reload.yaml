@@ -1,0 +1,14 @@
+# The second config of make verify-m1's reload check (NFR-14, ADR-0015),
+# swapped with deploy/compose/gateway/config.yaml every 2 s under load. Its
+# version, upstream name and endpoints differ, so every swap compiles new
+# routes and replaces the upstream pool (GW-29).
+version: 2
+upstreams:
+  - name: httpbin-b
+    endpoints:
+      - address: upstream-2:8080
+      - address: upstream-3:8080
+routes:
+  - name: default
+    match: { path_prefix: / }
+    upstream: httpbin-b

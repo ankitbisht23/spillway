@@ -1,0 +1,11 @@
+# Gateway config for test/load/bench.sh (NFR-01, ADR-0015): every path goes
+# to the one mock upstream in the benchmark's Docker network.
+version: 1
+upstreams:
+  - name: upstream
+    endpoints:
+      - address: upstream:8080
+routes:
+  - name: default
+    match: { path_prefix: / }
+    upstream: upstream

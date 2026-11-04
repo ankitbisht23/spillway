@@ -11,7 +11,7 @@ FUZZTIME ?= 5s
 # Committed dev defaults first, then local overrides if present (ADR-0004).
 COMPOSE := docker compose --env-file .env.example $(if $(wildcard .env.local),--env-file .env.local)
 
-.PHONY: tools hooks certs dev test fuzz test-integration proto lint lint-go lint-web lint-proto bench verify-m0 verify-m0-stack
+.PHONY: tools hooks certs dev test fuzz test-integration proto lint lint-go lint-web lint-proto bench verify-m0 verify-m0-stack verify-m1 verify-m1-reload
 
 # Host-run processes and tests reach Redis Cluster nodes through this map
 # (ADR-0004). Set only here, never in compose or .env files.
@@ -124,3 +124,12 @@ verify-m0: dev
 
 verify-m0-stack: dev
 	@SPILLWAY_REDIS_ADDR_MAP=$(REDIS_ADDR_MAP) test/verify/m0.sh stack
+
+# M1 exit checks (docs/design.md, ADR-0015): config reload under load on the
+# dev stack, then the NFR-01 baseline on origin/bench-results. CI runs only the
+# reload part; the baseline exists once bench.yml has run on main.
+verify-m1: dev
+	@test/verify/m1.sh all
+
+verify-m1-reload: dev
+	@test/verify/m1.sh reload

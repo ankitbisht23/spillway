@@ -1,0 +1,61 @@
+# NFR-01 throughput benchmark (docs/design.md, Benchmark method; ADR-0003,
+# ADR-0015). Manual trigger only until M7 adds the nightly schedule and the
+# regression gate (NFR-05). Each architecture runs test/load/bench.sh on its
+# own 4-vCPU runner and pushes the run set's JSON to the bench-results branch
+# as results/<arch>/<UTC-timestamp>.json, valid or not; an invalid run set
+# then fails its job. Actions are pinned to commit SHAs.
+name: bench
+
+on:
+  workflow_dispatch:
+    inputs:
+      rate:
+        description: Target rate, requests per second
+        type: number
+        default: 10000
+
+permissions:
+  contents: write # push to bench-results (ADR-0003)
+
+jobs:
+  bench:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: 5 runs of 30 s warm-up and 3 min measured
+        env:
+          BENCH_RATE: ${{ inputs.rate }}
+        run: test/load/bench.sh > result.json
+      # Commits the file onto bench-results without a checkout, creating the
+      # branch on the first run, and retries when the other architecture's
+      # job pushed first.
+      - name: Push the result to bench-results
+        run: |
+          file="results/$(jq -r .arch result.json)/$(jq -r '.timestamp | gsub("[-:]"; "")' result.json).json"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          blob=$(git hash-object -w result.json)
+          export GIT_INDEX_FILE="$RUNNER_TEMP/bench-index"
+          for attempt in 1 2 3 4 5; do
+            rm -f "$GIT_INDEX_FILE"
+            parent=()
+            if git fetch -q --depth 1 origin bench-results; then
+              git read-tree FETCH_HEAD
+              parent=(-p "$(git rev-parse FETCH_HEAD)")
+            fi
+            git update-index --add --cacheinfo "100644,$blob,$file"
+            commit=$(git commit-tree "$(git write-tree)" "${parent[@]}" -m "bench: $file")
+            if git push -q origin "$commit:refs/heads/bench-results"; then
+              echo "stored $file on bench-results"
+              exit 0
+            fi
+            sleep $((attempt * 5))
+          done
+          exit 1
+      - name: Fail an invalid run set
+        run: jq -e .valid result.json >/dev/null || { jq -r '.invalid_reasons[]' result.json; exit 1; }
