@@ -510,6 +510,47 @@ func TestRemovedUpstreamStillServesOldSnapshot(t *testing.T) {
 	}
 }
 
+// heldResolver resolves every name to 127.0.0.1, after closing looking and
+// waiting for release.
+type heldResolver struct{ looking, release chan struct{} }
+
+func (h heldResolver) LookupNetIP(context.Context, string, string) ([]netip.Addr, error) {
+	close(h.looking)
+	<-h.release
+	return []netip.Addr{netip.MustParseAddr("127.0.0.1")}, nil
+}
+
+// TestRebuiltPoolDoesNotHoldUpReload: while a request on an old snapshot
+// resolves the names of an upstream that a reload removed, another reload
+// goes ahead (GW-29).
+func TestRebuiltPoolDoesNotHoldUpReload(t *testing.T) {
+	res := heldResolver{make(chan struct{}), make(chan struct{})}
+	reg := NewRegistry(loopback, res, slog.New(slog.DiscardHandler))
+	old := snapshot(t, "upstreams: [{name: gone, endpoints: [{address: 'gone:80'}]}]\nroutes: [{name: r, upstream: gone, match: {path_prefix: /}}]")
+	next := snapshot(t, "upstreams: [{name: u, endpoints: [{address: '127.0.0.1:80'}]}]\nroutes: [{name: r, upstream: u, match: {path_prefix: /}}]")
+
+	picked := make(chan error, 1)
+	go func() {
+		_, err := reg.pool(old.Upstreams["gone"]).pick()
+		picked <- err
+	}()
+	<-res.looking
+	applied := make(chan error, 1)
+	go func() { applied <- reg.Apply(next) }()
+	select {
+	case err := <-applied:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Error("the reload waited for the request's DNS lookup")
+	}
+	close(res.release)
+	if err := <-picked; err != nil {
+		t.Errorf("rebuilt pool: %v", err)
+	}
+}
+
 func TestRoundRobin(t *testing.T) {
 	a, b := newUpstream(t, "a"), newUpstream(t, "b")
 	g := newGateway(t, newResolver(a, b), fmt.Sprintf(`

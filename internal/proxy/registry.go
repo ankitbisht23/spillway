@@ -100,19 +100,20 @@ func (r *Registry) Apply(s *config.Snapshot) error {
 
 // pool returns the upstream's pool. A request still on an older snapshot may
 // name an upstream that a reload has since removed; it gets a pool built from
-// its snapshot, which the next Apply drops.
+// its snapshot, which the next Apply drops. That pool's names are resolved
+// before taking r.mu, so the lookups never hold up a reload.
 func (r *Registry) pool(up *config.Upstream) *pool {
 	if p := (*r.pools.Load())[up.Name]; p != nil {
 		return p
 	}
+	p := r.newPool(up.Name)
+	r.setEndpoints(p, up.Endpoints)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	pools := *r.pools.Load()
 	if p := pools[up.Name]; p != nil {
 		return p
 	}
-	p := r.newPool(up.Name)
-	r.setEndpoints(p, up.Endpoints)
 	next := maps.Clone(pools)
 	next[up.Name] = p
 	r.pools.Store(&next)
