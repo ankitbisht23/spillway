@@ -82,14 +82,20 @@ jobs:
           persist-credentials: false
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Build linux/amd64 and linux/arm64
-        run: docker buildx build --target gateway --platform linux/amd64,linux/arm64 --build-arg VERSION=${{ github.sha }} .
+        run: |
+          for target in gateway loadgen; do
+            docker buildx build --target "$target" --platform linux/amd64,linux/arm64 --build-arg VERSION=${{ github.sha }} .
+          done
       - name: Runs as non-root with a read-only root filesystem (SEC-10)
         run: |
-          docker buildx build --target gateway --build-arg VERSION=${{ github.sha }} --load -t spillway-gateway:ci .
-          user=$(docker image inspect spillway-gateway:ci --format '{{.Config.User}}')
-          echo "user=$user"
-          test "$user" = 65532:65532
+          for target in gateway loadgen; do
+            docker buildx build --target "$target" --build-arg VERSION=${{ github.sha }} --load -t "spillway-${target}:ci" .
+            user=$(docker image inspect "spillway-${target}:ci" --format '{{.Config.User}}')
+            echo "$target user=$user"
+            test "$user" = 65532:65532
+          done
           docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges spillway-gateway:ci version
+          docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges spillway-loadgen:ci -h
 
   # Boots the dev stack from a clean checkout, runs the integration tests and
   # the stack part of the M0 exit check (ADR-0004).
