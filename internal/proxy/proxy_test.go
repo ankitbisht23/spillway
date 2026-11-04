@@ -277,6 +277,34 @@ func TestH2CUpgradeIgnored(t *testing.T) {
 	}
 }
 
+// TestHTTP2QueryWithSpace: a raw space in an HTTP/2 query, which would split
+// the upstream's HTTP/1.1 request line, gets the 400 that HTTP/1.1 gets.
+func TestHTTP2QueryWithSpace(t *testing.T) {
+	u := newUpstream(t, "orders")
+	g := newGateway(t, newResolver(u), oneUpstream(u))
+	tg := &gateway{Server: httptest.NewUnstartedServer(g.Config.Handler)}
+	tg.EnableHTTP2 = true
+	tg.StartTLS()
+	t.Cleanup(tg.Close)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, tg.URL+"/a", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.URL.RawQuery = "x=1 HTTP/1.0"
+	resp, err := tg.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.ProtoMajor != 2 || resp.StatusCode != http.StatusBadRequest || u.conns.Load() != 0 {
+		t.Errorf("%s answered %d and the upstream got %d connections; want HTTP/2, 400 and none", resp.Proto, resp.StatusCode, u.conns.Load())
+	}
+	if status, _, e := tg.get(t, "/a?x=%20&y=2", nil); status != http.StatusOK || e.RawQuery != "x=%20&y=2" {
+		t.Errorf("encoded space: status %d, upstream query %q; want 200 and the query unchanged", status, e.RawQuery)
+	}
+}
+
 func TestGatewayErrors(t *testing.T) {
 	u := newUpstream(t, "orders")
 	res := newResolver(u)

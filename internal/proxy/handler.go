@@ -68,6 +68,13 @@ func (h *Handler) serve(w http.ResponseWriter, r *http.Request, q *telemetry.Req
 		http.Error(w, "CONNECT is not supported", http.StatusMethodNotAllowed)
 		return
 	}
+	// Go's HTTP/2 server lets a raw space into the query, where it would
+	// split the upstream's HTTP/1.1 request line; over HTTP/1.1 the same
+	// target is already a 400.
+	if strings.Contains(r.URL.RawQuery, " ") {
+		http.Error(w, "invalid request target", http.StatusBadRequest)
+		return
+	}
 	// Route on the cleaned path and forward that same path, changed only by
 	// the route's own prefix rewrite (GW-02), so the upstream never sees a
 	// path that would have matched another route (ADR-0007).
