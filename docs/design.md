@@ -621,7 +621,7 @@ Exit (`make verify-m0`): `make dev` boots from a clean clone with every service 
 - [x] Server timeouts and container-aware runtime settings (GW-27, GW-28)
 - [x] Gateway as compose services: `gateway-1`, plus `gateway-2` … `gateway-5` under the `replicas` profile; only `gateway-1` publishes host ports (ADR-0004)
 - [x] `cmd/loadgen` v1: constant arrival rate (open model), HDR histograms, JSON results for `bench.yml`; reports achieved vs target rate and fails the run when achieved < 99% of target (saturated generator)
-- [ ] Fuzz tests for the router and config parser; `bench.yml` (manual trigger) on GitHub Actions; first baseline pushed to `bench-results` (NFR-01, ADR-0003)
+- [x] Fuzz tests for the router and config parser; `bench.yml` (manual trigger) on GitHub Actions; first baseline pushed to `bench-results` (NFR-01, ADR-0003)
 
 Exit (`make verify-m1`): first load-test baseline recorded (NFR-01); config reload under load drops zero requests (NFR-14, reload part). The baseline comes from a run on `main` after the last M1 PR merges, so a small follow-up “M1 exit” PR records it; this is the one allowed exception to finishing a milestone’s exit check before the next starts.
 
