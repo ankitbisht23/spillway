@@ -11,9 +11,9 @@ import (
 const otherTenant = "other"
 
 // tenantCapper keeps the tenant label to the busiest tenants (OB-01): the
-// limit tenants with the most requests in the last window keep their own label, and
-// the rest are "other". Until a window closes, free places go to tenants as
-// they arrive. It is not safe for concurrent use.
+// limit tenants with the most requests in the last window keep their own
+// label, and the rest are "other". Until a window closes, free places go to
+// tenants as they arrive. It is not safe for concurrent use.
 type tenantCapper struct {
 	limit  int
 	counts map[string]int  // requests per tenant in this window

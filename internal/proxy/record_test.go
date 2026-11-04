@@ -143,13 +143,16 @@ func TestAccessLogAndMetrics(t *testing.T) {
 	down.Close()
 	res := newResolver(u)
 	res.set("down", "127.0.0.1")
+	res.set("metadata", "169.254.169.254") // outside the allow-list: no usable address
 	g := newGateway(t, res, fmt.Sprintf(`
 upstreams:
   - {name: orders, endpoints: [{address: 'orders:%s'}]}
   - {name: down, endpoints: [{address: 'down:%s'}]}
+  - {name: metadata, endpoints: [{address: 'metadata:80'}]}
 routes:
   - {name: orders, upstream: orders, match: {path_prefix: /orders}}
   - {name: down, upstream: down, match: {path_prefix: /down}}
+  - {name: metadata, upstream: metadata, match: {path_prefix: /metadata}}
 `, u.port(), downPort))
 
 	for i, tt := range []struct {
@@ -182,6 +185,11 @@ routes:
 			"GET", "/down/raw-path-5", "", 502,
 			map[string]any{"route": "down", "upstream": "down"},
 			`code_class="5xx",method="GET",origin="gateway",reason="upstream",route="down",tenant="none"`,
+		},
+		{
+			"GET", "/metadata/raw-path-6", "", 503,
+			map[string]any{"route": "metadata", "upstream": "metadata"},
+			`code_class="5xx",method="GET",origin="gateway",reason="upstream",route="metadata",tenant="none"`,
 		},
 	} {
 		id := "req-" + strconv.Itoa(i)
@@ -226,12 +234,16 @@ routes:
 		`gw_request_duration_seconds_count{route="orders",tenant="none"} 3`,
 		`gw_request_duration_seconds_count{route="none",tenant="none"} 1`,
 		`gw_request_duration_seconds_count{route="down",tenant="none"} 1`,
+		`gw_request_duration_seconds_count{route="metadata",tenant="none"} 1`,
 		`gw_upstream_duration_seconds_count{attempt="1",upstream="orders"} 3`,
 		`gw_upstream_duration_seconds_count{attempt="1",upstream="down"} 1`,
 	} {
 		if !strings.Contains(m, "\n"+s+"\n") {
 			t.Errorf("/metrics has no %s", s)
 		}
+	}
+	if strings.Contains(m, `upstream="metadata"`) {
+		t.Error("an upstream without a usable address has an attempt duration")
 	}
 	if strings.Contains(m, "raw-path") {
 		t.Error("a raw path became a label value")

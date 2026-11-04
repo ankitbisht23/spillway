@@ -211,10 +211,11 @@ services:
     <<: *upstream
     ports: ["127.0.0.1:9103:8080"]
 
-  # The gateway (ADR-0004, ADR-0010, ADR-0012, ADR-0013). Only gateway-1 publishes host
-  # ports; gateway-2 … gateway-5 join with --profile replicas. The config and
-  # certificate directories are mounted, not the files, so a save by rename
-  # reaches the container. make dev mints the certificate (make certs).
+  # The gateway (ADR-0004, ADR-0010, ADR-0012, ADR-0013). Only gateway-1
+  # publishes host ports; gateway-2 … gateway-5 join with --profile replicas.
+  # The config and certificate directories are mounted, not the files, so a
+  # save by rename reaches the container. make dev mints the certificate
+  # (make certs).
   gateway-1:
     <<: &gateway
       build: { context: ., target: gateway }
