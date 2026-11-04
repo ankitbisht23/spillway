@@ -1,5 +1,6 @@
 // Package telemetry serves the admin port: health, readiness, Prometheus
-// metrics and pprof (GW-24, GW-25, OB-07).
+// metrics and pprof (GW-24, GW-25, OB-07). It also records requests: request
+// IDs, access logs, also sent over OTLP, and RED metrics (GW-22, OB-01, OB-03).
 package telemetry
 
 import (

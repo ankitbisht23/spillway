@@ -70,6 +70,9 @@ func Compile(c *configpb.Config) (*Snapshot, error) {
 		if r.GetName() == "" {
 			return nil, errors.New("route: name is required")
 		}
+		if r.GetName() == "none" {
+			return nil, errors.New(`route "none": the name is reserved for requests no route matches (OB-01)`)
+		}
 		if names[r.GetName()] {
 			return nil, fmt.Errorf("route %q: defined twice", r.GetName())
 		}

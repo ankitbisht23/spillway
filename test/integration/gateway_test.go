@@ -10,14 +10,15 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 )
 
 // TestGateway checks gateway-1 in the compose stack: traffic on 8000 reaches
-// the mock upstreams, the admin port 8001 answers /readyz and /metrics, and
-// Prometheus scrapes it (GW-24, GW-25, OB-07).
+// the mock upstreams, the admin port 8001 answers /readyz and /metrics, with
+// the request metrics, and Prometheus scrapes it (GW-24, GW-25, OB-01, OB-07).
 func TestGateway(t *testing.T) {
 	code, body := get(t, "http://127.0.0.1:8000/bytes/1024")
 	if code != http.StatusOK || len(body) != 1024 {
@@ -27,7 +28,15 @@ func TestGateway(t *testing.T) {
 		t.Errorf("GET :8001/readyz = %d, want 200", code)
 	}
 	_, metrics := get(t, "http://127.0.0.1:8001/metrics")
-	for _, m := range []string{"\ngo_goroutines ", "\ngo_gc_duration_seconds", "\ngw_config_version "} {
+	for _, m := range []string{
+		"\ngo_goroutines ", "\ngo_gc_duration_seconds", "\ngw_config_version ",
+		`
+gw_requests_total{code_class="2xx",method="GET",origin="upstream",reason="none",route="default",tenant="none"} `,
+		`
+gw_request_duration_seconds_count{route="default",tenant="none"} `,
+		`
+gw_upstream_duration_seconds_count{attempt="1",upstream="httpbin"} `,
+	} {
 		if !strings.Contains(metrics, m) {
 			t.Errorf("admin /metrics has no %s", strings.TrimSpace(m))
 		}
@@ -87,6 +96,81 @@ func TestGatewayTLS(t *testing.T) {
 	}
 	if resp.StatusCode != http.StatusOK || len(body) != 1024 || resp.ProtoMajor != 2 {
 		t.Errorf("GET :8443/bytes/1024 = %d %s with %d bytes, want 200 HTTP/2.0 with 1024", resp.StatusCode, resp.Proto, len(body))
+	}
+}
+
+// TestAccessLogInLoki sends a request with its own request ID and trace
+// context through gateway-1, checks the upstream got both unchanged, and finds
+// the request's access log line in Loki, which gets it from the gateway
+// through the OTel Collector (GW-22, OB-03).
+func TestAccessLogInLoki(t *testing.T) {
+	id := "itest-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	const traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+	start := time.Now()
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://127.0.0.1:8000/headers", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("X-Request-Id", id)
+	req.Header.Set("Traceparent", traceparent)
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var echoed struct{ Headers map[string][]string } // go-httpbin's /headers
+	if err := json.NewDecoder(resp.Body).Decode(&echoed); err != nil {
+		t.Fatal(err)
+	}
+	if got := resp.Header.Get("X-Request-Id"); resp.StatusCode != http.StatusOK || got != id {
+		t.Fatalf("GET :8000/headers = %d with request ID %q, want 200 with %q", resp.StatusCode, got, id)
+	}
+	if h := echoed.Headers; strings.Join(h["X-Request-Id"], ",") != id || strings.Join(h["Traceparent"], ",") != traceparent {
+		t.Errorf("upstream got X-Request-Id %q and traceparent %q, want %q and %q", h["X-Request-Id"], h["Traceparent"], id, traceparent)
+	}
+
+	// The gateway exports logs every second and the Collector batches them,
+	// so the line takes a few seconds to arrive.
+	q := url.Values{
+		"query": {`{service_name="spillway-gateway"} | request_id="` + id + `"`},
+		"start": {strconv.FormatInt(start.Add(-time.Minute).UnixNano(), 10)},
+	}
+	var stream map[string]string
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(time.Second) {
+		_, body := get(t, "http://127.0.0.1:3100/loki/api/v1/query_range?"+q.Encode())
+		var r struct {
+			Data struct {
+				Result []struct {
+					Stream map[string]string `json:"stream"`
+					Values [][2]string       `json:"values"`
+				} `json:"result"`
+			} `json:"data"`
+		}
+		if json.Unmarshal([]byte(body), &r) == nil && len(r.Data.Result) > 0 {
+			if n := len(r.Data.Result); n != 1 || len(r.Data.Result[0].Values) != 1 {
+				t.Fatalf("Loki has %d streams for request %s, want one line: %s", n, id, body)
+			}
+			stream = r.Data.Result[0].Stream
+			if line := r.Data.Result[0].Values[0][1]; line != "access" {
+				t.Errorf("log line = %q, want access", line)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("Loki has no access log line for request %s: %s", id, body)
+		}
+	}
+	for k, want := range map[string]string{
+		"trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+		"route":    "default",
+		"method":   "GET",
+		"status":   "200",
+		"upstream": "httpbin",
+		"key_hash": "",
+	} {
+		if stream[k] != want {
+			t.Errorf("Loki line for %s: %s = %q, want %q (all: %v)", id, k, stream[k], want, stream)
+		}
 	}
 }
 

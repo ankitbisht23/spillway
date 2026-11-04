@@ -21,3 +21,4 @@ Decisions that shape Spillway and are not obvious from the code or from docs/des
 | [0010](0010-admin-port-and-compose-gateway.md) | Admin port and the gateway in compose | Accepted | 2026-11-04 |
 | [0011](0011-route-transforms-limits-timeouts.md) | Route transforms, size limits and timeouts | Accepted | 2026-11-04 |
 | [0012](0012-tls-listener-and-certificates.md) | TLS listener and certificates | Accepted | 2026-11-04 |
+| [0013](0013-request-ids-access-logs-metrics.md) | Request IDs, access logs and request metrics | Accepted | 2026-11-04 |

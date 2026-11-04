@@ -4,6 +4,8 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
+	"net/url"
+	"strconv"
 	"time"
 
 	"github.com/ankitbisht23/spillway/internal/proxy"
@@ -21,6 +23,10 @@ type settings struct {
 	adminAddr  string          // SPILLWAY_GATEWAY_ADMIN_ADDR: admin listener (GW-24, GW-25), default 127.0.0.1:8001
 	allow      proxy.Allowlist // SPILLWAY_GATEWAY_ALLOWED_NETWORKS: comma-separated CIDRs (SEC-06)
 	dnsRefresh time.Duration   // SPILLWAY_GATEWAY_DNS_REFRESH: upstream re-resolution interval (GW-06), default 30s
+
+	// Logs (OB-03)
+	accessLogSampleRate float64 // SPILLWAY_GATEWAY_ACCESS_LOG_SAMPLE_RATE: share of 1xx-3xx and upstream 4xx requests access-logged, 0 to 1, default 1
+	otlpEndpoint        string  // SPILLWAY_GATEWAY_OTLP_ENDPOINT: OTel Collector URL for logs over OTLP/gRPC, off when empty
 }
 
 // defaultAdminAddr keeps the admin port on loopback unless an internal
@@ -36,6 +42,9 @@ func loadSettings(getenv func(string) string) (settings, error) {
 		tlsKey:     getenv("SPILLWAY_GATEWAY_TLS_KEY"),
 		adminAddr:  adminAddr(getenv),
 		dnsRefresh: 30 * time.Second,
+
+		accessLogSampleRate: 1,
+		otlpEndpoint:        getenv("SPILLWAY_GATEWAY_OTLP_ENDPOINT"),
 	}
 	if s.configPath == "" {
 		return s, errors.New("SPILLWAY_GATEWAY_CONFIG: required")
@@ -53,6 +62,16 @@ func loadSettings(getenv func(string) string) (settings, error) {
 	if v := getenv("SPILLWAY_GATEWAY_DNS_REFRESH"); v != "" {
 		if s.dnsRefresh, err = time.ParseDuration(v); err != nil || s.dnsRefresh <= 0 {
 			return s, fmt.Errorf("SPILLWAY_GATEWAY_DNS_REFRESH: %q is not a positive duration", v)
+		}
+	}
+	if v := getenv("SPILLWAY_GATEWAY_ACCESS_LOG_SAMPLE_RATE"); v != "" {
+		if s.accessLogSampleRate, err = strconv.ParseFloat(v, 64); err != nil || !(s.accessLogSampleRate >= 0 && s.accessLogSampleRate <= 1) {
+			return s, fmt.Errorf("SPILLWAY_GATEWAY_ACCESS_LOG_SAMPLE_RATE: %q is not a number from 0 to 1", v)
+		}
+	}
+	if v := s.otlpEndpoint; v != "" {
+		if u, err := url.Parse(v); err != nil || u.Scheme != "http" && u.Scheme != "https" || u.Hostname() == "" || u.Port() == "" {
+			return s, fmt.Errorf("SPILLWAY_GATEWAY_OTLP_ENDPOINT: %q is not a URL such as http://otel-collector:4317", v)
 		}
 	}
 	return s, nil
