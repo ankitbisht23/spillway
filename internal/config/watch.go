@@ -54,18 +54,19 @@ func (w *Watcher) Run(ctx context.Context, interval time.Duration) {
 	}
 }
 
-// reload swaps in a new snapshot if the file changed. The same bad content is
-// reported once, not on every poll.
+// reload swaps in a new snapshot if the file changed. The same bad content,
+// or the same unreadable file (hashed as empty), is reported once, not on
+// every poll.
 func (w *Watcher) reload() error {
 	data, err := os.ReadFile(w.path)
-	if err != nil {
-		return fmt.Errorf("config: %w", err)
-	}
 	sum := sha256.Sum256(data)
 	if w.current.Load() != nil && sum == w.sum {
 		return nil
 	}
 	w.sum = sum
+	if err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
 	c, err := Load(data)
 	if err != nil {
 		return err
