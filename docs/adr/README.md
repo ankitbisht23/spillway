@@ -22,3 +22,4 @@ Decisions that shape Spillway and are not obvious from the code or from docs/des
 | [0011](0011-route-transforms-limits-timeouts.md) | Route transforms, size limits and timeouts | Accepted | 2026-11-04 |
 | [0012](0012-tls-listener-and-certificates.md) | TLS listener and certificates | Accepted | 2026-11-04 |
 | [0013](0013-request-ids-access-logs-metrics.md) | Request IDs, access logs and request metrics | Accepted | 2026-11-04 |
+| [0014](0014-load-generator.md) | Load generator v1: open model, achieved rate, JSON result | Accepted | 2026-11-04 |
