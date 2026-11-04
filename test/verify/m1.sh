@@ -89,7 +89,7 @@ if [ "$mode" = all ]; then
 		done
 		if [ -n "$found" ]; then
 			result PASS "NFR-01 baseline $arch" "$(git show "origin/bench-results:$found" | jq -r --arg f "$found" \
-				'"\(.rps_per_vcpu | round) rps per gateway vCPU (target 10000), p99 \(.latency_us.p99.median / 1000) ms; \(.hardware.cpu_model), commit \(.commit[:7]), \($f)"')"
+				'"\(.rps_per_vcpu | round) rps per gateway vCPU at \(.target_rps) offered (NFR-01 target 10000), p99 \(.latency_us.p99.median / 1000) ms; \(.hardware.cpu_model), commit \(.commit[:7]), \($f)"')"
 		elif [ -z "$files" ]; then
 			result FAIL "NFR-01 baseline $arch" "pending: origin has no bench-results branch yet"
 		else

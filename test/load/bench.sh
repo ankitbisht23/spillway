@@ -5,7 +5,8 @@
 # upstream 3), and drives the gateway's plain-HTTP listener at a constant
 # rate: 30 s warm-up and 3 min measured, 5 times. Prints one JSON result for
 # the run set on stdout: the median and spread of each number, every run's
-# loadgen result, the commit and the hardware. Progress goes to stderr.
+# loadgen result, the commit and the hardware, CPU topology included
+# (ADR-0016). Progress goes to stderr.
 # bench.yml runs it on GitHub Actions; on a laptop it needs Docker with at
 # least 4 CPUs:
 #   test/load/bench.sh > result.json
@@ -58,6 +59,16 @@ case $(jq -r .arch <<<"$host") in
 	aarch64) arch=arm64 ;;
 	*) arch=$(jq -r .arch <<<"$host") ;;
 esac
+# Which logical CPUs share a core (SMT) or a socket, one entry per CPU from
+# sysfs (ADR-0016). Null without sysfs, as on macOS, where Docker runs in a VM.
+topology=null
+if [ -d /sys/devices/system/cpu/cpu0/topology ]; then
+	topology=$(for t in /sys/devices/system/cpu/cpu[0-9]*/topology; do
+		cpu=${t%/topology}
+		printf '{"cpu": %s, "core": %s, "socket": %s, "thread_siblings": "%s"}\n' \
+			"${cpu##*cpu}" "$(<"$t/core_id")" "$(<"$t/physical_package_id")" "$(<"$t/thread_siblings_list")"
+	done | jq -cs 'sort_by(.cpu)')
+fi
 
 trap cleanup EXIT
 cleanup
@@ -102,7 +113,7 @@ done
 
 result=$(printf '%s\n' "${results[@]}" | jq -s \
 	--arg timestamp "$timestamp" --arg commit "$commit" --arg ref "$ref" --arg run_url "$run_url" --arg arch "$arch" \
-	--argjson host "$host" --argjson gateway_vcpus "$gateway_vcpus" --argjson sample_rate "$sample_rate" \
+	--argjson host "$host" --argjson topology "$topology" --argjson gateway_vcpus "$gateway_vcpus" --argjson sample_rate "$sample_rate" \
 	--arg gateway_cpus "$gateway_cpus" --arg loadgen_cpus "$loadgen_cpus" --arg upstream_cpus "$upstream_cpus" \
 	--arg warmup "$warmup" --arg duration "$duration" '
 	# median, min, max and spread ((max - min) / median) of f across the runs
@@ -129,7 +140,7 @@ result=$(printf '%s\n' "${results[@]}" | jq -s \
 			url: .[0].url, protocol: .[0].protocol, warmup: $warmup, duration: $duration,
 			access_log_sample_rate: $sample_rate
 		},
-		hardware: ({cpu_model: .[0].hardware.cpu_model} + ($host | del(.arch))),
+		hardware: ({cpu_model: .[0].hardware.cpu_model} + ($host | del(.arch)) + {topology: $topology}),
 		runs: .
 	}')
 printf '%s\n' "$result"

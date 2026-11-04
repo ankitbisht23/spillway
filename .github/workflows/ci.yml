@@ -118,8 +118,9 @@ jobs:
         run: make verify-m0-stack
       - name: make verify-m1-reload (NFR-14)
         run: make verify-m1-reload
+      # Valid, with the topology of every CPU recorded (ADR-0016).
       - name: Benchmark script, one short run (NFR-01)
-        run: BENCH_RATE=500 BENCH_RUNS=1 BENCH_WARMUP=1s BENCH_DURATION=5s test/load/bench.sh | jq -e .valid
+        run: BENCH_RATE=500 BENCH_RUNS=1 BENCH_WARMUP=1s BENCH_DURATION=5s test/load/bench.sh | jq -e '.valid and (.hardware.topology | length) == .hardware.cpus'
       - name: Compose state and logs
         if: failure()
         run: |

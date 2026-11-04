@@ -24,3 +24,4 @@ Decisions that shape Spillway and are not obvious from the code or from docs/des
 | [0013](0013-request-ids-access-logs-metrics.md) | Request IDs, access logs and request metrics | Accepted | 2026-11-04 |
 | [0014](0014-load-generator.md) | Load generator v1: open model, achieved rate, JSON result | Accepted | 2026-11-04 |
 | [0015](0015-benchmark-workflow-and-m1-exit-check.md) | Benchmark workflow and the M1 exit check | Accepted | 2026-11-04 |
+| [0016](0016-per-architecture-bench-rates-and-cpu-topology.md) | Per-architecture benchmark rates and CPU topology | Accepted | 2026-11-04 |
