@@ -2,27 +2,27 @@
 
 Nov 2, 2026 · @Ankit Bisht
 
-## Who does what
+## Who does what -
 
 You handle anything that needs a login, a browser console, card or phone verification, admin rights on your machine, or a decision. The agent (Claude Code here; any terminal agent works) builds everything else, including Postgres, Redis Cluster, Keycloak and the observability stack, all in Docker.
 
 Only the first seven rows block M0 (two are already done); the rest can wait until the milestone named.
 
-| Your task | Why the agent can’t | Needed by |
-| --- | --- | --- |
-| Prepare the machine; install a Docker runtime | Admin rights, GUI installer, licence acceptance | M0 |
-| Give Docker ≥ 8 GB memory (10 GB once kind runs in M7) | GUI or VM setting | M0 |
-| Install the toolchain (Go, Node, pnpm, git, gh, make) | sudo and shell-profile changes | M0 |
-| Create the GitHub repo; add an SSH key | Your account, password and 2FA | M0 |
-| Log `gh` in to the personal account; keep work credentials out of this repo | Needs your browser login | M0 |
-| Install and log in to Claude Code; export the design doc into the repo (**done**: `docs/design.md`, `docs/setup.md`) | Your Claude login; the agent can’t read claude.ai docs | M0 |
-| Decide project name, licence, Go module path, public or private (**done**: `spillway`, MIT, public; ADR-0001) | Your call | M0 |
-| Add GitHub Actions secrets | Secret values come from you | M8 (optional) |
-| Run live demos; record the walkthrough video | Your voice and judgement | M8 |
-| Optional: GitHub OAuth app for demo login | Browser console; issues a client secret | M8 |
-| Optional: Cloudflare domain, Grafana Cloud | Signups, payment for the domain | M8 |
-| Optional: AWS or Google Cloud account for an always-on demo | Card check, web console | M8 |
-| Approve each milestone’s exit check | Judgement | Every milestone |
+| Your task                                                                                                            | Why the agent can’t                                    | Needed by       |
+| -------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ | --------------- |
+| Prepare the machine; install a Docker runtime                                                                        | Admin rights, GUI installer, licence acceptance        | M0              |
+| Give Docker ≥ 8 GB memory (10 GB once kind runs in M7)                                                               | GUI or VM setting                                      | M0              |
+| Install the toolchain (Go, Node, pnpm, git, gh, make)                                                                | sudo and shell-profile changes                         | M0              |
+| Create the GitHub repo; add an SSH key                                                                               | Your account, password and 2FA                         | M0              |
+| Log `gh` in to the personal account; keep work credentials out of this repo                                          | Needs your browser login                               | M0              |
+| Install and log in to Claude Code; export the design doc into the repo (**done**: `docs/design.md`, `docs/setup.md`) | Your Claude login; the agent can’t read claude.ai docs | M0              |
+| Decide project name, licence, Go module path, public or private (**done**: `spillway`, MIT, public; ADR-0001)        | Your call                                              | M0              |
+| Add GitHub Actions secrets                                                                                           | Secret values come from you                            | M8 (optional)   |
+| Run live demos; record the walkthrough video                                                                         | Your voice and judgement                               | M8              |
+| Optional: GitHub OAuth app for demo login                                                                            | Browser console; issues a client secret                | M8              |
+| Optional: Cloudflare domain, Grafana Cloud                                                                           | Signups, payment for the domain                        | M8              |
+| Optional: AWS or Google Cloud account for an always-on demo                                                          | Card check, web console                                | M8              |
+| Approve each milestone’s exit check                                                                                  | Judgement                                              | Every milestone |
 
 **The agent handles:** monorepo scaffold, `compose.yaml` (Redis Cluster, Postgres, Keycloak, Prometheus, Grafana, Tempo, Loki, OTel Collector), migrations and seed data, Keycloak realm import, Makefile, CI workflows, Helm chart and kind cluster config, benchmark workflow, k6 and chaos scripts, demo seed data and traffic simulator, all code and tests.
 
@@ -65,6 +65,7 @@ The whole stack runs in Docker locally, so the one thing that must be right is a
    ```bash
    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
    ```
+
 3. Install Docker Desktop: `brew install --cask docker`, open it once and accept the terms.
 4. Docker Desktop → Settings → Resources: Memory 8 GB (10 GB if you have 32 GB RAM), CPUs 4+, disk 64 GB. Apply and restart.
 5. Raise the open-files limit (load tests open thousands of sockets):
@@ -73,6 +74,7 @@ The whole stack runs in Docker locally, so the one thing that must be right is a
    sudo launchctl limit maxfiles 65536 200000   # resets on reboot
    echo 'ulimit -n 65536' >> ~/.zshrc
    ```
+
 6. Turn off AirPlay Receiver: System Settings → General → AirDrop & Handoff → AirPlay Receiver. It listens on ports 5000 and 7000, and Redis Cluster needs 7000–7005. Verify:
 
    ```bash
@@ -89,6 +91,7 @@ The whole stack runs in Docker locally, so the one thing that must be right is a
    memory=10GB
    processors=4
    ```
+
 3. Install Docker Desktop for Windows; in Settings enable “Use the WSL 2 based engine” and Resources → WSL integration for Ubuntu.
 4. Do everything else, including Claude Code, inside the Ubuntu terminal. Keep the repo in the Linux filesystem (anywhere under your home directory), never under `/mnt/c`: builds and bind mounts are many times faster on the Linux filesystem.
 5. Raise open files: `echo 'ulimit -n 65536' >> ~/.bashrc`.
@@ -101,6 +104,7 @@ The whole stack runs in Docker locally, so the one thing that must be right is a
    curl -fsSL https://get.docker.com | sh
    sudo usermod -aG docker $USER   # log out and back in afterwards
    ```
+
 2. Raise open files: `echo 'ulimit -n 65536' >> ~/.bashrc`.
 
 ### Verify (all platforms)
@@ -126,6 +130,7 @@ Use Homebrew on every platform (it runs on Linux and WSL2 too), so one command i
    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
    echo 'eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"' >> ~/.bashrc && source ~/.bashrc
    ```
+
 2. Install the tools (macOS, Linux, WSL2):
 
    ```bash
@@ -133,6 +138,7 @@ Use Homebrew on every platform (it runs on Linux and WSL2 too), so one command i
    ```
 
    Project tools don’t come from brew: `make tools` (added by the agent in M0) installs pinned sqlc, goose, golangci-lint, buf, gitleaks, oasdiff, govulncheck, protoc-gen-go, protoc-gen-go-grpc and oapi-codegen into `./bin` (gitignored). The repo also pins Go, Node and pnpm: the `toolchain` line in `go.mod` (a minimum: Go downloads it if yours is older; CI and the Makefile set `GOTOOLCHAIN` to the exact version), `.node-version` (fnm’s `--use-on-cd` switches to it when you enter the repo; `fnm install` fetches it if missing) and `packageManager` in `package.json`.
+
 3. Install Node LTS through fnm and load it in every shell. Every shell-profile line in this guide goes in `~/.zshrc` on macOS and `~/.bashrc` on Linux and WSL2; run the line for your platform:
 
    ```bash
@@ -140,17 +146,20 @@ Use Homebrew on every platform (it runs on Linux and WSL2 too), so one command i
    echo 'eval "$(fnm env --use-on-cd)"' >> ~/.bashrc && source ~/.bashrc   # Linux, WSL2
    fnm install --lts && fnm default lts-latest
    ```
+
 4. Put Go-installed binaries on your PATH:
 
    ```bash
    echo 'export PATH=$PATH:$(go env GOPATH)/bin' >> ~/.zshrc && source ~/.zshrc     # macOS
    echo 'export PATH=$PATH:$(go env GOPATH)/bin' >> ~/.bashrc && source ~/.bashrc   # Linux, WSL2
    ```
+
 5. Trust a local certificate authority for HTTPS on localhost (asks for your password once). `make certs` mints the gateway's certificate with the pinned mkcert in `./bin` either way; this step makes browsers and curl trust it:
 
    ```bash
    mkcert -install
    ```
+
 6. Configure git with your GitHub no-reply address (Step 3 shows where to find it).
 
    Personal machine, no work identity: set it globally.
@@ -172,6 +181,7 @@ Use Homebrew on every platform (it runs on Linux and WSL2 too), so one command i
    ```
 
    This adds `[includeIf "gitdir:<repo path>/"]` to `~/.gitconfig`; keep it below the global `[user]` section (`git config` appends it there) so it wins inside the repo.
+
 7. Verify:
 
    ```bash
@@ -202,6 +212,7 @@ The local repo already exists with no commits yet; this step secures the account
    ```bash
    eval "$(git config core.sshCommand || echo ssh) -T git@github.com"   # expect: Hi ankitbisht23! You've successfully authenticated
    ```
+
 4. **Log `gh` in to the personal account** in its own config directory, so a work `gh` login (if any) stays untouched:
 
    ```bash
@@ -210,16 +221,18 @@ The local repo already exists with no commits yet; this step secures the account
    ```
 
    In your own terminal, `export GH_CONFIG_DIR=~/.config/gh-personal` whenever you work in this repo, or add `alias ghp='GH_CONFIG_DIR=~/.config/gh-personal gh'` to your shell profile (`~/.zshrc` on macOS, `~/.bashrc` on Linux and WSL2). Agent sessions get it from `.claude/settings.local.json` (Step 9).
+
 5. **Name, licence and module path: decided** (ADR-0001).
 
-   | Decision | Value |
-   | --- | --- |
-   | Name | `spillway` |
-   | Licence | MIT |
-   | Repo | `github.com/ankitbisht23/spillway`, public |
-   | Go module | `github.com/ankitbisht23/spillway` |
+   | Decision  | Value                                      |
+   | --------- | ------------------------------------------ |
+   | Name      | `spillway`                                 |
+   | Licence   | MIT                                        |
+   | Repo      | `github.com/ankitbisht23/spillway`, public |
+   | Go module | `github.com/ankitbisht23/spillway`         |
 
    The module path is the GitHub path, not a vanity import path: a vanity path needs a domain you keep serving forever, and changing a module path later breaks every import.
+
 6. **Bootstrap commit and create the GitHub repo from the local folder.** Review first: `git status --short` must list no `.env*` files, keys or `.claude/settings.local.json`, and `git config user.email` must print the no-reply address.
 
    ```bash
@@ -228,6 +241,7 @@ The local repo already exists with no commits yet; this step secures the account
    ```
 
    This is the one direct commit to `main`; the ruleset comes next, and everything after it is a PR.
+
 7. **Protect `main`.** Settings → Rules → Rulesets → New branch ruleset targeting `main`, enforcement Active, bypass list empty. Turn on: require a pull request, require status checks, block force pushes, restrict deletions. The only required check is `ci-ok`, the single aggregate CI job that passes only when every other CI job does; GitHub lists it once it has run, so add it after M0’s first workflow run. Solo repo: don’t require approvals, since you can’t approve your own PR. The agent still can’t merge without asking: `gh pr merge` is an ask rule (Step 9).
 8. **Turn on free security features.** Settings → Code security: Dependabot alerts, secret scanning and push protection. Dependabot version updates come from `.github/dependabot.yml`, which the agent adds in M0.
 9. **After the first image push (the v1.0.0 release in M7, or earlier if CI starts publishing images):** open your profile → Packages → `spillway-gateway` and `spillway-controlplane` → Package settings → Change visibility → Public, so anyone can pull `ghcr.io/ankitbisht23/spillway-gateway` and `ghcr.io/ankitbisht23/spillway-controlplane` without credentials.
@@ -263,6 +277,7 @@ Your part: after `make dev`, open the Keycloak admin console at `http://localhos
    - Authorization callback URL: `https://<demo-host>/auth/realms/spillway/broker/github/endpoint` (Keycloak sits at `/auth` behind the demo proxy, Step 6)
 
    `<demo-host>` is the demo proxy’s hostname, `admin.<domain>` in Step 7. The callback must stay fixed, so GitHub login needs that named tunnel; a quick tunnel’s URL changes every run, so use the realm’s test users with it.
+
 3. Register, then Generate a new client secret. Copy the client ID and secret into your password manager immediately; the secret is shown once.
 4. Optional: register a second app for local testing with callback `http://localhost:<keycloak-port>/auth/realms/spillway/broker/github/endpoint` (Keycloak’s port is in `docs/ports.md`), since each OAuth app takes one callback URL.
 5. Give the values to the deployment as `GITHUB_OAUTH_CLIENT_ID` and `GITHUB_OAUTH_CLIENT_SECRET` (Step 8). The agent wires Keycloak’s GitHub identity provider to read them.
@@ -286,6 +301,7 @@ Ports live in `docs/ports.md`, the source of truth; `compose.yaml` and the Helm 
    ```
 
    A Homebrew Redis on its default port 6379 doesn’t clash and can keep running.
+
 2. **Keep Docker at ≥ 8 GB.** The full stack plus a load test is roughly 4–6 GB (estimate); below 8 GB, Redis Cluster nodes and Keycloak get OOM-killed.
 3. **Container open-files limit.** The host `ulimit -n` from Step 1 doesn’t reach containers; `compose.yaml` sets `ulimits: { nofile: 65536 }` for the gateway and load generators.
 4. **Env files.** The Makefile passes `--env-file .env.example` to compose and adds `--env-file .env.local` only if that file exists; services list `.env.local` as an `env_file` with `required: false`. A clean clone boots with the committed defaults, and `.env.local` (Step 8) overrides only what you put in it.
@@ -298,12 +314,12 @@ The agent can build and run this entire section; the only human parts are stoppi
 
 No cloud account is needed. Kubernetes runs as a local kind cluster, benchmarks run on free GitHub Actions runners, and live demos run from your laptop through a Cloudflare quick tunnel. An always-on hosted demo is optional and runs on time-limited cloud credits.
 
-| Job | Where it runs | Card needed | Limitation |
-| --- | --- | --- | --- |
-| Kubernetes and Helm (M7) | Local 3-node kind cluster | No | Not reachable from the internet |
-| Benchmarks (M1), nightly load tests (M7) | GitHub Actions on your public repo: 4 vCPU, 16 GB, free and unlimited ([runners](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)) | No | Shared hardware; gateway and load generator share 4 vCPUs |
-| Live demo (M8) | Your laptop + Cloudflare quick tunnel | No | URL changes every run; laptop must stay on |
-| Always-on demo (optional) | AWS or Google Cloud credits | Yes | Credits expire |
+| Job                                      | Where it runs                                                                                                                                                 | Card needed | Limitation                                                |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- | --------------------------------------------------------- |
+| Kubernetes and Helm (M7)                 | Local 3-node kind cluster                                                                                                                                     | No          | Not reachable from the internet                           |
+| Benchmarks (M1), nightly load tests (M7) | GitHub Actions on your public repo: 4 vCPU, 16 GB, free and unlimited ([runners](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)) | No          | Shared hardware; gateway and load generator share 4 vCPUs |
+| Live demo (M8)                           | Your laptop + Cloudflare quick tunnel                                                                                                                         | No          | URL changes every run; laptop must stay on                |
+| Always-on demo (optional)                | AWS or Google Cloud credits                                                                                                                                   | Yes         | Credits expire                                            |
 
 ### Kubernetes on kind (you: almost nothing)
 
@@ -329,6 +345,7 @@ No cloud account is needed. Kubernetes runs as a local kind cluster, benchmarks 
    ```
 
    Everything public goes through one reverse proxy (Caddy on 8888, see `docs/ports.md`) behind one tunnel: the admin UI and `/api/v1` at `/` (behind OIDC and RBAC), Keycloak at `/auth`, Grafana at `/grafana`. `make demo-share` points a quick tunnel at the proxy (the same as `cloudflared tunnel --url http://localhost:8888`) and, from the URL it prints, sets Keycloak’s `KC_HOSTNAME` (`<url>/auth`), the services’ expected issuer (`<url>/auth/realms/spillway`), the UI’s OIDC authority, Grafana’s `GF_SERVER_ROOT_URL` (`<url>/grafana`, with `GF_SERVER_SERVE_FROM_SUB_PATH=true`) and the `admin-ui` client’s redirect URIs and web origins (through the Keycloak admin API), then restarts what changed, so logins and links use the public address (SC-09). While a share runs, log in through the public URL; localhost logins fail until you stop it. Visitors drive the gateway from the Playground, which generates traffic server-side (UI-07), so the gateway needs no tunnel of its own. Never tunnel an admin port (8001, 8081) or the gRPC stream (9090).
+
 3. Before an interview, rehearse with `docs/demo.md` and keep the recorded video ready as a fallback.
 4. Record: terminal scenes as scripted GIFs with `vhs`; UI scenes with OBS Studio (free, all platforms) or QuickTime on macOS.
 
@@ -380,14 +397,14 @@ Secrets live in three places only: your password manager (source of truth), an u
 5. The agent writes the Kubernetes Secret manifests with placeholders; you create the real ones on the cluster: `kubectl --context kind-spillway create secret generic spillway-secrets --from-env-file=.env.demo`.
 6. The agent commits `.gitleaks.toml`, which allowlists only the dev realm’s client secret, the test-user passwords and the `.env.example` defaults. The scan is never weakened otherwise, so a real secret anywhere else still fails the hook and CI.
 
-| Secret | Comes from | Stored in | Needed by |
-| --- | --- | --- | --- |
-| Local dev passwords and client secret (Postgres, Keycloak admin, test users, `gateway-tests`) | Agent generates | `.env.example` and the realm import; obviously fake values, allowlisted in `.gitleaks.toml` | M0 |
-| `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET` | GitHub OAuth app (Step 4) | Password manager, `.env.demo` or k8s secret | M8, optional |
-| `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `KEYCLOAK_ADMIN_PASSWORD` (public demo) | You generate | Password manager, `.env.demo` or k8s secret | M8, optional |
-| `CLOUDFLARE_TUNNEL_TOKEN` | Cloudflare (Step 7) | `.env.demo` or k8s secret | M8, optional |
-| `GRAFANA_CLOUD_OTLP_ENDPOINT`, `GRAFANA_CLOUD_INSTANCE_ID`, `GRAFANA_CLOUD_TOKEN` | Grafana Cloud (Step 7) | GitHub secret, `.env.demo` | M8, optional |
-| `~/.ssh/spillway_cloud` | ssh-keygen, only with a cloud VM (Step 6) | Your machine only | Optional |
+| Secret                                                                                        | Comes from                                | Stored in                                                                                   | Needed by    |
+| --------------------------------------------------------------------------------------------- | ----------------------------------------- | ------------------------------------------------------------------------------------------- | ------------ |
+| Local dev passwords and client secret (Postgres, Keycloak admin, test users, `gateway-tests`) | Agent generates                           | `.env.example` and the realm import; obviously fake values, allowlisted in `.gitleaks.toml` | M0           |
+| `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`                                        | GitHub OAuth app (Step 4)                 | Password manager, `.env.demo` or k8s secret                                                 | M8, optional |
+| `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `KEYCLOAK_ADMIN_PASSWORD` (public demo)                | You generate                              | Password manager, `.env.demo` or k8s secret                                                 | M8, optional |
+| `CLOUDFLARE_TUNNEL_TOKEN`                                                                     | Cloudflare (Step 7)                       | `.env.demo` or k8s secret                                                                   | M8, optional |
+| `GRAFANA_CLOUD_OTLP_ENDPOINT`, `GRAFANA_CLOUD_INSTANCE_ID`, `GRAFANA_CLOUD_TOKEN`             | Grafana Cloud (Step 7)                    | GitHub secret, `.env.demo`                                                                  | M8, optional |
+| `~/.ssh/spillway_cloud`                                                                       | ssh-keygen, only with a cloud VM (Step 6) | Your machine only                                                                           | Optional     |
 
 Secret scanning has three layers: GitHub push protection (Step 3), a `gitleaks` pre-commit hook installed by `make hooks` (M0) and `gitleaks` in CI on every PR, both reading `.gitleaks.toml`. The Claude Code deny rules in Step 9 sit on top as a guardrail against the agent reading secrets by accident; they are not a security boundary.
 
@@ -403,6 +420,7 @@ Claude Code needs a Pro, Max, Team, Enterprise or Console account; the free Clau
    curl -fsSL https://claude.ai/install.sh | bash     # or: brew install --cask claude-code
    claude doctor                                     # install and settings diagnostics
    ```
+
 2. `cd` into the repo folder and run `claude`, then log in through the browser prompt.
 
 Agent sessions use a plan’s usage allowance much faster than chat. If you hit Pro’s limits mid-milestone, keep sessions to one task (`/clear` between tasks) or move to Max for the heavy build weeks.
@@ -485,17 +503,17 @@ First prompt to the agent:
 
 The only required spend is the Claude plan; a domain and cloud credits are optional.
 
-| Item | Cost | Limit that matters |
-| --- | --- | --- |
-| Claude Code | Paid: Pro, Max or Console usage | Free Claude plan excluded ([source](https://code.claude.com/docs/en/setup)) |
-| Docker Desktop | Free for personal use | Paid only for companies with ≥ 250 staff or ≥ $10M revenue ([licence](https://docs.docker.com/subscription/desktop-license/)) |
-| Go, Node, Postgres, Redis, Keycloak, Prometheus, Grafana, Tempo, Loki, k6, kind, vhs, OBS Studio | Free, open source | Self-hosted |
-| GitHub, public repo | Free | 4-vCPU / 16 GB runners free and unlimited in public repos ([runners](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)); private: 2,000 min/month ([billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions)) |
-| Cloudflare quick tunnel | Free, no account | URL changes every run |
-| Grafana Cloud (optional) | Free | 10k series, 50 GB logs, 50 GB traces, 14-day retention ([pricing](https://grafana.com/pricing/)) |
-| Domain + named tunnel (optional) | Domain roughly $10–15 a year (approximate); tunnel free | Renews yearly |
-| AWS Free plan (optional) | $100 credit + up to $100 more | Ends after 6 months or when credits run out ([AWS](https://aws.amazon.com/about-aws/whats-new/2025/07/aws-free-tier-credits-month-free-plan/)) |
-| Google Cloud (optional) | $300 credit for 90 days | Always-free e2-micro too small for the stack |
+| Item                                                                                             | Cost                                                    | Limit that matters                                                                                                                                                                                                                                                  |
+| ------------------------------------------------------------------------------------------------ | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Claude Code                                                                                      | Paid: Pro, Max or Console usage                         | Free Claude plan excluded ([source](https://code.claude.com/docs/en/setup))                                                                                                                                                                                         |
+| Docker Desktop                                                                                   | Free for personal use                                   | Paid only for companies with ≥ 250 staff or ≥ $10M revenue ([licence](https://docs.docker.com/subscription/desktop-license/))                                                                                                                                       |
+| Go, Node, Postgres, Redis, Keycloak, Prometheus, Grafana, Tempo, Loki, k6, kind, vhs, OBS Studio | Free, open source                                       | Self-hosted                                                                                                                                                                                                                                                         |
+| GitHub, public repo                                                                              | Free                                                    | 4-vCPU / 16 GB runners free and unlimited in public repos ([runners](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)); private: 2,000 min/month ([billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions)) |
+| Cloudflare quick tunnel                                                                          | Free, no account                                        | URL changes every run                                                                                                                                                                                                                                               |
+| Grafana Cloud (optional)                                                                         | Free                                                    | 10k series, 50 GB logs, 50 GB traces, 14-day retention ([pricing](https://grafana.com/pricing/))                                                                                                                                                                    |
+| Domain + named tunnel (optional)                                                                 | Domain roughly $10–15 a year (approximate); tunnel free | Renews yearly                                                                                                                                                                                                                                                       |
+| AWS Free plan (optional)                                                                         | $100 credit + up to $100 more                           | Ends after 6 months or when credits run out ([AWS](https://aws.amazon.com/about-aws/whats-new/2025/07/aws-free-tier-credits-month-free-plan/))                                                                                                                      |
+| Google Cloud (optional)                                                                          | $300 credit for 90 days                                 | Always-free e2-micro too small for the stack                                                                                                                                                                                                                        |
 
 ## Sources
 
