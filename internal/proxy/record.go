@@ -12,20 +12,32 @@ import (
 
 // responseRecorder notes a response's status and body bytes for the access
 // log and metrics, and puts the request ID on every response (GW-22), after
-// the route's response transforms.
+// the route's response transforms, as it does the RateLimit fields (ADR-0018).
 type responseRecorder struct {
 	http.ResponseWriter
 	requestID string
-	status    int // final status, 0 until written; 1xx other than 101 don't count
-	bytes     int64
+	// RateLimit-Policy and RateLimit field values (ADR-0018), "" for none.
+	rateLimitPolicy, rateLimit string
+	status                     int // final status, 0 until written; 1xx other than 101 don't count
+	bytes                      int64
 }
 
 func (w *responseRecorder) WriteHeader(code int) {
 	w.Header().Set(telemetry.RequestIDHeader, w.requestID)
+	w.setRateLimit(w.Header())
 	if w.status == 0 && (code >= 200 || code == http.StatusSwitchingProtocols) {
 		w.status = code
 	}
 	w.ResponseWriter.WriteHeader(code)
+}
+
+// setRateLimit sets the request's RateLimit-Policy and RateLimit fields in h,
+// replacing any the upstream sent; with none, the upstream's pass through.
+func (w *responseRecorder) setRateLimit(h http.Header) {
+	if w.rateLimit != "" {
+		h.Set("RateLimit-Policy", w.rateLimitPolicy)
+		h.Set("RateLimit", w.rateLimit)
+	}
 }
 
 func (w *responseRecorder) Write(p []byte) (int, error) {

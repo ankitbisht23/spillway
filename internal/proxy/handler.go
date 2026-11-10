@@ -11,10 +11,12 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/netip"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/ankitbisht23/spillway/internal/config"
+	"github.com/ankitbisht23/spillway/internal/ratelimit/local"
 	"github.com/ankitbisht23/spillway/internal/router"
 	"github.com/ankitbisht23/spillway/internal/telemetry"
 )
@@ -26,6 +28,7 @@ type Handler struct {
 	identity func() *config.Identity
 	trusted  TrustedProxies
 	pools    *Registry
+	limiters *local.Registry
 	rec      *telemetry.Recorder
 	log      *slog.Logger
 	errLog   *log.Logger
@@ -34,15 +37,10 @@ type Handler struct {
 // NewHandler returns a Handler that reads the current snapshot from snapshot
 // and the current identity from identity once per request (GW-21, GW-17),
 // takes the client IP from X-Forwarded-For only behind trusted proxies
-// (SEC-05), and records requests with rec (OB-01, OB-03).
-func NewHandler(snapshot func() *config.Snapshot, identity func() *config.Identity, trusted TrustedProxies, pools *Registry, rec *telemetry.Recorder, log *slog.Logger) *Handler {
-	return &Handler{snapshot: snapshot, identity: identity, trusted: trusted, pools: pools, rec: rec, log: log, errLog: slog.NewLogLogger(log.Handler(), slog.LevelWarn)}
-}
-
-// client is who sent a request, for the rate-limit key templates (RL-04).
-type client struct {
-	ip       netip.Addr       // invalid if the peer address did not parse
-	consumer *config.Consumer // nil if anonymous
+// (SEC-05), checks the snapshot's rate limit policies with the limiters in
+// limiters (ADR-0017), and records requests with rec (OB-01, OB-03).
+func NewHandler(snapshot func() *config.Snapshot, identity func() *config.Identity, trusted TrustedProxies, pools *Registry, limiters *local.Registry, rec *telemetry.Recorder, log *slog.Logger) *Handler {
+	return &Handler{snapshot: snapshot, identity: identity, trusted: trusted, pools: pools, limiters: limiters, rec: rec, log: log, errLog: slog.NewLogLogger(log.Handler(), slog.LevelWarn)}
 }
 
 // statusClientClosed is recorded for a request whose client went away before
@@ -75,7 +73,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // serve answers r and notes in q what the access log and metrics need.
-func (h *Handler) serve(w http.ResponseWriter, r *http.Request, q *telemetry.Request) {
+func (h *Handler) serve(w *responseRecorder, r *http.Request, q *telemetry.Request) {
 	if r.Method == http.MethodConnect {
 		http.Error(w, "CONNECT is not supported", http.StatusMethodNotAllowed)
 		return
@@ -91,20 +89,40 @@ func (h *Handler) serve(w http.ResponseWriter, r *http.Request, q *telemetry.Req
 	// the route's own prefix rewrite (GW-02), so the upstream never sees a
 	// path that would have matched another route (ADR-0007).
 	path := router.CleanPath(r.URL.Path)
-	route, _, ok := h.snapshot().Match(r.Host, r.Method, path, r.Header)
+	s := h.snapshot()
+	route, _, ok := s.Match(r.Host, r.Method, path, r.Header)
 	if !ok {
 		http.Error(w, "no route", http.StatusNotFound)
 		return
 	}
 	q.Route = route.Name
-	// Who sent the request, for the rate-limit key templates, which run
-	// before and after key resolution (ADR-0017).
+
+	// Rate limits (ADR-0017): the policies that need no identity, then API
+	// key resolution, then the policies that use the key's identity. They
+	// run before the size limits, so oversized requests count too. A request
+	// denied in the first phase is not authenticated.
 	peer, _ := netip.ParseAddrPort(r.RemoteAddr)
-	c := client{ip: h.trusted.ClientIP(peer.Addr(), r.Header.Values("X-Forwarded-For"))}
-	if c.consumer, ok = h.authenticate(r.Header, q); !ok {
-		jsonError(w, http.StatusUnauthorized, "invalid API key")
+	lim := newLimits(s, route, h.limiters, h.rec, r, q, h.trusted.ClientIP(peer.Addr(), r.Header.Values("X-Forwarded-For")))
+	defer lim.release()
+	allowed := lim.check(false)
+	if allowed {
+		consumer, ok := h.authenticate(r.Header, q)
+		if !ok {
+			w.rateLimitPolicy, w.rateLimit = lim.headers() // the first phase's deductions stay
+			jsonError(w, http.StatusUnauthorized, "invalid API key")
+			return
+		}
+		lim.identify(consumer, r.Header.Get("X-API-Key"))
+		allowed = lim.check(true)
+	}
+	w.rateLimitPolicy, w.rateLimit = lim.headers()
+	if !allowed {
+		q.Reason = telemetry.ReasonRateLimited
+		w.Header().Set("Retry-After", strconv.FormatInt(lim.retryAfter(), 10))
+		jsonError(w, http.StatusTooManyRequests, "rate limited")
 		return
 	}
+
 	// Size limits (GW-03), before anything reaches the upstream.
 	if route.MaxHeaderBytes > 0 && headerBytes(r) > route.MaxHeaderBytes {
 		http.Error(w, http.StatusText(http.StatusRequestHeaderFieldsTooLarge), http.StatusRequestHeaderFieldsTooLarge)
@@ -189,6 +207,7 @@ func (h *Handler) serve(w http.ResponseWriter, r *http.Request, q *telemetry.Req
 			// Replaces any the upstream sent. responseRecorder sets it too,
 			// but a 101 is written without WriteHeader (GW-22).
 			resp.Header.Set(telemetry.RequestIDHeader, q.ID)
+			w.setRateLimit(resp.Header)
 			if route.HSTS != "" && r.TLS != nil {
 				resp.Header.Set("Strict-Transport-Security", route.HSTS) // SEC-01; replaces the upstream's
 			}

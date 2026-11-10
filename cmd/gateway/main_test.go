@@ -131,7 +131,8 @@ func TestServe(t *testing.T) {
 	t.Cleanup(up.Close)
 	cfg := filepath.Join(t.TempDir(), "config.yaml")
 	yaml := "version: 7\nupstreams: [{ name: up, endpoints: [{ address: '" + up.Listener.Addr().String() + "' }] }]\n" +
-		"routes: [{ name: all, match: { path_prefix: / }, upstream: up }]\n"
+		"routes: [{ name: all, match: { path_prefix: / }, upstream: up }, { name: limited, match: { path: /limited }, upstream: up }]\n" +
+		"policies: [{ name: once, level: route, match: { routes: [limited] }, key_template: '{route}', algorithm: gcra, limits: [{ rate: 1, period: 1h, burst: 1 }], local: true }]\n"
 	if err := os.WriteFile(cfg, []byte(yaml), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -183,6 +184,14 @@ func TestServe(t *testing.T) {
 	// admin paths.
 	requests := `gw_requests_total{code_class="2xx",method="GET",origin="upstream",reason="none",route="all",tenant="none"} `
 	waitFor(t, "6 requests in /metrics", func() bool { _, body := get(t, admin+"/metrics"); return strings.Contains(body, "\n"+requests+"6\n") })
+
+	// The config's local policy is enforced (ADR-0017).
+	if code, _ := get(t, traffic+"/limited"); code != http.StatusOK {
+		t.Errorf("first GET /limited = %d, want 200", code)
+	}
+	if code, _ := get(t, traffic+"/limited"); code != http.StatusTooManyRequests {
+		t.Errorf("second GET /limited = %d, want 429", code)
+	}
 
 	// The identity file has no API keys, so any key is answered 401 (GW-17).
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, traffic+"/x", nil)
