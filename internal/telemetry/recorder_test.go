@@ -78,7 +78,7 @@ func TestAccessLog(t *testing.T) {
 	rec.Request(t.Context(), &Request{
 		ID: "req-1", TraceID: "4bf92f3577b34da6a3ce929d0e0e4736", Route: "orders", Method: "POST", Status: 201,
 		Origin: OriginUpstream, Reason: ReasonNone, Tenant: NoTenant, Upstream: "orders-svc",
-		Latency: 1500 * time.Microsecond, BytesIn: 5, BytesOut: 42,
+		Latency: 1500 * time.Microsecond, BytesIn: 5, BytesOut: 42, KeyHash: "64571644321b",
 	})
 	if n := strings.Count(buf.String(), "\n"); n != 1 {
 		t.Fatalf("%d lines, want 1:\n%s", n, buf)
@@ -90,7 +90,7 @@ func TestAccessLog(t *testing.T) {
 	want := map[string]any{
 		"level": "INFO", "msg": "access", "request_id": "req-1", "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
 		"route": "orders", "method": "POST", "status": 201.0, "latency_ms": 1.5, "bytes_in": 5.0, "bytes_out": 42.0,
-		"upstream": "orders-svc", "decisions": []any{}, "key_hash": "",
+		"upstream": "orders-svc", "decisions": []any{}, "key_hash": "64571644321b",
 	}
 	delete(line, "time")
 	if got, _ := json.Marshal(line); string(got) != mustJSON(t, want) {

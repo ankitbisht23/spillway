@@ -117,14 +117,16 @@ func snapshot(t *testing.T, yaml string) *config.Snapshot {
 	return s
 }
 
-// gateway serves h through a real HTTP server; current is the snapshot. It
-// access-logs every request to logs and keeps its metrics in metrics.
+// gateway serves h through a real HTTP server; current is the snapshot and
+// identity the identity, nil until a test sets one. It access-logs every
+// request to logs and keeps its metrics in metrics.
 type gateway struct {
 	*httptest.Server
-	reg     *Registry
-	current atomic.Pointer[config.Snapshot]
-	metrics *prometheus.Registry
-	logs    *logBuffer
+	reg      *Registry
+	current  atomic.Pointer[config.Snapshot]
+	identity atomic.Pointer[config.Identity]
+	metrics  *prometheus.Registry
+	logs     *logBuffer
 }
 
 func newGateway(t *testing.T, res Resolver, yaml string) *gateway {
@@ -132,7 +134,7 @@ func newGateway(t *testing.T, res Resolver, yaml string) *gateway {
 	g := &gateway{reg: NewRegistry(loopback, res, slog.New(slog.DiscardHandler)), metrics: prometheus.NewRegistry(), logs: &logBuffer{}}
 	g.apply(t, yaml)
 	rec := telemetry.NewRecorder(g.metrics, slog.New(slog.NewJSONHandler(g.logs, nil)), 1)
-	g.Server = httptest.NewServer(NewHandler(g.current.Load, g.reg, rec, slog.New(slog.DiscardHandler)))
+	g.Server = httptest.NewServer(NewHandler(g.current.Load, g.identity.Load, nil, g.reg, rec, slog.New(slog.DiscardHandler)))
 	t.Cleanup(g.Close)
 	return g
 }
@@ -352,7 +354,7 @@ routes:
 }
 
 func TestProxyErrorStatus(t *testing.T) {
-	h := NewHandler(nil, nil, nil, slog.New(slog.DiscardHandler))
+	h := NewHandler(nil, nil, nil, nil, nil, slog.New(slog.DiscardHandler))
 	for _, tt := range []struct {
 		err    error
 		want   int

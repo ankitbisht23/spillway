@@ -91,16 +91,18 @@ func serve(ctx context.Context, s settings, log *slog.Logger) error {
 	}
 	// API keys resolve against the identity file, polled like the config
 	// (ADR-0017); without one, every key is invalid.
+	identity := func() *config.Identity { return nil }
 	if s.identity != "" {
 		ids, err := config.NewIdentityWatcher(s.identity, log)
 		if err != nil {
 			return err
 		}
+		identity = ids.Identity
 		go ids.Run(ctx, time.Second)
 	}
 	reg := telemetry.NewRegistry()
 	rec := telemetry.NewRecorder(reg, log, s.accessLogSampleRate)
-	srv := proxy.NewServer(proxy.NewHandler(cfg.Snapshot, pools, rec, log), log)
+	srv := proxy.NewServer(proxy.NewHandler(cfg.Snapshot, identity, s.trusted, pools, rec, log), log)
 	if s.tlsCert != "" {
 		certs, err := proxy.NewCerts(s.tlsCert, s.tlsKey, log)
 		if err != nil {

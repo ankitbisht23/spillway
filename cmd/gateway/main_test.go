@@ -40,7 +40,7 @@ func TestLoadSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	if s.configPath != "/etc/spillway/config.yaml" || s.identity != "" || s.httpAddr != ":8000" || s.tlsCert != "" || s.adminAddr != "127.0.0.1:8001" || len(s.allow) != 1 || s.dnsRefresh != 30*time.Second ||
-		s.accessLogSampleRate != 1 || s.otlpEndpoint != "" {
+		len(s.trusted) != 0 || s.accessLogSampleRate != 1 || s.otlpEndpoint != "" {
 		t.Errorf("settings = %+v", s)
 	}
 	tlsOnly := map[string]string{"SPILLWAY_GATEWAY_HTTP_ADDR": "", "SPILLWAY_GATEWAY_TLS_CERT": "/c.pem", "SPILLWAY_GATEWAY_TLS_KEY": "/k.pem"}
@@ -53,6 +53,9 @@ func TestLoadSettings(t *testing.T) {
 	}
 	if s, err := loadSettings(env(map[string]string{"SPILLWAY_GATEWAY_IDENTITY": "/etc/spillway/identity.yaml"})); err != nil || s.identity != "/etc/spillway/identity.yaml" {
 		t.Errorf("identity file: %+v, %v", s, err)
+	}
+	if s, err := loadSettings(env(map[string]string{"SPILLWAY_GATEWAY_TRUSTED_PROXIES": "10.0.0.0/8, 2001:db8::/32"})); err != nil || len(s.trusted) != 2 {
+		t.Errorf("trusted proxies: %+v, %v", s, err)
 	}
 	if s, err := loadSettings(env(map[string]string{"SPILLWAY_GATEWAY_DNS_REFRESH": "5s"})); err != nil || s.dnsRefresh != 5*time.Second {
 		t.Errorf("DNS refresh 5s: %+v, %v", s, err)
@@ -80,6 +83,7 @@ func TestLoadSettings(t *testing.T) {
 		{map[string]string{"SPILLWAY_GATEWAY_TLS_CERT": "/c.pem"}, "SPILLWAY_GATEWAY_TLS_CERT and SPILLWAY_GATEWAY_TLS_KEY"},
 		{map[string]string{"SPILLWAY_GATEWAY_TLS_KEY": "/k.pem"}, "SPILLWAY_GATEWAY_TLS_CERT and SPILLWAY_GATEWAY_TLS_KEY"},
 		{map[string]string{"SPILLWAY_GATEWAY_ALLOWED_NETWORKS": ""}, "SPILLWAY_GATEWAY_ALLOWED_NETWORKS"},
+		{map[string]string{"SPILLWAY_GATEWAY_TRUSTED_PROXIES": "10.0.0.1"}, "SPILLWAY_GATEWAY_TRUSTED_PROXIES"},
 		{map[string]string{"SPILLWAY_GATEWAY_DNS_REFRESH": "0s"}, "SPILLWAY_GATEWAY_DNS_REFRESH"},
 		{map[string]string{"SPILLWAY_GATEWAY_ACCESS_LOG_SAMPLE_RATE": "-0.1"}, "SPILLWAY_GATEWAY_ACCESS_LOG_SAMPLE_RATE"},
 		{map[string]string{"SPILLWAY_GATEWAY_ACCESS_LOG_SAMPLE_RATE": "1.5"}, "SPILLWAY_GATEWAY_ACCESS_LOG_SAMPLE_RATE"},
@@ -179,6 +183,21 @@ func TestServe(t *testing.T) {
 	// admin paths.
 	requests := `gw_requests_total{code_class="2xx",method="GET",origin="upstream",reason="none",route="all",tenant="none"} `
 	waitFor(t, "6 requests in /metrics", func() bool { _, body := get(t, admin+"/metrics"); return strings.Contains(body, "\n"+requests+"6\n") })
+
+	// The identity file has no API keys, so any key is answered 401 (GW-17).
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, traffic+"/x", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("X-API-Key", "unknown-key-0000")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("GET /x with an unknown API key = %d, want 401", resp.StatusCode)
+	}
 
 	slow := make(chan int)
 	go func() { code, _ := get(t, traffic+"/slow"); slow <- code }()

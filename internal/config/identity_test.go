@@ -72,6 +72,13 @@ func TestIdentityLookup(t *testing.T) {
 	}
 }
 
+func TestKeyHash(t *testing.T) {
+	// The first 12 hex digits of the hash in ADR-0017's example identity.
+	if got := KeyHash(aliceKey); got != "64571644321b" || got != hashHex(aliceKey)[:12] {
+		t.Errorf("KeyHash(alice's key) = %q, want 64571644321b", got)
+	}
+}
+
 func TestIdentityRejects(t *testing.T) {
 	key := func(prefix, hash, consumer string) string {
 		return "consumers: [{name: alice}]\napi_keys: [{prefix: '" + prefix + "', hash: '" + hash + "', consumer: '" + consumer + "'}]"

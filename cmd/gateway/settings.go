@@ -25,6 +25,9 @@ type settings struct {
 	allow      proxy.Allowlist // SPILLWAY_GATEWAY_ALLOWED_NETWORKS: comma-separated CIDRs (SEC-06)
 	dnsRefresh time.Duration   // SPILLWAY_GATEWAY_DNS_REFRESH: upstream re-resolution interval (GW-06), default 30s
 
+	// Clients (SEC-05)
+	trusted proxy.TrustedProxies // SPILLWAY_GATEWAY_TRUSTED_PROXIES: comma-separated CIDRs of proxies whose X-Forwarded-For is believed, default none
+
 	// Logs (OB-03)
 	accessLogSampleRate float64 // SPILLWAY_GATEWAY_ACCESS_LOG_SAMPLE_RATE: share of 1xx-3xx and upstream 4xx requests access-logged, 0 to 1, default 1
 	otlpEndpoint        string  // SPILLWAY_GATEWAY_OTLP_ENDPOINT: OTel Collector URL for logs over OTLP/gRPC, off when empty
@@ -60,6 +63,9 @@ func loadSettings(getenv func(string) string) (settings, error) {
 	var err error
 	if s.allow, err = proxy.ParseAllowlist(getenv("SPILLWAY_GATEWAY_ALLOWED_NETWORKS")); err != nil {
 		return s, fmt.Errorf("SPILLWAY_GATEWAY_ALLOWED_NETWORKS: %w", err)
+	}
+	if s.trusted, err = proxy.ParseTrustedProxies(getenv("SPILLWAY_GATEWAY_TRUSTED_PROXIES")); err != nil {
+		return s, fmt.Errorf("SPILLWAY_GATEWAY_TRUSTED_PROXIES: %w", err)
 	}
 	if v := getenv("SPILLWAY_GATEWAY_DNS_REFRESH"); v != "" {
 		if s.dnsRefresh, err = time.ParseDuration(v); err != nil || s.dnsRefresh <= 0 {

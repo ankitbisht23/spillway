@@ -4,11 +4,13 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"io"
 	"log"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/netip"
 	"strings"
 	"time"
 
@@ -21,6 +23,8 @@ import (
 // route's upstream, and records every request it answers.
 type Handler struct {
 	snapshot func() *config.Snapshot
+	identity func() *config.Identity
+	trusted  TrustedProxies
 	pools    *Registry
 	rec      *telemetry.Recorder
 	log      *slog.Logger
@@ -28,9 +32,17 @@ type Handler struct {
 }
 
 // NewHandler returns a Handler that reads the current snapshot from snapshot
-// once per request (GW-21) and records requests with rec (OB-01, OB-03).
-func NewHandler(snapshot func() *config.Snapshot, pools *Registry, rec *telemetry.Recorder, log *slog.Logger) *Handler {
-	return &Handler{snapshot: snapshot, pools: pools, rec: rec, log: log, errLog: slog.NewLogLogger(log.Handler(), slog.LevelWarn)}
+// and the current identity from identity once per request (GW-21, GW-17),
+// takes the client IP from X-Forwarded-For only behind trusted proxies
+// (SEC-05), and records requests with rec (OB-01, OB-03).
+func NewHandler(snapshot func() *config.Snapshot, identity func() *config.Identity, trusted TrustedProxies, pools *Registry, rec *telemetry.Recorder, log *slog.Logger) *Handler {
+	return &Handler{snapshot: snapshot, identity: identity, trusted: trusted, pools: pools, rec: rec, log: log, errLog: slog.NewLogLogger(log.Handler(), slog.LevelWarn)}
+}
+
+// client is who sent a request, for the rate-limit key templates (RL-04).
+type client struct {
+	ip       netip.Addr       // invalid if the peer address did not parse
+	consumer *config.Consumer // nil if anonymous
 }
 
 // statusClientClosed is recorded for a request whose client went away before
@@ -85,6 +97,14 @@ func (h *Handler) serve(w http.ResponseWriter, r *http.Request, q *telemetry.Req
 		return
 	}
 	q.Route = route.Name
+	// Who sent the request, for the rate-limit key templates, which run
+	// before and after key resolution (ADR-0017).
+	peer, _ := netip.ParseAddrPort(r.RemoteAddr)
+	c := client{ip: h.trusted.ClientIP(peer.Addr(), r.Header.Values("X-Forwarded-For"))}
+	if c.consumer, ok = h.authenticate(r.Header, q); !ok {
+		jsonError(w, http.StatusUnauthorized, "invalid API key")
+		return
+	}
 	// Size limits (GW-03), before anything reaches the upstream.
 	if route.MaxHeaderBytes > 0 && headerBytes(r) > route.MaxHeaderBytes {
 		http.Error(w, http.StatusText(http.StatusRequestHeaderFieldsTooLarge), http.StatusRequestHeaderFieldsTooLarge)
@@ -185,6 +205,32 @@ func (h *Handler) serve(w http.ResponseWriter, r *http.Request, q *telemetry.Req
 		ErrorLog:     h.errLog,
 	}
 	rp.ServeHTTP(w, r)
+}
+
+// authenticate resolves a request's API key (GW-17, SEC-03), sent in
+// X-API-Key on every route until per-route auth modes (GW-20, M5). No key is
+// anonymous: a nil consumer and true. One key that resolves gives its
+// consumer; anything else, an empty or unknown key or several values, is
+// false. It notes the key's hash, never the key, in q for the access log.
+func (h *Handler) authenticate(header http.Header, q *telemetry.Request) (*config.Consumer, bool) {
+	keys := header.Values("X-API-Key")
+	if len(keys) == 0 {
+		return nil, true
+	}
+	q.KeyHash = config.KeyHash(keys[0])
+	if len(keys) != 1 {
+		return nil, false
+	}
+	return h.identity().Lookup(keys[0])
+}
+
+// jsonError answers with the gateway's JSON error body, {"error": msg}
+// (ADR-0017); msg must not need escaping.
+func jsonError(w http.ResponseWriter, code int, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(code)
+	_, _ = io.WriteString(w, `{"error":"`+msg+`"}`)
 }
 
 // headerBytes is the size of r's header fields as HTTP/1.1 sends them,

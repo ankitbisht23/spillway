@@ -42,6 +42,7 @@ type Request struct {
 	Reason   string // why the gateway answered itself: ReasonNone or ReasonUpstream
 	Tenant   string // NoTenant until tenants exist (M5)
 	Upstream string // "" if no upstream was chosen
+	KeyHash  string // config.KeyHash of the API key presented, "" if none (SEC-03)
 	Latency  time.Duration
 	BytesIn  int64 // request body bytes read from the client
 	BytesOut int64 // response body bytes written to the client
@@ -107,7 +108,7 @@ func (rec *Recorder) Request(ctx context.Context, q *Request) {
 		slog.Int64("bytes_out", q.BytesOut),
 		slog.String("upstream", q.Upstream),
 		noDecisions,
-		slog.String("key_hash", ""), // API keys arrive in M2 (SEC-03)
+		slog.String("key_hash", q.KeyHash),
 	)
 }
 
