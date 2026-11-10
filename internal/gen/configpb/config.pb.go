@@ -30,9 +30,12 @@ const (
 type Config struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Config version; each publish increases it (CP-02).
-	Version       int64       `protobuf:"varint,1,opt,name=version,proto3" json:"version,omitempty"`
-	Upstreams     []*Upstream `protobuf:"bytes,2,rep,name=upstreams,proto3" json:"upstreams,omitempty"`
-	Routes        []*Route    `protobuf:"bytes,3,rep,name=routes,proto3" json:"routes,omitempty"`
+	Version   int64              `protobuf:"varint,1,opt,name=version,proto3" json:"version,omitempty"`
+	Upstreams []*Upstream        `protobuf:"bytes,2,rep,name=upstreams,proto3" json:"upstreams,omitempty"`
+	Routes    []*Route           `protobuf:"bytes,3,rep,name=routes,proto3" json:"routes,omitempty"`
+	Ratelimit *RateLimitSettings `protobuf:"bytes,4,opt,name=ratelimit,proto3" json:"ratelimit,omitempty"`
+	// Rate limiting policies, evaluated in this order (RL-03, ADR-0017).
+	Policies      []*Policy `protobuf:"bytes,5,rep,name=policies,proto3" json:"policies,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -84,6 +87,20 @@ func (x *Config) GetUpstreams() []*Upstream {
 func (x *Config) GetRoutes() []*Route {
 	if x != nil {
 		return x.Routes
+	}
+	return nil
+}
+
+func (x *Config) GetRatelimit() *RateLimitSettings {
+	if x != nil {
+		return x.Ratelimit
+	}
+	return nil
+}
+
+func (x *Config) GetPolicies() []*Policy {
+	if x != nil {
+		return x.Policies
 	}
 	return nil
 }
@@ -218,7 +235,9 @@ type Route struct {
 	// Strict-Transport-Security max-age for the route's responses over TLS, as
 	// a Go duration in whole seconds such as "8760h"; unset sends no header
 	// (SEC-01).
-	HstsMaxAge    string `protobuf:"bytes,12,opt,name=hsts_max_age,json=hstsMaxAge,proto3" json:"hsts_max_age,omitempty"`
+	HstsMaxAge string `protobuf:"bytes,12,opt,name=hsts_max_age,json=hstsMaxAge,proto3" json:"hsts_max_age,omitempty"`
+	// Cost units each request deducts (RL-07); unset means 1.
+	Cost          int64 `protobuf:"varint,13,opt,name=cost,proto3" json:"cost,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -335,6 +354,13 @@ func (x *Route) GetHstsMaxAge() string {
 		return x.HstsMaxAge
 	}
 	return ""
+}
+
+func (x *Route) GetCost() int64 {
+	if x != nil {
+		return x.Cost
+	}
+	return 0
 }
 
 // HeaderTransform changes headers: remove first, then set, then add (GW-02).
@@ -676,20 +702,480 @@ func (x *HeaderMatch) GetRegex() string {
 	return ""
 }
 
+// RateLimitSettings apply to every policy.
+type RateLimitSettings struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Gateway replicas sharing every limit; each runs limit / replicas, rounded
+	// down, minimum 1 (RL-31). Unset means 1.
+	Replicas      int32 `protobuf:"varint,1,opt,name=replicas,proto3" json:"replicas,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RateLimitSettings) Reset() {
+	*x = RateLimitSettings{}
+	mi := &file_config_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RateLimitSettings) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RateLimitSettings) ProtoMessage() {}
+
+func (x *RateLimitSettings) ProtoReflect() protoreflect.Message {
+	mi := &file_config_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RateLimitSettings.ProtoReflect.Descriptor instead.
+func (*RateLimitSettings) Descriptor() ([]byte, []int) {
+	return file_config_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *RateLimitSettings) GetReplicas() int32 {
+	if x != nil {
+		return x.Replicas
+	}
+	return 0
+}
+
+// Policy is a rate limiting policy (RL-03, ADR-0017).
+type Policy struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Unique; 1-64 characters from [A-Za-z0-9._-].
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// global, tenant, consumer or route.
+	Level string       `protobuf:"bytes,2,opt,name=level,proto3" json:"level,omitempty"`
+	Match *PolicyMatch `protobuf:"bytes,3,opt,name=match,proto3" json:"match,omitempty"`
+	// Literal text with placeholders such as "{tenant}:{route}" (RL-04).
+	KeyTemplate string `protobuf:"bytes,4,opt,name=key_template,json=keyTemplate,proto3" json:"key_template,omitempty"`
+	// gcra, sliding_window, fixed_window or concurrency.
+	Algorithm string   `protobuf:"bytes,5,opt,name=algorithm,proto3" json:"algorithm,omitempty"`
+	Limits    []*Limit `protobuf:"bytes,6,rep,name=limits,proto3" json:"limits,omitempty"`
+	// enforce, shadow or off; unset means enforce (RL-26).
+	Mode string `protobuf:"bytes,7,opt,name=mode,proto3" json:"mode,omitempty"`
+	// Runs in gateway memory only and never touches Redis (RL-17).
+	Local         bool `protobuf:"varint,8,opt,name=local,proto3" json:"local,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Policy) Reset() {
+	*x = Policy{}
+	mi := &file_config_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Policy) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Policy) ProtoMessage() {}
+
+func (x *Policy) ProtoReflect() protoreflect.Message {
+	mi := &file_config_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Policy.ProtoReflect.Descriptor instead.
+func (*Policy) Descriptor() ([]byte, []int) {
+	return file_config_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *Policy) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *Policy) GetLevel() string {
+	if x != nil {
+		return x.Level
+	}
+	return ""
+}
+
+func (x *Policy) GetMatch() *PolicyMatch {
+	if x != nil {
+		return x.Match
+	}
+	return nil
+}
+
+func (x *Policy) GetKeyTemplate() string {
+	if x != nil {
+		return x.KeyTemplate
+	}
+	return ""
+}
+
+func (x *Policy) GetAlgorithm() string {
+	if x != nil {
+		return x.Algorithm
+	}
+	return ""
+}
+
+func (x *Policy) GetLimits() []*Limit {
+	if x != nil {
+		return x.Limits
+	}
+	return nil
+}
+
+func (x *Policy) GetMode() string {
+	if x != nil {
+		return x.Mode
+	}
+	return ""
+}
+
+func (x *Policy) GetLocal() bool {
+	if x != nil {
+		return x.Local
+	}
+	return false
+}
+
+// PolicyMatch is the requests a policy applies to.
+type PolicyMatch struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Route names, or the single entry "*" for every route.
+	Routes []string `protobuf:"bytes,1,rep,name=routes,proto3" json:"routes,omitempty"`
+	// Upper-case methods; empty means every method.
+	Methods       []string `protobuf:"bytes,2,rep,name=methods,proto3" json:"methods,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PolicyMatch) Reset() {
+	*x = PolicyMatch{}
+	mi := &file_config_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PolicyMatch) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PolicyMatch) ProtoMessage() {}
+
+func (x *PolicyMatch) ProtoReflect() protoreflect.Message {
+	mi := &file_config_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PolicyMatch.ProtoReflect.Descriptor instead.
+func (*PolicyMatch) Descriptor() ([]byte, []int) {
+	return file_config_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *PolicyMatch) GetRoutes() []string {
+	if x != nil {
+		return x.Routes
+	}
+	return nil
+}
+
+func (x *PolicyMatch) GetMethods() []string {
+	if x != nil {
+		return x.Methods
+	}
+	return nil
+}
+
+// Limit is one limit of a policy, as a cluster-wide number (RL-31).
+type Limit struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Cost units per period; for concurrency, the max in flight.
+	Rate int64 `protobuf:"varint,1,opt,name=rate,proto3" json:"rate,omitempty"`
+	// A Go duration in whole seconds, such as "1s" or "1h"; none for
+	// concurrency.
+	Period string `protobuf:"bytes,2,opt,name=period,proto3" json:"period,omitempty"`
+	// GCRA only; defaults to rate for periods up to 1m and is required above
+	// (RL-03).
+	Burst         int64 `protobuf:"varint,3,opt,name=burst,proto3" json:"burst,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Limit) Reset() {
+	*x = Limit{}
+	mi := &file_config_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Limit) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Limit) ProtoMessage() {}
+
+func (x *Limit) ProtoReflect() protoreflect.Message {
+	mi := &file_config_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Limit.ProtoReflect.Descriptor instead.
+func (*Limit) Descriptor() ([]byte, []int) {
+	return file_config_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *Limit) GetRate() int64 {
+	if x != nil {
+		return x.Rate
+	}
+	return 0
+}
+
+func (x *Limit) GetPeriod() string {
+	if x != nil {
+		return x.Period
+	}
+	return ""
+}
+
+func (x *Limit) GetBurst() int64 {
+	if x != nil {
+		return x.Burst
+	}
+	return 0
+}
+
+// Identity is the identity section of a snapshot (ADR-0005, GW-17). Before
+// M5 it comes from its own YAML file, with its own version.
+type Identity struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Identity version; each change increases it.
+	Version       int64       `protobuf:"varint,1,opt,name=version,proto3" json:"version,omitempty"`
+	Consumers     []*Consumer `protobuf:"bytes,2,rep,name=consumers,proto3" json:"consumers,omitempty"`
+	ApiKeys       []*ApiKey   `protobuf:"bytes,3,rep,name=api_keys,json=apiKeys,proto3" json:"api_keys,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Identity) Reset() {
+	*x = Identity{}
+	mi := &file_config_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Identity) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Identity) ProtoMessage() {}
+
+func (x *Identity) ProtoReflect() protoreflect.Message {
+	mi := &file_config_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Identity.ProtoReflect.Descriptor instead.
+func (*Identity) Descriptor() ([]byte, []int) {
+	return file_config_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *Identity) GetVersion() int64 {
+	if x != nil {
+		return x.Version
+	}
+	return 0
+}
+
+func (x *Identity) GetConsumers() []*Consumer {
+	if x != nil {
+		return x.Consumers
+	}
+	return nil
+}
+
+func (x *Identity) GetApiKeys() []*ApiKey {
+	if x != nil {
+		return x.ApiKeys
+	}
+	return nil
+}
+
+// Consumer is a client of the API.
+type Consumer struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Unique.
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// Optional; empty leaves {tenant} unfilled.
+	Tenant        string `protobuf:"bytes,2,opt,name=tenant,proto3" json:"tenant,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Consumer) Reset() {
+	*x = Consumer{}
+	mi := &file_config_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Consumer) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Consumer) ProtoMessage() {}
+
+func (x *Consumer) ProtoReflect() protoreflect.Message {
+	mi := &file_config_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Consumer.ProtoReflect.Descriptor instead.
+func (*Consumer) Descriptor() ([]byte, []int) {
+	return file_config_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *Consumer) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *Consumer) GetTenant() string {
+	if x != nil {
+		return x.Tenant
+	}
+	return ""
+}
+
+// ApiKey is a static API key, stored as its prefix and hash, never the key
+// (GW-17, SEC-03).
+type ApiKey struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The key's first 12 bytes; unique.
+	Prefix string `protobuf:"bytes,1,opt,name=prefix,proto3" json:"prefix,omitempty"`
+	// Lower-case hex SHA-256 of the whole key.
+	Hash string `protobuf:"bytes,2,opt,name=hash,proto3" json:"hash,omitempty"`
+	// Name of the consumer the key belongs to.
+	Consumer      string `protobuf:"bytes,3,opt,name=consumer,proto3" json:"consumer,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ApiKey) Reset() {
+	*x = ApiKey{}
+	mi := &file_config_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ApiKey) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ApiKey) ProtoMessage() {}
+
+func (x *ApiKey) ProtoReflect() protoreflect.Message {
+	mi := &file_config_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ApiKey.ProtoReflect.Descriptor instead.
+func (*ApiKey) Descriptor() ([]byte, []int) {
+	return file_config_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *ApiKey) GetPrefix() string {
+	if x != nil {
+		return x.Prefix
+	}
+	return ""
+}
+
+func (x *ApiKey) GetHash() string {
+	if x != nil {
+		return x.Hash
+	}
+	return ""
+}
+
+func (x *ApiKey) GetConsumer() string {
+	if x != nil {
+		return x.Consumer
+	}
+	return ""
+}
+
 var File_config_proto protoreflect.FileDescriptor
 
 const file_config_proto_rawDesc = "" +
 	"\n" +
-	"\fconfig.proto\x12\x12spillway.config.v1\"\x91\x01\n" +
+	"\fconfig.proto\x12\x12spillway.config.v1\"\x8e\x02\n" +
 	"\x06Config\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\x03R\aversion\x12:\n" +
 	"\tupstreams\x18\x02 \x03(\v2\x1c.spillway.config.v1.UpstreamR\tupstreams\x121\n" +
-	"\x06routes\x18\x03 \x03(\v2\x19.spillway.config.v1.RouteR\x06routes\"Z\n" +
+	"\x06routes\x18\x03 \x03(\v2\x19.spillway.config.v1.RouteR\x06routes\x12C\n" +
+	"\tratelimit\x18\x04 \x01(\v2%.spillway.config.v1.RateLimitSettingsR\tratelimit\x126\n" +
+	"\bpolicies\x18\x05 \x03(\v2\x1a.spillway.config.v1.PolicyR\bpolicies\"Z\n" +
 	"\bUpstream\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12:\n" +
 	"\tendpoints\x18\x02 \x03(\v2\x1c.spillway.config.v1.EndpointR\tendpoints\"$\n" +
 	"\bEndpoint\x12\x18\n" +
-	"\aaddress\x18\x01 \x01(\tR\aaddress\"\x95\x04\n" +
+	"\aaddress\x18\x01 \x01(\tR\aaddress\"\xa9\x04\n" +
 	"\x05Route\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x124\n" +
 	"\x05match\x18\x02 \x01(\v2\x1e.spillway.config.v1.RouteMatchR\x05match\x12\x1a\n" +
@@ -705,7 +1191,8 @@ const file_config_proto_rawDesc = "" +
 	" \x01(\x05R\x0emaxHeaderBytes\x128\n" +
 	"\btimeouts\x18\v \x01(\v2\x1c.spillway.config.v1.TimeoutsR\btimeouts\x12 \n" +
 	"\fhsts_max_age\x18\f \x01(\tR\n" +
-	"hstsMaxAge\"\x8f\x01\n" +
+	"hstsMaxAge\x12\x12\n" +
+	"\x04cost\x18\r \x01(\x03R\x04cost\"\x8f\x01\n" +
 	"\x0fHeaderTransform\x121\n" +
 	"\x03set\x18\x01 \x03(\v2\x1f.spillway.config.v1.HeaderValueR\x03set\x121\n" +
 	"\x03add\x18\x02 \x03(\v2\x1f.spillway.config.v1.HeaderValueR\x03add\x12\x16\n" +
@@ -729,7 +1216,36 @@ const file_config_proto_rawDesc = "" +
 	"\vHeaderMatch\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05exact\x18\x02 \x01(\tR\x05exact\x12\x14\n" +
-	"\x05regex\x18\x03 \x01(\tR\x05regexB8Z6github.com/ankitbisht23/spillway/internal/gen/configpbb\x06proto3"
+	"\x05regex\x18\x03 \x01(\tR\x05regex\"/\n" +
+	"\x11RateLimitSettings\x12\x1a\n" +
+	"\breplicas\x18\x01 \x01(\x05R\breplicas\"\x87\x02\n" +
+	"\x06Policy\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
+	"\x05level\x18\x02 \x01(\tR\x05level\x125\n" +
+	"\x05match\x18\x03 \x01(\v2\x1f.spillway.config.v1.PolicyMatchR\x05match\x12!\n" +
+	"\fkey_template\x18\x04 \x01(\tR\vkeyTemplate\x12\x1c\n" +
+	"\talgorithm\x18\x05 \x01(\tR\talgorithm\x121\n" +
+	"\x06limits\x18\x06 \x03(\v2\x19.spillway.config.v1.LimitR\x06limits\x12\x12\n" +
+	"\x04mode\x18\a \x01(\tR\x04mode\x12\x14\n" +
+	"\x05local\x18\b \x01(\bR\x05local\"?\n" +
+	"\vPolicyMatch\x12\x16\n" +
+	"\x06routes\x18\x01 \x03(\tR\x06routes\x12\x18\n" +
+	"\amethods\x18\x02 \x03(\tR\amethods\"I\n" +
+	"\x05Limit\x12\x12\n" +
+	"\x04rate\x18\x01 \x01(\x03R\x04rate\x12\x16\n" +
+	"\x06period\x18\x02 \x01(\tR\x06period\x12\x14\n" +
+	"\x05burst\x18\x03 \x01(\x03R\x05burst\"\x97\x01\n" +
+	"\bIdentity\x12\x18\n" +
+	"\aversion\x18\x01 \x01(\x03R\aversion\x12:\n" +
+	"\tconsumers\x18\x02 \x03(\v2\x1c.spillway.config.v1.ConsumerR\tconsumers\x125\n" +
+	"\bapi_keys\x18\x03 \x03(\v2\x1a.spillway.config.v1.ApiKeyR\aapiKeys\"6\n" +
+	"\bConsumer\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
+	"\x06tenant\x18\x02 \x01(\tR\x06tenant\"P\n" +
+	"\x06ApiKey\x12\x16\n" +
+	"\x06prefix\x18\x01 \x01(\tR\x06prefix\x12\x12\n" +
+	"\x04hash\x18\x02 \x01(\tR\x04hash\x12\x1a\n" +
+	"\bconsumer\x18\x03 \x01(\tR\bconsumerB8Z6github.com/ankitbisht23/spillway/internal/gen/configpbb\x06proto3"
 
 var (
 	file_config_proto_rawDescOnce sync.Once
@@ -743,34 +1259,47 @@ func file_config_proto_rawDescGZIP() []byte {
 	return file_config_proto_rawDescData
 }
 
-var file_config_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_config_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
 var file_config_proto_goTypes = []any{
-	(*Config)(nil),          // 0: spillway.config.v1.Config
-	(*Upstream)(nil),        // 1: spillway.config.v1.Upstream
-	(*Endpoint)(nil),        // 2: spillway.config.v1.Endpoint
-	(*Route)(nil),           // 3: spillway.config.v1.Route
-	(*HeaderTransform)(nil), // 4: spillway.config.v1.HeaderTransform
-	(*HeaderValue)(nil),     // 5: spillway.config.v1.HeaderValue
-	(*Timeouts)(nil),        // 6: spillway.config.v1.Timeouts
-	(*RouteMatch)(nil),      // 7: spillway.config.v1.RouteMatch
-	(*HeaderMatch)(nil),     // 8: spillway.config.v1.HeaderMatch
+	(*Config)(nil),            // 0: spillway.config.v1.Config
+	(*Upstream)(nil),          // 1: spillway.config.v1.Upstream
+	(*Endpoint)(nil),          // 2: spillway.config.v1.Endpoint
+	(*Route)(nil),             // 3: spillway.config.v1.Route
+	(*HeaderTransform)(nil),   // 4: spillway.config.v1.HeaderTransform
+	(*HeaderValue)(nil),       // 5: spillway.config.v1.HeaderValue
+	(*Timeouts)(nil),          // 6: spillway.config.v1.Timeouts
+	(*RouteMatch)(nil),        // 7: spillway.config.v1.RouteMatch
+	(*HeaderMatch)(nil),       // 8: spillway.config.v1.HeaderMatch
+	(*RateLimitSettings)(nil), // 9: spillway.config.v1.RateLimitSettings
+	(*Policy)(nil),            // 10: spillway.config.v1.Policy
+	(*PolicyMatch)(nil),       // 11: spillway.config.v1.PolicyMatch
+	(*Limit)(nil),             // 12: spillway.config.v1.Limit
+	(*Identity)(nil),          // 13: spillway.config.v1.Identity
+	(*Consumer)(nil),          // 14: spillway.config.v1.Consumer
+	(*ApiKey)(nil),            // 15: spillway.config.v1.ApiKey
 }
 var file_config_proto_depIdxs = []int32{
 	1,  // 0: spillway.config.v1.Config.upstreams:type_name -> spillway.config.v1.Upstream
 	3,  // 1: spillway.config.v1.Config.routes:type_name -> spillway.config.v1.Route
-	2,  // 2: spillway.config.v1.Upstream.endpoints:type_name -> spillway.config.v1.Endpoint
-	7,  // 3: spillway.config.v1.Route.match:type_name -> spillway.config.v1.RouteMatch
-	4,  // 4: spillway.config.v1.Route.request_headers:type_name -> spillway.config.v1.HeaderTransform
-	4,  // 5: spillway.config.v1.Route.response_headers:type_name -> spillway.config.v1.HeaderTransform
-	6,  // 6: spillway.config.v1.Route.timeouts:type_name -> spillway.config.v1.Timeouts
-	5,  // 7: spillway.config.v1.HeaderTransform.set:type_name -> spillway.config.v1.HeaderValue
-	5,  // 8: spillway.config.v1.HeaderTransform.add:type_name -> spillway.config.v1.HeaderValue
-	8,  // 9: spillway.config.v1.RouteMatch.headers:type_name -> spillway.config.v1.HeaderMatch
-	10, // [10:10] is the sub-list for method output_type
-	10, // [10:10] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	9,  // 2: spillway.config.v1.Config.ratelimit:type_name -> spillway.config.v1.RateLimitSettings
+	10, // 3: spillway.config.v1.Config.policies:type_name -> spillway.config.v1.Policy
+	2,  // 4: spillway.config.v1.Upstream.endpoints:type_name -> spillway.config.v1.Endpoint
+	7,  // 5: spillway.config.v1.Route.match:type_name -> spillway.config.v1.RouteMatch
+	4,  // 6: spillway.config.v1.Route.request_headers:type_name -> spillway.config.v1.HeaderTransform
+	4,  // 7: spillway.config.v1.Route.response_headers:type_name -> spillway.config.v1.HeaderTransform
+	6,  // 8: spillway.config.v1.Route.timeouts:type_name -> spillway.config.v1.Timeouts
+	5,  // 9: spillway.config.v1.HeaderTransform.set:type_name -> spillway.config.v1.HeaderValue
+	5,  // 10: spillway.config.v1.HeaderTransform.add:type_name -> spillway.config.v1.HeaderValue
+	8,  // 11: spillway.config.v1.RouteMatch.headers:type_name -> spillway.config.v1.HeaderMatch
+	11, // 12: spillway.config.v1.Policy.match:type_name -> spillway.config.v1.PolicyMatch
+	12, // 13: spillway.config.v1.Policy.limits:type_name -> spillway.config.v1.Limit
+	14, // 14: spillway.config.v1.Identity.consumers:type_name -> spillway.config.v1.Consumer
+	15, // 15: spillway.config.v1.Identity.api_keys:type_name -> spillway.config.v1.ApiKey
+	16, // [16:16] is the sub-list for method output_type
+	16, // [16:16] is the sub-list for method input_type
+	16, // [16:16] is the sub-list for extension type_name
+	16, // [16:16] is the sub-list for extension extendee
+	0,  // [0:16] is the sub-list for field type_name
 }
 
 func init() { file_config_proto_init() }
@@ -784,7 +1313,7 @@ func file_config_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_config_proto_rawDesc), len(file_config_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   9,
+			NumMessages:   16,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
