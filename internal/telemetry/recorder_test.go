@@ -71,14 +71,16 @@ func newTestRecorder(sampleRate float64) (*Recorder, *prometheus.Registry, *byte
 	return NewRecorder(reg, slog.New(slog.NewJSONHandler(buf, nil)), sampleRate), reg, buf
 }
 
-// TestAccessLog: one JSON line per request with every OB-03 field, and no
-// path, query or client address.
+// TestAccessLog: one JSON line per request with every OB-03 field, the
+// rate limit decisions included (RL-27), and no path, query or client
+// address.
 func TestAccessLog(t *testing.T) {
 	rec, _, buf := newTestRecorder(1)
 	rec.Request(t.Context(), &Request{
 		ID: "req-1", TraceID: "4bf92f3577b34da6a3ce929d0e0e4736", Route: "orders", Method: "POST", Status: 201,
 		Origin: OriginUpstream, Reason: ReasonNone, Tenant: NoTenant, Upstream: "orders-svc",
 		Latency: 1500 * time.Microsecond, BytesIn: 5, BytesOut: 42, KeyHash: "64571644321b",
+		Decisions: []Decision{{"per-ip", "allow", "enforce"}, {"per-agent", "deny", "shadow"}},
 	})
 	if n := strings.Count(buf.String(), "\n"); n != 1 {
 		t.Fatalf("%d lines, want 1:\n%s", n, buf)
@@ -90,7 +92,11 @@ func TestAccessLog(t *testing.T) {
 	want := map[string]any{
 		"level": "INFO", "msg": "access", "request_id": "req-1", "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
 		"route": "orders", "method": "POST", "status": 201.0, "latency_ms": 1.5, "bytes_in": 5.0, "bytes_out": 42.0,
-		"upstream": "orders-svc", "decisions": []any{}, "key_hash": "64571644321b",
+		"upstream": "orders-svc", "key_hash": "64571644321b",
+		"decisions": []any{
+			map[string]any{"policy": "per-ip", "decision": "allow", "mode": "enforce"},
+			map[string]any{"policy": "per-agent", "decision": "deny", "mode": "shadow"},
+		},
 	}
 	delete(line, "time")
 	if got, _ := json.Marshal(line); string(got) != mustJSON(t, want) {
@@ -121,6 +127,7 @@ func TestAccessLogSampling(t *testing.T) {
 		{304, OriginUpstream, false},
 		{404, OriginUpstream, false},
 		{429, OriginUpstream, false},
+		{429, OriginGateway, true},
 		{503, OriginUpstream, true},
 		{404, OriginGateway, true},
 		{413, OriginGateway, true},
@@ -186,11 +193,14 @@ func TestMetricLabels(t *testing.T) {
 		{Route: "orders", Method: "GET", Status: 799, Origin: OriginUpstream, Reason: ReasonNone, Upstream: "orders"},
 		{Route: "orders", Method: "DELETE", Status: 504, Origin: OriginGateway, Reason: ReasonUpstream, Upstream: "orders"},
 		{Route: NoRoute, Method: "GET", Status: 404, Origin: OriginGateway, Reason: ReasonNone},
+		{Route: "orders", Method: "GET", Status: 429, Origin: OriginGateway, Reason: ReasonRateLimited, Decisions: []Decision{{"per-ip", "deny", "enforce"}, {"per-agent", "deny", "shadow"}}},
+		{Route: "orders", Method: "POST", Status: 201, Origin: OriginUpstream, Reason: ReasonNone, Decisions: []Decision{{"per-ip", "allow", "enforce"}, {"per-agent", "deny", "shadow"}}},
 	} {
 		q.ID, q.Tenant, q.Latency = "x", NoTenant, 3*time.Millisecond
 		rec.Request(t.Context(), &q)
 	}
 	rec.UpstreamAttempt("orders", 1, 2*time.Millisecond)
+	rec.RateLimitCheck(BackendLocal, 20*time.Microsecond)
 
 	m := scrape(t, reg)
 	for _, s := range []string{
@@ -200,7 +210,13 @@ func TestMetricLabels(t *testing.T) {
 		`gw_requests_total{code_class="other",method="GET",origin="upstream",reason="none",route="orders",tenant="none"} 1`,
 		`gw_requests_total{code_class="5xx",method="DELETE",origin="gateway",reason="upstream",route="orders",tenant="none"} 1`,
 		`gw_requests_total{code_class="4xx",method="GET",origin="gateway",reason="none",route="none",tenant="none"} 1`,
-		`gw_request_duration_seconds_count{route="orders",tenant="none"} 5`,
+		`gw_requests_total{code_class="4xx",method="GET",origin="gateway",reason="ratelimited",route="orders",tenant="none"} 1`,
+		`gw_ratelimit_decisions_total{decision="allow",mode="enforce",policy="per-ip"} 1`,
+		`gw_ratelimit_decisions_total{decision="deny",mode="enforce",policy="per-ip"} 1`,
+		`gw_ratelimit_decisions_total{decision="deny",mode="shadow",policy="per-agent"} 2`,
+		`gw_ratelimit_check_duration_seconds_bucket{backend="local",le="1e-05"} 0`,
+		`gw_ratelimit_check_duration_seconds_bucket{backend="local",le="2.5e-05"} 1`,
+		`gw_request_duration_seconds_count{route="orders",tenant="none"} 7`,
 		`gw_request_duration_seconds_bucket{route="none",tenant="none",le="0.0025"} 0`,
 		`gw_request_duration_seconds_bucket{route="none",tenant="none",le="0.005"} 1`,
 		`gw_upstream_duration_seconds_count{attempt="1",upstream="orders"} 1`,

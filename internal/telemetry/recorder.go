@@ -21,6 +21,11 @@ const (
 	OriginUpstream = "upstream" // the upstream's response was passed on
 	ReasonNone     = "none"
 	ReasonUpstream = "upstream" // the gateway answered because the upstream failed or has no address
+	// ReasonRateLimited: the gateway answered 429 because a rate limit
+	// denied the request (RL-25).
+	ReasonRateLimited = "ratelimited"
+
+	BackendLocal = "local" // rate limit checks in the gateway's memory
 )
 
 // maxTenants is how many tenants keep their own tenant label (OB-01).
@@ -29,6 +34,10 @@ const maxTenants = 50
 // durationBuckets, in seconds, start well below the 2 ms added-latency target
 // (NFR-03) and end at the 59 s longest route timeout (GW-11).
 var durationBuckets = []float64{.0005, .001, .0025, .005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10, 30, 60}
+
+// checkBuckets, in seconds, run from 10 µs, for local checks, to 50 ms, past
+// M3's 5 ms Redis budget (ADR-0017).
+var checkBuckets = []float64{.00001, .000025, .00005, .0001, .00025, .0005, .001, .0025, .005, .01, .025, .05}
 
 // Request is what the access log and the metrics record about a request once
 // it has been answered.
@@ -43,9 +52,19 @@ type Request struct {
 	Tenant   string // NoTenant until tenants exist (M5)
 	Upstream string // "" if no upstream was chosen
 	KeyHash  string // config.KeyHash of the API key presented, "" if none (SEC-03)
-	Latency  time.Duration
-	BytesIn  int64 // request body bytes read from the client
-	BytesOut int64 // response body bytes written to the client
+	// Decisions has one entry per rate limit policy that applied to the
+	// request, in evaluation order (RL-27).
+	Decisions []Decision
+	Latency   time.Duration
+	BytesIn   int64 // request body bytes read from the client
+	BytesOut  int64 // response body bytes written to the client
+}
+
+// Decision is one policy's rate limit decision for a request (RL-27).
+type Decision struct {
+	Policy   string `json:"policy"`
+	Decision string `json:"decision"` // "allow", or "deny" if any of the policy's limits denied
+	Mode     string `json:"mode"`     // "enforce" or "shadow"
 }
 
 // Recorder writes the access log (OB-03) and the request metrics (OB-01).
@@ -55,6 +74,8 @@ type Recorder struct {
 	requests   *prometheus.CounterVec
 	duration   *prometheus.HistogramVec
 	upstream   *prometheus.HistogramVec
+	decisions  *prometheus.CounterVec
+	checks     *prometheus.HistogramVec
 
 	mu      sync.Mutex // a tenant rotation never runs between labelling and observing
 	tenants *tenantCapper
@@ -80,14 +101,20 @@ func NewRecorder(reg prometheus.Registerer, log *slog.Logger, sampleRate float64
 			Help:    "Time from sending an upstream attempt to its response headers or its failure.",
 			Buckets: durationBuckets,
 		}, []string{"upstream", "attempt"}),
+		decisions: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "gw_ratelimit_decisions_total",
+			Help: "Rate limit decisions, one per applying policy per request; a shadow would-deny is decision deny, mode shadow.",
+		}, []string{"policy", "decision", "mode"}),
+		checks: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "gw_ratelimit_check_duration_seconds",
+			Help:    "Time to evaluate one phase of a request's rate limit policies, refunds included.",
+			Buckets: checkBuckets,
+		}, []string{"backend"}),
 		tenants: newTenantCapper(maxTenants),
 	}
-	reg.MustRegister(rec.requests, rec.duration, rec.upstream)
+	reg.MustRegister(rec.requests, rec.duration, rec.upstream, rec.decisions, rec.checks)
 	return rec
 }
-
-// noDecisions stands in for the rate-limit decisions that M2 adds (RL-27).
-var noDecisions = slog.Any("decisions", []string{})
 
 // Request records an answered request in the metrics, and in the access log
 // if it is a 5xx, a 4xx the gateway answered itself, or sampled.
@@ -96,6 +123,10 @@ func (rec *Recorder) Request(ctx context.Context, q *Request) {
 	always := q.Status >= 500 || q.Origin == OriginGateway && q.Status >= 400
 	if !always && !sampled(q.ID, rec.sampleRate) {
 		return
+	}
+	decisions := q.Decisions
+	if decisions == nil {
+		decisions = []Decision{} // [], not null
 	}
 	rec.log.LogAttrs(ctx, slog.LevelInfo, "access",
 		slog.String("request_id", q.ID),
@@ -107,7 +138,7 @@ func (rec *Recorder) Request(ctx context.Context, q *Request) {
 		slog.Int64("bytes_in", q.BytesIn),
 		slog.Int64("bytes_out", q.BytesOut),
 		slog.String("upstream", q.Upstream),
-		noDecisions,
+		slog.Any("decisions", decisions),
 		slog.String("key_hash", q.KeyHash),
 	)
 }
@@ -121,6 +152,15 @@ func (rec *Recorder) observe(q *Request) {
 	}
 	rec.requests.WithLabelValues(q.Route, methodLabel(q.Method), codeClass(q.Status), q.Origin, q.Reason, tenant).Inc()
 	rec.duration.WithLabelValues(q.Route, tenant).Observe(q.Latency.Seconds())
+	for _, d := range q.Decisions {
+		rec.decisions.WithLabelValues(d.Policy, d.Decision, d.Mode).Inc()
+	}
+}
+
+// RateLimitCheck records how long one phase of a request's rate limit checks
+// took on backend (ADR-0017).
+func (rec *Recorder) RateLimitCheck(backend string, d time.Duration) {
+	rec.checks.WithLabelValues(backend).Observe(d.Seconds())
 }
 
 // UpstreamAttempt records how long one attempt at an upstream took.
