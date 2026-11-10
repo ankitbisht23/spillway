@@ -65,6 +65,7 @@ func TestCompile(t *testing.T) {
 		MaxHeaderBytes:  8192,
 		Timeouts:        Timeouts{Connect: 200 * time.Millisecond, PerTry: time.Second, Total: 3 * time.Second, Idle: 500 * time.Millisecond},
 		HSTS:            "max-age=31536000",
+		Cost:            1,
 		strip:           1,
 	}
 	if !reflect.DeepEqual(orders, wantOrders) {
@@ -72,6 +73,9 @@ func TestCompile(t *testing.T) {
 	}
 	if want := (Timeouts{Connect: 5 * time.Second, PerTry: 15 * time.Second, Total: 15 * time.Second}); catalog.Timeouts != want {
 		t.Errorf("catalog timeouts = %+v, want the defaults %+v", catalog.Timeouts, want)
+	}
+	if s.Routes[1].Cost != 3 {
+		t.Errorf("order-by-id cost = %d, want 3", s.Routes[1].Cost)
 	}
 	if catalog.MaxBodyBytes != 0 || catalog.MaxHeaderBytes != 0 || catalog.HSTS != "" {
 		t.Errorf("catalog limits = %d, %d, HSTS %q; want none", catalog.MaxBodyBytes, catalog.MaxHeaderBytes, catalog.HSTS)
@@ -166,6 +170,8 @@ func TestRejects(t *testing.T) {
 		{"hsts_max_age not a duration", route("hsts_max_age: '31536000'"), `hsts_max_age: "31536000" is not a duration in whole seconds`},
 		{"negative hsts_max_age", route("hsts_max_age: -1s"), "hsts_max_age"},
 		{"hsts_max_age not whole seconds", route("hsts_max_age: 1500ms"), "hsts_max_age"},
+		{"negative cost", route("cost: -1"), `route "r": cost: -1 is not 1 to 1000000000`},
+		{"cost too large", route("cost: 1000000001"), "cost: 1000000001 is not 1 to 1000000000"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -251,7 +257,8 @@ func parse(data []byte) (*Snapshot, error) {
 	return Compile(c)
 }
 
-// FuzzLoad checks that loading and compiling never panic on hostile input.
+// FuzzLoad checks that loading and compiling, policies included, never panic
+// on hostile input.
 func FuzzLoad(f *testing.F) {
 	example, err := os.ReadFile("testdata/example.yaml")
 	if err != nil {
@@ -261,7 +268,16 @@ func FuzzLoad(f *testing.F) {
 	f.Add([]byte(upstream + "routes: [{name: r, upstream: u, match: {path: '/:a/:a'}}]"))
 	f.Add([]byte("a: &x [*x]"))
 	f.Add([]byte("version: 1e400\nroutes: ~"))
+	f.Add([]byte(policies("ratelimit: {replicas: 7}\n", p("key_template", "'{ip}:{header:x-a}{tenant}'", "limits", "[{rate: 3, period: 8760h, burst: 1000000000}]"))))
+	f.Add([]byte(policies("", p("algorithm", "concurrency", "limits", "[{rate: 9223372036854775807}]"), p("name", "q", "key_template", "'{a{}}'"))))
 	f.Fuzz(func(t *testing.T, data []byte) {
-		_, _ = parse(data)
+		s, err := parse(data)
+		if err != nil {
+			return
+		}
+		v := &KeyValues{IP: "ip", APIKey: "k", Consumer: "c", Tenant: "t", Route: "r", Method: "GET", Header: http.Header{}}
+		for i := range s.Policies {
+			s.Policies[i].Key.Fill(v)
+		}
 	})
 }

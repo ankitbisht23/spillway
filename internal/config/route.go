@@ -75,7 +75,7 @@ func (r *Route) UpstreamPath(path string) string {
 	return path
 }
 
-// compileTransforms fills in r's transforms, limits, timeouts and HSTS; path
+// compileTransforms fills in r's transforms, limits, timeouts, HSTS and cost; path
 // is the route's match.path or match.path_prefix.
 func (r *Route) compileTransforms(c *configpb.Route, path string) error {
 	if p := c.GetStripPrefix(); p != "" {
@@ -113,6 +113,10 @@ func (r *Route) compileTransforms(c *configpb.Route, path string) error {
 		}
 		r.HSTS = "max-age=" + strconv.FormatInt(int64(d/time.Second), 10)
 	}
+	if r.Cost = c.GetCost(); r.Cost < 0 || r.Cost > maxQuantity {
+		return fmt.Errorf("cost: %d is not 1 to %d; unset means 1", r.Cost, maxQuantity)
+	}
+	r.Cost = max(r.Cost, 1)
 	return nil
 }
 
