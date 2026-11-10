@@ -52,7 +52,9 @@ type refunder interface {
 func newLimits(s *config.Snapshot, route *config.Route, registry *local.Registry, rec *telemetry.Recorder, r *http.Request, q *telemetry.Request, ip netip.Addr) *limits {
 	l := &limits{
 		policies: s.Policies, registry: registry, rec: rec, r: r, q: q, cost: route.Cost,
-		values: config.KeyValues{Route: route.Name, Method: r.Method, Header: r.Header},
+		// Upper-cased: many upstreams take "post" for POST, so it must not
+		// skip POST policies or get a {method} bucket of its own (ADR-0020).
+		values: config.KeyValues{Route: route.Name, Method: strings.ToUpper(r.Method), Header: r.Header},
 	}
 	if ip.IsValid() && len(s.Policies) > 0 {
 		l.values.IP = ip.String() // invalid only if the peer address did not parse: {ip} stays unfilled

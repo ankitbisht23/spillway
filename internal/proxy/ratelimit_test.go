@@ -426,6 +426,24 @@ policies: [{name: ip, level: global, match: {routes: ['*']}, key_template: '{ip}
 	}
 }
 
+// TestRateLimitMethodCase: policies see the method upper-cased, so a
+// lower-case POST on a route that takes any method meets the POST limits and
+// shares the {method} bucket (ADR-0020).
+func TestRateLimitMethodCase(t *testing.T) {
+	u := newUpstream(t, "orders")
+	g := newGateway(t, newResolver(u), oneUpstream(u)+`
+policies: [{name: writes, level: global, match: {routes: ['*'], methods: [POST]}, key_template: '{ip}:{method}', algorithm: fixed_window, limits: [{rate: 1, period: 1m}], local: true}]
+`)
+	for i, want := range []struct {
+		method string
+		status int
+	}{{"POST", 200}, {"post", 429}, {"Post", 429}, {"pOST", 429}, {"GET", 200}} {
+		if got := g.send(t, want.method, "/", nil); got.status != want.status {
+			t.Errorf("request %d (%s): %d, want %d", i+1, want.method, got.status, want.status)
+		}
+	}
+}
+
 // TestRateLimitConcurrencyRelease: a concurrency slot is held while its
 // request runs and released exactly once when it completes, times out or
 // loses its client, with no goroutine left behind (RL-02). Another holder
