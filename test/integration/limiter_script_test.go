@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"math"
 	"net"
 	"os"
 	"strconv"
@@ -331,6 +332,51 @@ func TestScriptMultiWindowAndCost(t *testing.T) {
 	}
 	if got := getHash(t, rdb, wm.Key); got["cur"] != "10" {
 		t.Errorf("minute window after two admissions of 5: %v", got)
+	}
+}
+
+// TestScriptSlidingWindow compares sliding-window denials with the maths for
+// the TIME the script used (ADR-0021), on state written into the current
+// window: retry_after from both cases of ADR-0017's formula.
+func TestScriptSlidingWindow(t *testing.T) {
+	_, c, rdb := scriptEnv(t)
+	ctx := context.Background()
+	awayFromEdge(time.Hour)
+	const p, rate, cost = int64(3_600_000_000), int64(10), int64(5)
+	wNow := time.Now().UnixMicro() / p * p
+	for _, tt := range []struct {
+		name      string
+		prev, cur float64
+	}{
+		// cur + cost ≤ rate: waits for prev to decay. prev is large enough
+		// to deny until 11 ms before the window ends.
+		{"cur fits", 1_000_000, 2},
+		// cur + cost > rate: waits for the next window.
+		{"cur full", 0, 8},
+	} {
+		l := windowLimit(redis.GlobalKey(scriptName("sw"), time.Hour, redis.Digest(tt.name)), "global", true, rate, time.Hour)
+		if err := rdb.HSet(ctx, l.Key, "w", wNow, "cur", tt.cur, "prev", tt.prev).Err(); err != nil {
+			t.Fatal(err)
+		}
+		res := scriptCall(t, c, cost, l)
+		if got := res.NowUS / p * p; got != wNow {
+			t.Fatalf("%s: the script ran in window %d, not %d", tt.name, got, wNow)
+		}
+		// The script's arithmetic, in the same order, so the doubles match.
+		e := float64(res.NowUS - wNow)
+		fp, fr, fc := float64(p), float64(rate), float64(cost)
+		r := 2*fp - e - (fr-fc)*fp/tt.cur
+		if tt.cur+fc <= fr {
+			r = fp - (fr-fc-tt.cur)*fp/tt.prev - e
+		}
+		want := ratelimit.Decision{
+			Remaining:  max(0, int64(math.Floor(fr-(tt.prev*(fp-e)/fp+tt.cur)))),
+			ResetAfter: msUp(p - int64(e)),
+			RetryAfter: msUp(int64(math.Ceil(r))),
+		}
+		if res.Allowed || res.Limits[0] != want {
+			t.Errorf("%s at e = %.0f µs: %+v, want %+v", tt.name, e, res.Limits[0], want)
+		}
 	}
 }
 
