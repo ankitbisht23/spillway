@@ -223,6 +223,7 @@ services:
       env_file: *env-local
       environment:
         SPILLWAY_GATEWAY_CONFIG: /etc/spillway/config.yaml
+        SPILLWAY_GATEWAY_IDENTITY: /etc/spillway/identity.yaml # consumers and static API keys (GW-17)
         SPILLWAY_GATEWAY_HTTP_ADDR: ":8000" # plain HTTP for dev and benchmarks (SEC-01)
         SPILLWAY_GATEWAY_TLS_CERT: /etc/spillway-certs/gateway.pem
         SPILLWAY_GATEWAY_TLS_KEY: /etc/spillway-certs/gateway-key.pem

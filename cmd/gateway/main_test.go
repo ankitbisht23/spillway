@@ -39,7 +39,7 @@ func TestLoadSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.configPath != "/etc/spillway/config.yaml" || s.httpAddr != ":8000" || s.tlsCert != "" || s.adminAddr != "127.0.0.1:8001" || len(s.allow) != 1 || s.dnsRefresh != 30*time.Second ||
+	if s.configPath != "/etc/spillway/config.yaml" || s.identity != "" || s.httpAddr != ":8000" || s.tlsCert != "" || s.adminAddr != "127.0.0.1:8001" || len(s.allow) != 1 || s.dnsRefresh != 30*time.Second ||
 		s.accessLogSampleRate != 1 || s.otlpEndpoint != "" {
 		t.Errorf("settings = %+v", s)
 	}
@@ -50,6 +50,9 @@ func TestLoadSettings(t *testing.T) {
 	tlsOnly["SPILLWAY_GATEWAY_TLS_ADDR"] = "127.0.0.1:9443"
 	if s, err := loadSettings(env(tlsOnly)); err != nil || s.tlsAddr != "127.0.0.1:9443" {
 		t.Errorf("TLS address 127.0.0.1:9443: %+v, %v", s, err)
+	}
+	if s, err := loadSettings(env(map[string]string{"SPILLWAY_GATEWAY_IDENTITY": "/etc/spillway/identity.yaml"})); err != nil || s.identity != "/etc/spillway/identity.yaml" {
+		t.Errorf("identity file: %+v, %v", s, err)
 	}
 	if s, err := loadSettings(env(map[string]string{"SPILLWAY_GATEWAY_DNS_REFRESH": "5s"})); err != nil || s.dnsRefresh != 5*time.Second {
 		t.Errorf("DNS refresh 5s: %+v, %v", s, err)
@@ -128,10 +131,15 @@ func TestServe(t *testing.T) {
 	if err := os.WriteFile(cfg, []byte(yaml), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	identity := filepath.Join(t.TempDir(), "identity.yaml")
+	if err := os.WriteFile(identity, []byte("version: 1\nconsumers: [{ name: alice }]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	certFile, keyFile := filepath.Join(t.TempDir(), "cert.pem"), filepath.Join(t.TempDir(), "key.pem")
 	cert := testcert.Write(t, certFile, keyFile, 1)
 	s := settings{
 		configPath: cfg,
+		identity:   identity,
 		httpAddr:   freeAddr(t),
 		tlsAddr:    freeAddr(t),
 		tlsCert:    certFile,
@@ -189,6 +197,23 @@ func TestServe(t *testing.T) {
 	}
 	if err := healthcheck(t.Context(), adminEnv(s.adminAddr)); err == nil {
 		t.Error("healthcheck passed after shutdown")
+	}
+}
+
+// TestServeRejectsInvalidIdentity: an invalid identity file at start stops
+// the gateway, as an invalid config file does (ADR-0017).
+func TestServeRejectsInvalidIdentity(t *testing.T) {
+	dir := t.TempDir()
+	cfg, identity := filepath.Join(dir, "config.yaml"), filepath.Join(dir, "identity.yaml")
+	if err := os.WriteFile(cfg, []byte("version: 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(identity, []byte("consumers: [{ name: a }, { name: a }]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := settings{configPath: cfg, identity: identity, httpAddr: freeAddr(t), adminAddr: freeAddr(t), dnsRefresh: time.Minute}
+	if err := serve(t.Context(), s, slog.New(slog.DiscardHandler)); err == nil || !strings.Contains(err.Error(), `consumer "a": defined twice`) {
+		t.Errorf("serve = %v, want the identity error", err)
 	}
 }
 
