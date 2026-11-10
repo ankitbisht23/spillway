@@ -428,7 +428,8 @@ policies: [{name: ip, level: global, match: {routes: ['*']}, key_template: '{ip}
 
 // TestRateLimitConcurrencyRelease: a concurrency slot is held while its
 // request runs and released exactly once when it completes, times out or
-// loses its client, with no goroutine left behind (RL-02).
+// loses its client, with no goroutine left behind (RL-02). Another holder
+// keeps a second slot throughout, so a second release would show.
 func TestRateLimitConcurrencyRelease(t *testing.T) {
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 	arrived := make(chan struct{}, 10)
@@ -440,15 +441,22 @@ func TestRateLimitConcurrencyRelease(t *testing.T) {
 		<-r.Context().Done() // until the gateway gives up on it
 	})
 	g := newGateway(t, newResolver(u), routeTo(u, "timeouts: {total: 300ms}")+`
-policies: [{name: inflight, level: route, match: {routes: [r]}, key_template: '{route}', algorithm: concurrency, limits: [{rate: 1}]}]
+policies: [{name: inflight, level: route, match: {routes: [r]}, key_template: '{route}', algorithm: concurrency, limits: [{rate: 2}]}]
 `)
 	inflight := g.limiter(t, "inflight", config.Concurrency, 0)
+	if d, _ := inflight.Allow(t.Context(), ratelimit.Key("r"), 1); !d.Allowed {
+		t.Fatal("the other holder got no slot")
+	}
 	free := func(what string) {
 		t.Helper()
-		for deadline := time.Now().Add(5 * time.Second); peek(inflight, "r").Remaining != 1; time.Sleep(5 * time.Millisecond) {
+		for deadline := time.Now().Add(5 * time.Second); peek(inflight, "r").Remaining == 0; time.Sleep(5 * time.Millisecond) {
 			if time.Now().After(deadline) {
 				t.Fatalf("after %s: the slot was not released", what)
 			}
+		}
+		time.Sleep(50 * time.Millisecond) // time for a second release to land
+		if d := peek(inflight, "r"); d.Remaining != 1 {
+			t.Fatalf("after %s: %d free, want 1: released more than once", what, d.Remaining)
 		}
 	}
 
@@ -489,9 +497,6 @@ policies: [{name: inflight, level: route, match: {routes: [r]}, key_template: '{
 		t.Error("the cancelled request got a response")
 	}
 	free("a client disconnect")
-	if d := peek(inflight, "r"); d.Remaining != 1 {
-		t.Errorf("released more than once: %d free, want 1", d.Remaining)
-	}
 
 	g.Close()
 	u.Close()
