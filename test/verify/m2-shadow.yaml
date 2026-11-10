@@ -1,0 +1,23 @@
+# gateway-1's config during make verify-m2's shadow check (RL-26,
+# ADR-0019): the only policy is a shadow limit far below the rate loadgen
+# sends, so it would deny most requests, and none may get a 429.
+version: 21
+upstreams:
+  - name: httpbin
+    endpoints:
+      - address: upstream-1:8080
+      - address: upstream-2:8080
+      - address: upstream-3:8080
+routes:
+  - name: default
+    match: { path_prefix: / }
+    upstream: httpbin
+policies:
+  - name: verify-shadow
+    level: route
+    match: { routes: ['*'] }
+    key_template: '{route}'
+    algorithm: gcra
+    limits: [{ rate: 10, period: 1s }]
+    mode: shadow
+    local: true

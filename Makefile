@@ -11,7 +11,7 @@ FUZZTIME ?= 5s
 # Committed dev defaults first, then local overrides if present (ADR-0004).
 COMPOSE := docker compose --env-file .env.example $(if $(wildcard .env.local),--env-file .env.local)
 
-.PHONY: tools hooks certs dev test fuzz test-integration proto lint lint-go lint-web lint-proto bench verify-m0 verify-m0-stack verify-m1 verify-m1-reload
+.PHONY: tools hooks certs dev test fuzz test-integration proto lint lint-go lint-web lint-proto bench verify-m0 verify-m0-stack verify-m1 verify-m1-reload verify-m2 verify-m2-shadow
 
 # Host-run processes and tests reach Redis Cluster nodes through this map
 # (ADR-0004). Set only here, never in compose or .env files.
@@ -133,3 +133,12 @@ verify-m1: dev
 
 verify-m1-reload: dev
 	@test/verify/m1.sh reload
+
+# M2 exit checks (docs/design.md, ADR-0019): the property tests, shadow mode
+# never rejecting and NFR-03's added latency on the dev stack. CI runs only the
+# shadow part; the latency pair takes 3 minutes and needs a quiet machine.
+verify-m2: dev
+	@test/verify/m2.sh all
+
+verify-m2-shadow: dev
+	@test/verify/m2.sh shadow

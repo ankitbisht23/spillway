@@ -98,8 +98,9 @@ jobs:
           docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges spillway-loadgen:ci -h
 
   # Boots the dev stack from a clean checkout, runs the integration tests, the
-  # stack part of the M0 exit check and the reload part of the M1 exit check
-  # (ADR-0004, ADR-0015), and one short run of the benchmark script.
+  # stack part of the M0 exit check, the reload part of the M1 exit check and
+  # the shadow part of the M2 exit check (ADR-0004, ADR-0015, ADR-0019), and
+  # one short run of the benchmark script.
   integration:
     runs-on: ubuntu-latest
     steps:
@@ -118,6 +119,8 @@ jobs:
         run: make verify-m0-stack
       - name: make verify-m1-reload (NFR-14)
         run: make verify-m1-reload
+      - name: make verify-m2-shadow (RL-26)
+        run: make verify-m2-shadow
       # Valid, with the topology of every CPU recorded (ADR-0016).
       - name: Benchmark script, one short run (NFR-01)
         run: BENCH_RATE=500 BENCH_RUNS=1 BENCH_WARMUP=1s BENCH_DURATION=5s test/load/bench.sh | jq -e '.valid and (.hardware.topology | length) == .hardware.cpus'
