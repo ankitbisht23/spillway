@@ -32,6 +32,12 @@ func (b *logBuffer) Write(p []byte) (int, error) {
 	return b.buf.Write(p)
 }
 
+func (b *logBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 // access waits for the access log line of a request ID and returns it. A
 // request is logged after its response is written, so the client can see the
 // response first.

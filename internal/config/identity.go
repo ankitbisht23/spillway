@@ -15,6 +15,13 @@ import (
 // find the key without its hash (SEC-03).
 const KeyPrefixLen = 12
 
+// KeyHash is what logs may show of an API key: the first 12 hex digits of
+// its SHA-256 (SEC-03).
+func KeyHash(key string) string {
+	sum := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(sum[:6])
+}
+
 // Identity is a compiled identity section: consumers and static API keys
 // (GW-17, ADR-0017). It never changes once compiled.
 type Identity struct {

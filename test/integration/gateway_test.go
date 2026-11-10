@@ -65,6 +65,27 @@ gw_upstream_duration_seconds_count{attempt="1",upstream="httpbin"} `,
 	}
 }
 
+// TestGatewayAPIKeys checks that gateway-1 resolves API keys against the
+// compose identity file: ADR-0017's example key for alice is proxied, a wrong
+// key with her key's prefix is answered 401 (GW-17, SEC-03).
+func TestGatewayAPIKeys(t *testing.T) {
+	for key, want := range map[string]int{"alice-example-key-1": http.StatusOK, "alice-example-key-2": http.StatusUnauthorized} {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://127.0.0.1:8000/status/200", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("X-API-Key", key)
+		resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != want {
+			t.Errorf("GET :8000/status/200 with key %s = %d, want %d", key[:12]+"…", resp.StatusCode, want)
+		}
+	}
+}
+
 // TestGatewayTLS checks gateway-1's TLS port 8443: HTTP/2 over TLS 1.2 or
 // later with the certificate from make certs, which the test trusts directly
 // (GW-04, SEC-01).
