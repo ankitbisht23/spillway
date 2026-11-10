@@ -37,7 +37,14 @@ type check struct {
 	limiter ratelimit.Limiter
 	key     string
 	d       ratelimit.Decision // the last decision: the refund's once refunded
+	at      time.Time          // on the registry's clock, at or before the admission
 	held    bool               // admitted and not given back
+}
+
+// refunder is a window limiter, whose refund is lost if it crosses a window
+// boundary since the admission (ADR-0017).
+type refunder interface {
+	Refund(key string, cost int64, at time.Time) ratelimit.Decision
 }
 
 // newLimits prepares the checks of a request for route on snapshot s, sent
@@ -74,6 +81,7 @@ func (l *limits) check(identity bool) bool {
 		return true
 	}
 	start := time.Now()
+	at := l.registry.Now()
 	n := len(l.checks)
 	for i := range l.policies {
 		p := &l.policies[i]
@@ -94,7 +102,7 @@ func (l *limits) check(identity bool) bool {
 			}
 			applied = true
 			d, _ := limiter.Allow(l.r.Context(), key, l.cost) // local limiters never fail
-			l.checks = append(l.checks, check{policy: p, limit: lim, limiter: limiter, key: key, d: d, held: d.Allowed})
+			l.checks = append(l.checks, check{policy: p, limit: lim, limiter: limiter, key: key, d: d, at: at, held: d.Allowed})
 			if !d.Allowed {
 				decision = "deny"
 				l.denied = l.denied || p.Mode == config.Enforce
@@ -108,7 +116,11 @@ func (l *limits) check(identity bool) bool {
 		// A denied request consumes nothing, shadow limits included.
 		for i := range l.checks {
 			if c := &l.checks[i]; c.held {
-				c.d, _ = c.limiter.Allow(l.r.Context(), c.key, -l.cost)
+				if r, ok := c.limiter.(refunder); ok {
+					c.d = r.Refund(c.key, l.cost, c.at)
+				} else {
+					c.d, _ = c.limiter.Allow(l.r.Context(), c.key, -l.cost)
+				}
 				c.held = false
 			}
 		}
