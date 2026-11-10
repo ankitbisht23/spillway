@@ -22,9 +22,10 @@ type arrival struct {
 }
 
 // drive runs an arbitrary arrival pattern over three keys against the limiter
-// newLimiter returns, with its sweep, and returns the admitted arrivals in time order. Sweeps run at random points.
-// After some denies of a cost up to capacity it checks that RetryAfter is
-// exact: the same request is still denied 1 ns before it and admitted at it.
+// newLimiter returns, sweeping at random points, and returns the admitted
+// arrivals in time order. After some denies of a cost up to capacity it checks
+// that RetryAfter is exact: the same request is still denied 1 ns before it
+// and admitted at it.
 func drive(t *rapid.T, period time.Duration, capacity int64, newLimiter func(ratelimit.Clock) (ratelimit.Limiter, func())) []arrival {
 	clock := ratelimit.NewFakeClock(base.Add(time.Duration(rapid.Int64Range(0, int64(period)-1).Draw(t, "offset"))))
 	l, sweep := newLimiter(clock)
