@@ -627,7 +627,7 @@ Exit (`make verify-m1`): first load-test baseline recorded (NFR-01); config relo
 
 ### M2 Local rate limiting · est. 1 week
 
-- [ ] `Limiter` interface; in-memory GCRA, sliding window, fixed window, concurrency (RL-01, RL-02)
+- [x] `Limiter` interface; in-memory GCRA, sliding window, fixed window, concurrency (RL-01, RL-02)
 - [ ] Local limiter buckets and concurrency counters in registries keyed by stable IDs; a reload under load resets no bucket and no in-flight count (GW-29)
 - [ ] Static replica count from config (`ratelimit.replicas`, default 1) for per-replica limits, rounded down, minimum 1 (RL-31)
 - [ ] Local-only policies (e.g. IP flood limits) that never touch Redis (RL-17)
@@ -636,7 +636,7 @@ Exit (`make verify-m1`): first load-test baseline recorded (NFR-01); config relo
 - [ ] API keys looked up by prefix, digests compared in constant time, keys never logged (SEC-03)
 - [ ] 429 + RateLimit headers, `Retry-After` in whole seconds (rounded up, minimum 1); enforce, shadow, off; decision metrics (RL-25–RL-27)
 - [x] ADR pinning one revision of the IETF RateLimit header draft, with exact header syntax and test vectors (RL-25)
-- [ ] Fake-clock unit tests and property tests, each algorithm against its own bound (Testing, Property)
+- [x] Fake-clock unit tests and property tests, each algorithm against its own bound (Testing, Property)
 
 Exit (`make verify-m2`): property tests pass for every algorithm against its own bound; shadow mode never rejects; added latency with local limits measured (NFR-03).
 
