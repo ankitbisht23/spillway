@@ -648,7 +648,7 @@ Exit (`make verify-m2`): property tests pass for every algorithm against its own
 - [ ] One Redis time budget per request, a circuit breaker per Redis node, fail-open / fail-closed / degraded; degraded mode divides by the static replica count from M2 until heartbeats land in M5 (RL-22, RL-23)
 - [ ] Accuracy harness v1 in the compose network against `gateway-1` … `gateway-5`; script tests on the compose Redis Cluster through the address-map Dialer (ADR-0004)
 - [ ] Chaos tests: Redis full outage and killed primary, with the pass rules in Chaos scenarios
-- [ ] ADR: multi-region approach (non-goal; per-region limits with asynchronous reconciliation)
+- [x] ADR: multi-region approach (non-goal; per-region limits with asynchronous reconciliation)
 
 Exit (`make verify-m3`): GCRA in strict mode shows zero over-admission at 3 replicas (NFR-06); the Redis full-outage and killed-primary chaos tests meet their pass rules (NFR-13); added latency with a Redis check measured (NFR-04).
 

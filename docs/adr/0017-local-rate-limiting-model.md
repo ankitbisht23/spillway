@@ -1,6 +1,6 @@
 # 0017. Local rate limiting model
 
-- **Status:** Accepted
+- **Status:** Accepted; scope rule (non-local policies rejected) superseded by [ADR-0021](0021-distributed-rate-limiting-model.md)
 - **Date:** 2026-11-10
 - **Requirement IDs:** RL-01 – RL-04, RL-07, RL-17, RL-25 – RL-27, RL-31, GW-17, GW-29, SEC-03, SEC-05, OB-01, OB-03, NFR-03
 
