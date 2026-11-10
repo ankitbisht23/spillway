@@ -444,6 +444,59 @@ policies: [{name: writes, level: global, match: {routes: ['*'], methods: [POST]}
 	}
 }
 
+// TestRateLimitClientIP: {ip} is the X-Forwarded-For client only when the
+// peer is a trusted proxy; otherwise a spoofed X-Forwarded-For gets no bucket
+// of its own (SEC-05). The test client's peer is 127.0.0.1.
+func TestRateLimitClientIP(t *testing.T) {
+	policy := `
+policies: [{name: per-ip, level: global, match: {routes: ['*']}, key_template: '{ip}', algorithm: fixed_window, limits: [{rate: 1, period: 1m}], local: true}]
+`
+	type req struct {
+		xff    string
+		status int
+	}
+	for _, tt := range []struct {
+		name    string
+		trusted string
+		reqs    []req
+	}{
+		{"untrusted peer", "", []req{
+			{"203.0.113.1", 200},
+			{"203.0.113.2", 429}, // the peer's bucket, whatever the header says
+			{"", 429},
+		}},
+		{"trusted peer", "127.0.0.0/8", []req{
+			{"203.0.113.1", 200},
+			{"203.0.113.1", 429},
+			{"203.0.113.2", 200},
+			{"198.51.100.7, 203.0.113.3", 200}, // the rightmost untrusted entry
+			{"198.51.100.8, 203.0.113.3", 429},
+			{"203.0.113.4, 127.0.0.9", 200}, // trusted entries are skipped
+			{"203.0.113.4", 429},
+			{"", 200},          // no header: the peer
+			{"not-an-ip", 429}, // malformed: the peer
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			trusted, err := ParseTrustedProxies(tt.trusted)
+			if err != nil {
+				t.Fatal(err)
+			}
+			u := newUpstream(t, "orders")
+			g := newGatewayBehind(t, newResolver(u), oneUpstream(u)+policy, trusted)
+			for i, r := range tt.reqs {
+				h := http.Header{}
+				if r.xff != "" {
+					h.Set("X-Forwarded-For", r.xff)
+				}
+				if got := g.send(t, http.MethodGet, "/", h); got.status != r.status {
+					t.Errorf("request %d (X-Forwarded-For %q): %d, want %d", i+1, r.xff, got.status, r.status)
+				}
+			}
+		})
+	}
+}
+
 // TestRateLimitConcurrencyRelease: a concurrency slot is held while its
 // request runs and released exactly once when it completes, times out or
 // loses its client, with no goroutine left behind (RL-02). Another holder

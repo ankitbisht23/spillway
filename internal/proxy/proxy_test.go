@@ -140,11 +140,17 @@ type gateway struct {
 
 func newGateway(t *testing.T, res Resolver, yaml string) *gateway {
 	t.Helper()
+	return newGatewayBehind(t, res, yaml, nil)
+}
+
+// newGatewayBehind is newGateway with trusted proxies (SEC-05).
+func newGatewayBehind(t *testing.T, res Resolver, yaml string, trusted TrustedProxies) *gateway {
+	t.Helper()
 	g := &gateway{reg: NewRegistry(loopback, res, slog.New(slog.DiscardHandler)), clock: ratelimit.NewFakeClock(t0), metrics: prometheus.NewRegistry(), logs: &logBuffer{}}
 	g.limiters = local.NewRegistry(g.clock)
 	g.apply(t, yaml)
 	rec := telemetry.NewRecorder(g.metrics, slog.New(slog.NewJSONHandler(g.logs, nil)), 1)
-	g.Server = httptest.NewServer(NewHandler(g.current.Load, g.identity.Load, nil, g.reg, g.limiters, rec, slog.New(slog.DiscardHandler)))
+	g.Server = httptest.NewServer(NewHandler(g.current.Load, g.identity.Load, trusted, g.reg, g.limiters, rec, slog.New(slog.DiscardHandler)))
 	t.Cleanup(g.Close)
 	return g
 }
