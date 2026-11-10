@@ -46,7 +46,7 @@ func (c *Concurrency) take(key string, cost int64) ratelimit.Decision {
 			n += cost
 			d.Allowed = true
 		}
-		d.Remaining = c.limit - n
+		d.Remaining = max(0, c.limit-n) // a reload can lower the max below the count
 		return n, n > 0
 	})
 	return d

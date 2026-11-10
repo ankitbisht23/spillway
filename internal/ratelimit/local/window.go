@@ -63,7 +63,7 @@ func (f *FixedWindow) allow(key string, cost, now, admitted int64) ratelimit.Dec
 		default:
 			d.RetryAfter = d.ResetAfter
 		}
-		d.Remaining = f.rate - s.count
+		d.Remaining = max(0, f.rate-s.count) // a reload can lower the rate below the count
 		return s, ok
 	})
 	return d

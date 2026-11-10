@@ -63,6 +63,19 @@ func TestRegistryApply(t *testing.T) {
 		t.Errorf("concurrency after a max change: %d free, want 5", d.Remaining)
 	}
 
+	// A rate or max below the count leaves nothing, never less (ADR-0018:
+	// RateLimit's r is never negative).
+	r.Apply(compile(t, "policies:\n"+
+		policy("g", "gcra", "[{rate: 20, period: 1s, burst: 20}]")+
+		policy("w", "fixed_window", "[{rate: 1, period: 1m}]")+
+		policy("c", "concurrency", "[{rate: 2}]")))
+	if d := take(r.Limiter(window), key, 1); d.Allowed || d.Remaining != 0 {
+		t.Errorf("fixed window after the rate fell below its count: %+v, want a deny with 0 left", d)
+	}
+	if d := take(r.Limiter(inflight), key, 1); d.Allowed || d.Remaining != 0 {
+		t.Errorf("concurrency after the max fell below its count: %+v, want a deny with 0 free", d)
+	}
+
 	// A new period or algorithm is a new ID; the old ones go.
 	r.Apply(compile(t, "policies:\n"+
 		policy("g", "gcra", "[{rate: 20, period: 2s}]")+
