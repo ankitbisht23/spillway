@@ -3,6 +3,7 @@ package config
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -187,6 +188,26 @@ func TestComposeFiles(t *testing.T) {
 	for key, consumer := range map[string]string{aliceKey: "alice", bobKey: "bob"} {
 		if c, ok := id.Lookup(key); !ok || c.Name != consumer || c.Tenant != "acme" {
 			t.Errorf("Lookup(%s's key) = %+v, %v", consumer, c, ok)
+		}
+	}
+}
+
+// TestVerifyConfigs: the configs the exit checks swap into gateway-1
+// (ADR-0015, ADR-0019) compile, so a check never waits on a config the
+// gateway rejects.
+func TestVerifyConfigs(t *testing.T) {
+	dir := os.DirFS("../../test/verify")
+	files, err := fs.Glob(dir, "*.yaml")
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no configs in test/verify: %v", err)
+	}
+	for _, f := range files {
+		data, err := fs.ReadFile(dir, f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := parse(data); err != nil {
+			t.Errorf("%s: %v", f, err)
 		}
 	}
 }

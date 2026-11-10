@@ -1,0 +1,35 @@
+# gateway-1's config during make verify-m2's added-latency check (NFR-03,
+# ADR-0019): one route to upstream-1, the upstream the direct run measures,
+# behind enforce-mode local policies of three algorithms whose limits are far
+# above the rate loadgen sends, so every request runs the limiter path and is
+# allowed.
+version: 22
+upstreams:
+  - name: upstream-1
+    endpoints:
+      - address: upstream-1:8080
+routes:
+  - name: bytes
+    match: { path_prefix: /bytes }
+    upstream: upstream-1
+policies:
+  - name: verify-per-ip
+    level: global
+    match: { routes: [bytes] }
+    key_template: '{ip}'
+    algorithm: gcra
+    limits: [{ rate: 100000, period: 1s }]
+    local: true
+  - name: verify-per-route
+    level: route
+    match: { routes: [bytes], methods: [GET] }
+    key_template: '{route}:{method}'
+    algorithm: sliding_window
+    limits: [{ rate: 100000000, period: 1m }]
+    local: true
+  - name: verify-inflight
+    level: route
+    match: { routes: [bytes] }
+    key_template: '{route}'
+    algorithm: concurrency
+    limits: [{ rate: 10000 }]
