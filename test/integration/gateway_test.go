@@ -86,6 +86,80 @@ func TestGatewayAPIKeys(t *testing.T) {
 	}
 }
 
+// TestGatewayRateLimit checks gateway-1's local policies from the compose
+// config: GET /anything/limited is answered 429 with Retry-After and the
+// RateLimit fields once limited-per-ip's 5 per 10 s are spent; a request with
+// ADR-0017's example key for alice goes through, with per-ip's fields, while
+// the shadow per-key policy records its decision (RL-25 – RL-27, GW-17).
+func TestGatewayRateLimit(t *testing.T) {
+	client := &http.Client{Timeout: 10 * time.Second}
+	send := func(path, key string) (int, http.Header, string) {
+		t.Helper()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://127.0.0.1:8000"+path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if key != "" {
+			req.Header.Set("X-API-Key", key)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp.StatusCode, resp.Header, string(body)
+	}
+
+	const policy = `"per-ip";q=5000;w=1, "limited-per-ip";q=5;w=10`
+	var limited http.Header
+	var body string
+	for i := 0; i < 6 && limited == nil; i++ {
+		status, h, b := send("/anything/limited", "")
+		if got := h.Get("RateLimit-Policy"); got != policy || h.Get("RateLimit") == "" {
+			t.Errorf("request %d: RateLimit-Policy %q and RateLimit %q, want %q and a value", i+1, got, h.Get("RateLimit"), policy)
+		}
+		switch status {
+		case http.StatusOK:
+		case http.StatusTooManyRequests:
+			limited, body = h, b
+		default:
+			t.Fatalf("request %d: status %d", i+1, status)
+		}
+	}
+	if limited == nil {
+		t.Fatal("6 requests in a row to /anything/limited were all allowed, want a 429 within 6")
+	}
+	if ra, err := strconv.Atoi(limited.Get("Retry-After")); err != nil || ra < 1 || ra > 10 ||
+		limited.Get("Content-Type") != "application/json" || body != `{"error":"rate limited"}` ||
+		!strings.Contains(limited.Get("RateLimit"), `"limited-per-ip";r=0;t=`) {
+		t.Errorf("429: Retry-After %q, %q %q, RateLimit %q", limited.Get("Retry-After"), limited.Get("Content-Type"), body, limited.Get("RateLimit"))
+	}
+
+	status, h, _ := send("/status/200", "alice-example-key-1")
+	if status != http.StatusOK || h.Get("RateLimit-Policy") != `"per-ip";q=5000;w=1` {
+		t.Errorf("GET /status/200 with alice's key = %d with RateLimit-Policy %q, want 200 with per-ip's only", status, h.Get("RateLimit-Policy"))
+	}
+	_, metrics := get(t, "http://127.0.0.1:8001/metrics")
+	for _, m := range []string{
+		`
+gw_ratelimit_decisions_total{decision="deny",mode="enforce",policy="limited-per-ip"} `,
+		`
+gw_ratelimit_decisions_total{decision="allow",mode="shadow",policy="per-key"} `,
+		`
+gw_requests_total{code_class="4xx",method="GET",origin="gateway",reason="ratelimited",route="limited",tenant="none"} `,
+		`
+gw_ratelimit_check_duration_seconds_count{backend="local"} `,
+	} {
+		if !strings.Contains(metrics, m) {
+			t.Errorf("admin /metrics has no %s", strings.TrimSpace(m))
+		}
+	}
+}
+
 // TestGatewayTLS checks gateway-1's TLS port 8443: HTTP/2 over TLS 1.2 or
 // later with the certificate from make certs, which the test trusts directly
 // (GW-04, SEC-01).

@@ -2,6 +2,9 @@
 # upstreams, e.g. http://127.0.0.1:8000/bytes/1024. The directory is mounted,
 # so saving this file (even by rename) reloads the gateways within a second.
 version: 1
+# Only gateway-1 runs by default; with --profile replicas, five gateways share
+# every limit, so set this to 5 (RL-31).
+ratelimit: { replicas: 1 }
 upstreams:
   - name: httpbin
     endpoints:
@@ -9,6 +12,45 @@ upstreams:
       - address: upstream-2:8080
       - address: upstream-3:8080
 routes:
+  - name: delay
+    match: { path_prefix: /delay }
+    upstream: httpbin
+  # A small limit to see a 429 by hand, e.g. GET /anything/limited six times.
+  - name: limited
+    match: { path_prefix: /anything/limited }
+    upstream: httpbin
   - name: default
     match: { path_prefix: / }
     upstream: httpbin
+# Local policies (ADR-0017): each gateway keeps their state in memory, and
+# none touches Redis (RL-17). The limits stay well above what make verify-m1
+# and the benchmarks send.
+policies:
+  - name: per-ip # IP flood limit; covers anonymous traffic too
+    level: global
+    match: { routes: ['*'] }
+    key_template: '{ip}'
+    algorithm: gcra
+    limits: [{ rate: 5000, period: 1s }]
+    local: true
+  - name: per-key # records what a per-key limit would deny, never rejects
+    level: consumer
+    match: { routes: ['*'] }
+    key_template: '{api_key}'
+    algorithm: gcra
+    limits: [{ rate: 10, period: 1s }]
+    mode: shadow
+    local: true
+  - name: delay-inflight
+    level: route
+    match: { routes: [delay] }
+    key_template: '{route}'
+    algorithm: concurrency
+    limits: [{ rate: 20 }] # max in flight; always local
+  - name: limited-per-ip
+    level: global
+    match: { routes: [limited] }
+    key_template: '{ip}'
+    algorithm: fixed_window
+    limits: [{ rate: 5, period: 10s }]
+    local: true
