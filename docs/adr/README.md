@@ -29,5 +29,6 @@ Decisions that shape Spillway and are not obvious from the code or from docs/des
 | [0018](0018-ratelimit-headers.md) | RateLimit headers | Accepted | 2026-11-10 |
 | [0019](0019-m2-exit-check.md) | The M2 exit check | Accepted | 2026-11-10 |
 | [0020](0020-method-case-in-policies.md) | Method case in rate limit policies | Accepted | 2026-11-10 |
-| [0021](0021-distributed-rate-limiting-model.md) | Distributed rate limiting model | Accepted | 2026-11-10 |
+| [0021](0021-distributed-rate-limiting-model.md) | Distributed rate limiting model | Accepted; GCRA emission interval superseded by 0023 | 2026-11-10 |
 | [0022](0022-multi-region.md) | Multi-region | Accepted | 2026-11-10 |
+| [0023](0023-gcra-emission-interval-in-whole-microseconds.md) | GCRA emission interval in whole microseconds | Accepted | 2026-11-10 |
