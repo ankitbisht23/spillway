@@ -6,7 +6,7 @@
 # The two keys are ADR-0017's example keys (its Example section), for dev and
 # tests only. To add a key, make a random one and store its prefix and hash:
 #   key=$(openssl rand -hex 24)
-#   echo "prefix: ${key:0:12}, hash: $(printf %s "$key" | shasum -a 256 | cut -d' ' -f1)"
+#   echo "prefix: '${key:0:12}', hash: '$(printf %s "$key" | shasum -a 256 | cut -d' ' -f1)'"
 version: 1
 consumers:
   - { name: alice, tenant: acme }
