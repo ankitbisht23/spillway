@@ -23,6 +23,8 @@ import (
 
 	"github.com/ankitbisht23/spillway/internal/config"
 	"github.com/ankitbisht23/spillway/internal/proxy"
+	"github.com/ankitbisht23/spillway/internal/ratelimit"
+	"github.com/ankitbisht23/spillway/internal/ratelimit/local"
 	"github.com/ankitbisht23/spillway/internal/telemetry"
 )
 
@@ -85,7 +87,16 @@ func run(log *slog.Logger) error {
 // requests get up to 10 s to finish, and serve returns.
 func serve(ctx context.Context, s settings, log *slog.Logger) error {
 	pools := proxy.NewRegistry(s.allow, net.DefaultResolver, log)
-	cfg, err := config.NewWatcher(s.configPath, log, pools.Apply)
+	// Upstream pools and rate limiters live outside the snapshot and are
+	// reconciled before each new one goes live (GW-29).
+	limiters := local.NewRegistry(ratelimit.SystemClock)
+	cfg, err := config.NewWatcher(s.configPath, log, func(snap *config.Snapshot) error {
+		if err := pools.Apply(snap); err != nil {
+			return err
+		}
+		limiters.Apply(snap)
+		return nil
+	})
 	if err != nil {
 		return err
 	}
@@ -102,7 +113,7 @@ func serve(ctx context.Context, s settings, log *slog.Logger) error {
 	}
 	reg := telemetry.NewRegistry()
 	rec := telemetry.NewRecorder(reg, log, s.accessLogSampleRate)
-	srv := proxy.NewServer(proxy.NewHandler(cfg.Snapshot, identity, s.trusted, pools, rec, log), log)
+	srv := proxy.NewServer(proxy.NewHandler(cfg.Snapshot, identity, s.trusted, pools, limiters, rec, log), log)
 	if s.tlsCert != "" {
 		certs, err := proxy.NewCerts(s.tlsCert, s.tlsKey, log)
 		if err != nil {
@@ -113,7 +124,8 @@ func serve(ctx context.Context, s settings, log *slog.Logger) error {
 	}
 	go cfg.Run(ctx, time.Second)
 	go pools.Run(ctx, s.dnsRefresh)
-	go rec.Run(ctx, time.Minute) // tenants are ranked per minute (OB-01)
+	go limiters.Run(ctx, 10*time.Second) // drops idle limiter keys (ADR-0017)
+	go rec.Run(ctx, time.Minute)         // tenants are ranked per minute (OB-01)
 
 	reg.MustRegister(prometheus.NewGaugeFunc(prometheus.GaugeOpts{
 		Name: "gw_config_version",

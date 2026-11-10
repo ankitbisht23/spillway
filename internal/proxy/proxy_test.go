@@ -21,6 +21,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/ankitbisht23/spillway/internal/config"
+	"github.com/ankitbisht23/spillway/internal/ratelimit"
+	"github.com/ankitbisht23/spillway/internal/ratelimit/local"
 	"github.com/ankitbisht23/spillway/internal/telemetry"
 )
 
@@ -117,12 +119,19 @@ func snapshot(t *testing.T, yaml string) *config.Snapshot {
 	return s
 }
 
+// t0 is where every test gateway's limiter clock starts: ADR-0018's test
+// vectors' instant.
+var t0 = time.Date(2026, 11, 10, 12, 0, 0, 250_000_000, time.UTC)
+
 // gateway serves h through a real HTTP server; current is the snapshot and
-// identity the identity, nil until a test sets one. It access-logs every
-// request to logs and keeps its metrics in metrics.
+// identity the identity, nil until a test sets one. Its rate limiters read
+// clock, which moves only when a test moves it. It access-logs every request
+// to logs and keeps its metrics in metrics.
 type gateway struct {
 	*httptest.Server
 	reg      *Registry
+	limiters *local.Registry
+	clock    *ratelimit.FakeClock
 	current  atomic.Pointer[config.Snapshot]
 	identity atomic.Pointer[config.Identity]
 	metrics  *prometheus.Registry
@@ -131,20 +140,28 @@ type gateway struct {
 
 func newGateway(t *testing.T, res Resolver, yaml string) *gateway {
 	t.Helper()
-	g := &gateway{reg: NewRegistry(loopback, res, slog.New(slog.DiscardHandler)), metrics: prometheus.NewRegistry(), logs: &logBuffer{}}
+	g := &gateway{reg: NewRegistry(loopback, res, slog.New(slog.DiscardHandler)), clock: ratelimit.NewFakeClock(t0), metrics: prometheus.NewRegistry(), logs: &logBuffer{}}
+	g.limiters = local.NewRegistry(g.clock)
 	g.apply(t, yaml)
 	rec := telemetry.NewRecorder(g.metrics, slog.New(slog.NewJSONHandler(g.logs, nil)), 1)
-	g.Server = httptest.NewServer(NewHandler(g.current.Load, g.identity.Load, nil, g.reg, rec, slog.New(slog.DiscardHandler)))
+	g.Server = httptest.NewServer(NewHandler(g.current.Load, g.identity.Load, nil, g.reg, g.limiters, rec, slog.New(slog.DiscardHandler)))
 	t.Cleanup(g.Close)
 	return g
 }
 
 func (g *gateway) apply(t *testing.T, yaml string) {
 	t.Helper()
-	s := snapshot(t, yaml)
+	g.swap(t, snapshot(t, yaml))
+}
+
+// swap reconciles the registries with s and makes it current, as the config
+// watcher does.
+func (g *gateway) swap(t *testing.T, s *config.Snapshot) {
 	if err := g.reg.Apply(s); err != nil {
-		t.Fatal(err)
+		t.Error(err)
+		return
 	}
+	g.limiters.Apply(s)
 	g.current.Store(s)
 }
 
@@ -354,7 +371,7 @@ routes:
 }
 
 func TestProxyErrorStatus(t *testing.T) {
-	h := NewHandler(nil, nil, nil, nil, nil, slog.New(slog.DiscardHandler))
+	h := NewHandler(nil, nil, nil, nil, nil, nil, slog.New(slog.DiscardHandler))
 	for _, tt := range []struct {
 		err    error
 		want   int
