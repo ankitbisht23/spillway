@@ -490,7 +490,7 @@ func TestScriptNoScript(t *testing.T) {
 	sum := sha1.Sum(src) //nolint:gosec // G401: as above
 	sha := hex.EncodeToString(sum[:])
 
-	l := gcraLimit(redis.GlobalKey(scriptName("noscript"), time.Second, redis.Digest("k")), "global", true, 10, time.Second, 10)
+	l := gcraLimit(redis.GlobalKey(scriptName("noscript"), time.Minute, redis.Digest("k")), "global", true, 10, time.Minute, 10)
 	scriptCall(t, c, 1, l)
 	node, err := rdb.MasterForKey(ctx, l.Key)
 	if err != nil {
