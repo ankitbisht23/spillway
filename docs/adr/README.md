@@ -28,3 +28,4 @@ Decisions that shape Spillway and are not obvious from the code or from docs/des
 | [0017](0017-local-rate-limiting-model.md) | Local rate limiting model | Accepted | 2026-11-10 |
 | [0018](0018-ratelimit-headers.md) | RateLimit headers | Accepted | 2026-11-10 |
 | [0019](0019-m2-exit-check.md) | The M2 exit check | Accepted | 2026-11-10 |
+| [0020](0020-method-case-in-policies.md) | Method case in rate limit policies | Accepted | 2026-11-10 |

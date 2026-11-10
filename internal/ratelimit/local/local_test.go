@@ -296,6 +296,58 @@ func TestSlidingWindowSweep(t *testing.T) {
 	}
 }
 
+// TestWindowRefund: a refund lands in the window of the admission it
+// reverses, and is lost if another request has since moved the key into the
+// next window, where it would erase that request's admission (ADR-0017).
+func TestWindowRefund(t *testing.T) {
+	type window interface {
+		ratelimit.Limiter
+		Refund(key string, cost int64, at time.Time) ratelimit.Decision
+	}
+	for name, newLimiter := range map[string]func(ratelimit.Clock) window{
+		"fixed":   func(c ratelimit.Clock) window { return NewFixedWindow(c, 2, time.Second) },
+		"sliding": func(c ratelimit.Clock) window { return NewSlidingWindow(c, 2, time.Second) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			clock := ratelimit.NewFakeClock(base)
+			l := newLimiter(clock)
+			k := ratelimit.Key("k")
+
+			// In the same window the refund is taken.
+			at := clock.Now()
+			take(l, k, 2)
+			if d := l.Refund(k, 1, at); !d.Allowed || d.Remaining != 1 {
+				t.Fatalf("refund in the admission's window: %+v, want allowed, remaining 1", d)
+			}
+			if !take(l, k, 1).Allowed {
+				t.Fatal("the refunded unit was not admitted")
+			}
+
+			// Admitted 1 ns before the next window, refunded after other
+			// requests filled the next one: the refund is lost.
+			clock.Advance(3*time.Second - 1)
+			at = clock.Now()
+			if !take(l, k, 1).Allowed {
+				t.Fatal("first request denied")
+			}
+			clock.Advance(1)
+			admitted := 0
+			for take(l, k, 1).Allowed {
+				if admitted++; admitted > 2 {
+					t.Fatal("more than 2 admitted in the next window")
+				}
+			}
+			if admitted == 0 {
+				t.Fatal("nothing admitted in the next window")
+			}
+			l.Refund(k, 1, at)
+			if d := take(l, k, 1); d.Allowed {
+				t.Fatalf("after the old window's refund: %+v, want a deny: the window is full", d)
+			}
+		})
+	}
+}
+
 func TestConcurrency(t *testing.T) {
 	c := NewConcurrency(3)
 	clock := ratelimit.NewFakeClock(base)

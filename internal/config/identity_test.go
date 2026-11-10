@@ -105,6 +105,11 @@ func TestIdentityRejects(t *testing.T) {
 		{"no hash", key(aliceKey[:12], "", "alice"), "api_keys[0].hash"},
 		{"undefined consumer", key(aliceKey[:12], h, "bob"), `api_keys[0]: consumer "bob" is not defined`},
 		{"no consumer", key(aliceKey[:12], h, ""), `api_keys[0]: consumer "" is not defined`},
+		// YAML reads these unquoted values as numbers; protojson's error
+		// would quote them.
+		{"unquoted digit prefix", "api_keys: [{prefix: 123456789012, hash: " + h + "}]", "api_keys[0].prefix: not a string; quote it"},
+		{"unquoted zero-led prefix", "api_keys: [{prefix: 000123456789, hash: " + h + "}]", "api_keys[0].prefix: not a string; quote it"},
+		{"unquoted digit hash", "api_keys: [{prefix: abcdefghijkl, hash: 123456789}]", "api_keys[0].hash: not a string; quote it"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -112,8 +117,8 @@ func TestIdentityRejects(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Errorf("error = %v, want %q", err, tt.want)
 			}
-			if err != nil && strings.Contains(err.Error(), aliceKey[:12]) {
-				t.Errorf("error %q names the key's prefix", err)
+			if err != nil && (strings.Contains(err.Error(), aliceKey[:12]) || strings.Contains(err.Error(), "123456789")) {
+				t.Errorf("error %q names part of a key", err)
 			}
 		})
 	}

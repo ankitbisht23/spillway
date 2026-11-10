@@ -91,6 +91,11 @@ func (r *Registry) newLimiter(algorithm string, l config.Limit, old ratelimit.Li
 	}
 }
 
+// Now is the time on the registry's clock, the one its limiters read.
+func (r *Registry) Now() time.Time {
+	return r.clock.Now()
+}
+
 // Limiter returns the limiter for id, or nil if the registry no longer has
 // it: a request still on an older snapshot skips that limit (ADR-0017).
 func (r *Registry) Limiter(id ID) ratelimit.Limiter {

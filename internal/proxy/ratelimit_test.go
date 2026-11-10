@@ -426,9 +426,81 @@ policies: [{name: ip, level: global, match: {routes: ['*']}, key_template: '{ip}
 	}
 }
 
+// TestRateLimitMethodCase: policies see the method upper-cased, so a
+// lower-case POST on a route that takes any method meets the POST limits and
+// shares the {method} bucket (ADR-0020).
+func TestRateLimitMethodCase(t *testing.T) {
+	u := newUpstream(t, "orders")
+	g := newGateway(t, newResolver(u), oneUpstream(u)+`
+policies: [{name: writes, level: global, match: {routes: ['*'], methods: [POST]}, key_template: '{ip}:{method}', algorithm: fixed_window, limits: [{rate: 1, period: 1m}], local: true}]
+`)
+	for i, want := range []struct {
+		method string
+		status int
+	}{{"POST", 200}, {"post", 429}, {"Post", 429}, {"pOST", 429}, {"GET", 200}} {
+		if got := g.send(t, want.method, "/", nil); got.status != want.status {
+			t.Errorf("request %d (%s): %d, want %d", i+1, want.method, got.status, want.status)
+		}
+	}
+}
+
+// TestRateLimitClientIP: {ip} is the X-Forwarded-For client only when the
+// peer is a trusted proxy; otherwise a spoofed X-Forwarded-For gets no bucket
+// of its own (SEC-05). The test client's peer is 127.0.0.1.
+func TestRateLimitClientIP(t *testing.T) {
+	policy := `
+policies: [{name: per-ip, level: global, match: {routes: ['*']}, key_template: '{ip}', algorithm: fixed_window, limits: [{rate: 1, period: 1m}], local: true}]
+`
+	type req struct {
+		xff    string
+		status int
+	}
+	for _, tt := range []struct {
+		name    string
+		trusted string
+		reqs    []req
+	}{
+		{"untrusted peer", "", []req{
+			{"203.0.113.1", 200},
+			{"203.0.113.2", 429}, // the peer's bucket, whatever the header says
+			{"", 429},
+		}},
+		{"trusted peer", "127.0.0.0/8", []req{
+			{"203.0.113.1", 200},
+			{"203.0.113.1", 429},
+			{"203.0.113.2", 200},
+			{"198.51.100.7, 203.0.113.3", 200}, // the rightmost untrusted entry
+			{"198.51.100.8, 203.0.113.3", 429},
+			{"203.0.113.4, 127.0.0.9", 200}, // trusted entries are skipped
+			{"203.0.113.4", 429},
+			{"", 200},          // no header: the peer
+			{"not-an-ip", 429}, // malformed: the peer
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			trusted, err := ParseTrustedProxies(tt.trusted)
+			if err != nil {
+				t.Fatal(err)
+			}
+			u := newUpstream(t, "orders")
+			g := newGatewayBehind(t, newResolver(u), oneUpstream(u)+policy, trusted)
+			for i, r := range tt.reqs {
+				h := http.Header{}
+				if r.xff != "" {
+					h.Set("X-Forwarded-For", r.xff)
+				}
+				if got := g.send(t, http.MethodGet, "/", h); got.status != r.status {
+					t.Errorf("request %d (X-Forwarded-For %q): %d, want %d", i+1, r.xff, got.status, r.status)
+				}
+			}
+		})
+	}
+}
+
 // TestRateLimitConcurrencyRelease: a concurrency slot is held while its
 // request runs and released exactly once when it completes, times out or
-// loses its client, with no goroutine left behind (RL-02).
+// loses its client, with no goroutine left behind (RL-02). Another holder
+// keeps a second slot throughout, so a second release would show.
 func TestRateLimitConcurrencyRelease(t *testing.T) {
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 	arrived := make(chan struct{}, 10)
@@ -440,15 +512,22 @@ func TestRateLimitConcurrencyRelease(t *testing.T) {
 		<-r.Context().Done() // until the gateway gives up on it
 	})
 	g := newGateway(t, newResolver(u), routeTo(u, "timeouts: {total: 300ms}")+`
-policies: [{name: inflight, level: route, match: {routes: [r]}, key_template: '{route}', algorithm: concurrency, limits: [{rate: 1}]}]
+policies: [{name: inflight, level: route, match: {routes: [r]}, key_template: '{route}', algorithm: concurrency, limits: [{rate: 2}]}]
 `)
 	inflight := g.limiter(t, "inflight", config.Concurrency, 0)
+	if d, _ := inflight.Allow(t.Context(), ratelimit.Key("r"), 1); !d.Allowed {
+		t.Fatal("the other holder got no slot")
+	}
 	free := func(what string) {
 		t.Helper()
-		for deadline := time.Now().Add(5 * time.Second); peek(inflight, "r").Remaining != 1; time.Sleep(5 * time.Millisecond) {
+		for deadline := time.Now().Add(5 * time.Second); peek(inflight, "r").Remaining == 0; time.Sleep(5 * time.Millisecond) {
 			if time.Now().After(deadline) {
 				t.Fatalf("after %s: the slot was not released", what)
 			}
+		}
+		time.Sleep(50 * time.Millisecond) // time for a second release to land
+		if d := peek(inflight, "r"); d.Remaining != 1 {
+			t.Fatalf("after %s: %d free, want 1: released more than once", what, d.Remaining)
 		}
 	}
 
@@ -489,9 +568,6 @@ policies: [{name: inflight, level: route, match: {routes: [r]}, key_template: '{
 		t.Error("the cancelled request got a response")
 	}
 	free("a client disconnect")
-	if d := peek(inflight, "r"); d.Remaining != 1 {
-		t.Errorf("released more than once: %d free, want 1", d.Remaining)
-	}
 
 	g.Close()
 	u.Close()
