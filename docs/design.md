@@ -635,7 +635,7 @@ Exit (`make verify-m1`): first load-test baseline recorded (NFR-01); config relo
 - [ ] Client IP from `X-Forwarded-For` only behind trusted proxy CIDRs (SEC-05, RL-04)
 - [ ] API keys looked up by prefix, digests compared in constant time, keys never logged (SEC-03)
 - [ ] 429 + RateLimit headers, `Retry-After` in whole seconds (rounded up, minimum 1); enforce, shadow, off; decision metrics (RL-25–RL-27)
-- [ ] ADR pinning one revision of the IETF RateLimit header draft, with exact header syntax and test vectors (RL-25)
+- [x] ADR pinning one revision of the IETF RateLimit header draft, with exact header syntax and test vectors (RL-25)
 - [ ] Fake-clock unit tests and property tests, each algorithm against its own bound (Testing, Property)
 
 Exit (`make verify-m2`): property tests pass for every algorithm against its own bound; shadow mode never rejects; added latency with local limits measured (NFR-03).
