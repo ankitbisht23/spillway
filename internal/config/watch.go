@@ -13,20 +13,33 @@ import (
 // Watcher serves the snapshot compiled from a config file and reloads it when
 // the file's content changes (CP-05, GW-21). It polls rather than watching for
 // events, which also catches the symlink swaps of a Kubernetes ConfigMap.
-type Watcher struct {
-	path    string
-	log     *slog.Logger
-	apply   func(*Snapshot) error
-	current atomic.Pointer[Snapshot]
-	sum     [sha256.Size]byte // content last tried, good or bad
-}
+type Watcher struct{ watcher[Snapshot] }
 
 // NewWatcher loads the file once; an invalid file is an error. apply, if not
 // nil, runs on each new snapshot before it is swapped in; an error rejects the
 // snapshot. The gateway uses it to check upstreams and reconcile runtime
 // state (GW-29).
 func NewWatcher(path string, log *slog.Logger, apply func(*Snapshot) error) (*Watcher, error) {
-	w := &Watcher{path: path, log: log, apply: apply}
+	w := &Watcher{watcher[Snapshot]{path: path, name: "config", log: log}}
+	w.compile = func(data []byte) (*Snapshot, error) {
+		c, err := Load(data)
+		if err != nil {
+			return nil, err
+		}
+		s, err := Compile(c)
+		if err != nil {
+			return nil, fmt.Errorf("config: %w", err)
+		}
+		if apply != nil {
+			if err := apply(s); err != nil {
+				return nil, fmt.Errorf("config: %w", err)
+			}
+		}
+		return s, nil
+	}
+	w.describe = func(s *Snapshot) []any {
+		return []any{"version", s.Version, "routes", len(s.Routes), "upstreams", len(s.Upstreams), "policies", len(s.Policies)}
+	}
 	if err := w.reload(); err != nil {
 		return nil, err
 	}
@@ -37,9 +50,49 @@ func NewWatcher(path string, log *slog.Logger, apply func(*Snapshot) error) (*Wa
 // result to the end, so a reload never changes a request midway.
 func (w *Watcher) Snapshot() *Snapshot { return w.current.Load() }
 
+// IdentityWatcher serves the identity compiled from an identity file and
+// reloads it the way Watcher reloads the config (GW-17, ADR-0017).
+type IdentityWatcher struct{ watcher[Identity] }
+
+// NewIdentityWatcher loads the file once; an invalid file is an error.
+func NewIdentityWatcher(path string, log *slog.Logger) (*IdentityWatcher, error) {
+	w := &IdentityWatcher{watcher[Identity]{path: path, name: "identity", log: log}}
+	w.compile = func(data []byte) (*Identity, error) {
+		c, err := LoadIdentity(data)
+		if err != nil {
+			return nil, err
+		}
+		id, err := CompileIdentity(c)
+		if err != nil {
+			return nil, fmt.Errorf("identity: %w", err)
+		}
+		return id, nil
+	}
+	w.describe = func(id *Identity) []any { return []any{"version", id.Version, "api_keys", len(id.keys)} }
+	if err := w.reload(); err != nil {
+		return nil, err
+	}
+	return w, nil
+}
+
+// Identity returns the current identity; like a snapshot, a request uses the
+// one it took to the end.
+func (w *IdentityWatcher) Identity() *Identity { return w.current.Load() }
+
+// watcher polls a file and serves what it compiles to.
+type watcher[T any] struct {
+	path     string
+	name     string // "config" or "identity", for errors and logs
+	log      *slog.Logger
+	compile  func([]byte) (*T, error)
+	describe func(*T) []any // log attributes, version first
+	current  atomic.Pointer[T]
+	sum      [sha256.Size]byte // content last tried, good or bad
+}
+
 // Run re-reads the file every interval until ctx ends. A file that fails to
-// load or compile leaves the current snapshot in place.
-func (w *Watcher) Run(ctx context.Context, interval time.Duration) {
+// load or compile leaves the current value in place.
+func (w *watcher[T]) Run(ctx context.Context, interval time.Duration) {
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
@@ -48,16 +101,17 @@ func (w *Watcher) Run(ctx context.Context, interval time.Duration) {
 			return
 		case <-t.C:
 			if err := w.reload(); err != nil {
-				w.log.Error("config reload failed; keeping the current config", "path", w.path, "version", w.Snapshot().Version, "err", err)
+				attrs := append([]any{"path", w.path}, w.describe(w.current.Load())...)
+				w.log.Error(w.name+" reload failed; keeping the current "+w.name, append(attrs, "err", err)...)
 			}
 		}
 	}
 }
 
-// reload swaps in a new snapshot if the file changed. The same bad content,
-// or the same unreadable file (hashed as empty), is reported once, not on
-// every poll.
-func (w *Watcher) reload() error {
+// reload swaps in a new value if the file changed. The same bad content, or
+// the same unreadable file (hashed as empty), is reported once, not on every
+// poll.
+func (w *watcher[T]) reload() error {
 	data, err := os.ReadFile(w.path)
 	sum := sha256.Sum256(data)
 	if w.current.Load() != nil && sum == w.sum {
@@ -65,22 +119,13 @@ func (w *Watcher) reload() error {
 	}
 	w.sum = sum
 	if err != nil {
-		return fmt.Errorf("config: %w", err)
+		return fmt.Errorf("%s: %w", w.name, err)
 	}
-	c, err := Load(data)
+	v, err := w.compile(data)
 	if err != nil {
 		return err
 	}
-	s, err := Compile(c)
-	if err != nil {
-		return fmt.Errorf("config: %w", err)
-	}
-	if w.apply != nil {
-		if err := w.apply(s); err != nil {
-			return fmt.Errorf("config: %w", err)
-		}
-	}
-	w.current.Store(s)
-	w.log.Info("config loaded", "path", w.path, "version", s.Version, "routes", len(s.Routes), "upstreams", len(s.Upstreams))
+	w.current.Store(v)
+	w.log.Info(w.name+" loaded", append([]any{"path", w.path}, w.describe(v)...)...)
 	return nil
 }

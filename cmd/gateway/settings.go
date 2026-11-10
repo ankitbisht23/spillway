@@ -16,6 +16,7 @@ import (
 // gateway may reach (ADR-0008).
 type settings struct {
 	configPath string          // SPILLWAY_GATEWAY_CONFIG: YAML config file (CP-05)
+	identity   string          // SPILLWAY_GATEWAY_IDENTITY: YAML identity file with consumers and static API keys (GW-17), optional
 	httpAddr   string          // SPILLWAY_GATEWAY_HTTP_ADDR: plain-HTTP listener, dev and benchmarks only, off when empty (SEC-01)
 	tlsAddr    string          // SPILLWAY_GATEWAY_TLS_ADDR: TLS listener (GW-04, SEC-01), default :8443
 	tlsCert    string          // SPILLWAY_GATEWAY_TLS_CERT: PEM certificate chain file; TLS is on when it and the key are set
@@ -36,6 +37,7 @@ const defaultAdminAddr = "127.0.0.1:8001"
 func loadSettings(getenv func(string) string) (settings, error) {
 	s := settings{
 		configPath: getenv("SPILLWAY_GATEWAY_CONFIG"),
+		identity:   getenv("SPILLWAY_GATEWAY_IDENTITY"),
 		httpAddr:   getenv("SPILLWAY_GATEWAY_HTTP_ADDR"),
 		tlsAddr:    cmp.Or(getenv("SPILLWAY_GATEWAY_TLS_ADDR"), ":8443"),
 		tlsCert:    getenv("SPILLWAY_GATEWAY_TLS_CERT"),

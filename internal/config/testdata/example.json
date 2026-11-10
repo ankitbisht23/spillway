@@ -1,5 +1,6 @@
 {
   "version": "42",
+  "ratelimit": {"replicas": 2},
   "upstreams": [
     {"name": "orders", "endpoints": [{"address": "orders-1:8080"}, {"address": "10.0.0.7:8080"}]},
     {"name": "catalog", "endpoints": [{"address": "catalog:9000"}]}
@@ -29,8 +30,33 @@
         "headers": [{"name": "x-canary", "exact": "on"}, {"name": "x-version", "regex": "v[12]"}]
       },
       "upstream": "orders",
-      "priority": 2
+      "priority": 2,
+      "cost": "3"
     },
     {"name": "catalog", "match": {"path_prefix": "/"}, "upstream": "catalog"}
+  ],
+  "policies": [
+    {
+      "name": "per-ip", "level": "global", "match": {"routes": ["*"]}, "key_template": "{ip}",
+      "algorithm": "gcra", "limits": [{"rate": "200", "period": "1s"}], "local": true
+    },
+    {
+      "name": "per-consumer", "level": "consumer", "match": {"routes": ["*"]}, "key_template": "{consumer}",
+      "algorithm": "gcra",
+      "limits": [{"rate": "100", "period": "1m"}, {"rate": "10000", "period": "1h", "burst": "501"}],
+      "mode": "enforce", "local": true
+    },
+    {
+      "name": "tenant-writes", "level": "tenant", "match": {"routes": ["orders-api"], "methods": ["POST", "DELETE"]},
+      "key_template": "{tenant}:{route}", "algorithm": "sliding_window", "limits": [{"rate": "600", "period": "1m"}], "local": true
+    },
+    {
+      "name": "order-inflight", "level": "route", "match": {"routes": ["order-by-id"]}, "key_template": "{route}",
+      "algorithm": "concurrency", "limits": [{"rate": "21"}], "mode": "shadow"
+    },
+    {
+      "name": "retired", "level": "global", "match": {"routes": ["*"]}, "key_template": "m:{method}:{header:x-client}",
+      "algorithm": "fixed_window", "limits": [{"rate": "10", "period": "1s"}], "mode": "off", "local": true
+    }
   ]
 }

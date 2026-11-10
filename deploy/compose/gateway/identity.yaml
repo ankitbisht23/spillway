@@ -1,0 +1,17 @@
+# Identity for the compose gateways (GW-17, ADR-0017): consumers and static
+# API keys, sent in the X-API-Key header. Only each key's first 12 characters
+# (prefix) and lower-case hex SHA-256 (hash) are stored, never the key. Like
+# config.yaml, saving this file reloads the gateways within a second.
+#
+# The two keys are ADR-0017's example keys (its Example section), for dev and
+# tests only. To add a key, make a random one and store its prefix and hash:
+#   key=$(openssl rand -hex 24)
+#   echo "prefix: ${key:0:12}, hash: $(printf %s "$key" | shasum -a 256 | cut -d' ' -f1)"
+version: 1
+consumers:
+  - { name: alice, tenant: acme }
+  - { name: bob, tenant: acme }
+  - { name: carol }
+api_keys:
+  - { prefix: alice-exampl, hash: 64571644321bee63cc93bac0fe8dfdb7d1858a642b4bcef984833813e18b6507, consumer: alice }
+  - { prefix: bob-example-, hash: d9c03dab37eb8704de0f841f2032d043796278f8060fe1aa845719671e158210, consumer: bob }

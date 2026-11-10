@@ -17,6 +17,7 @@ type Snapshot struct {
 	Version   int64
 	Routes    []Route
 	Upstreams map[string]*Upstream // by name
+	Policies  []Policy             // in evaluation order (ADR-0017)
 	router    *router.Router
 }
 
@@ -31,6 +32,7 @@ type Route struct {
 	MaxHeaderBytes  int   // 0 means the server's limit
 	Timeouts        Timeouts
 	HSTS            string // Strict-Transport-Security value for TLS responses; empty means none
+	Cost            int64  // cost units each request deducts (RL-07)
 	strip           int    // leading path segments that strip_prefix removes
 }
 
@@ -108,6 +110,9 @@ func Compile(c *configpb.Config) (*Snapshot, error) {
 		if re, ok := errors.AsType[*router.RouteError](err); ok {
 			return nil, fmt.Errorf("route %q: %w", s.Routes[re.Index].Name, re.Err)
 		}
+		return nil, err
+	}
+	if s.Policies, err = compilePolicies(c, s.Routes); err != nil {
 		return nil, err
 	}
 	return s, nil
