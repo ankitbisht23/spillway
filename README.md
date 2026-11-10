@@ -2,7 +2,7 @@
 
 A horizontally scalable API gateway in Go with a Redis-backed distributed rate limiter, a Postgres-backed control plane and a React admin UI.
 
-Status: M0 (foundations) and M1 (proxy core) are done; M2 (local rate limiting) is next.
+Status: M0 (foundations), M1 (proxy core) and M2 (local rate limiting) are done; M3 (distributed rate limiting) is next.
 
 - [Requirements and build plan](docs/design.md)
 - [Prerequisites and setup](docs/setup.md)
