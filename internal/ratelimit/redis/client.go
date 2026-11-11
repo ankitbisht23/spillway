@@ -213,7 +213,7 @@ func (c *Client) run(ctx context.Context, args []any, limits []Limit) (Result, e
 	node, err := c.rdb.MasterForKey(ctx, keys[0])
 	if err != nil {
 		kind := KindConn
-		if ctx.Err() != nil {
+		if timedOut(ctx, err) {
 			kind = KindTimeout
 		}
 		return Result{}, &Error{Kind: kind, Err: err}
@@ -283,7 +283,6 @@ var clusterReplies = []string{"CLUSTERDOWN", "TRYAGAIN", "MASTERDOWN", "LOADING"
 func classify(ctx context.Context, node string, err error) *Error {
 	kind := KindConn
 	var rerr goredis.Error
-	var nerr net.Error
 	switch {
 	case errors.As(err, &rerr):
 		kind = KindScript
@@ -293,10 +292,20 @@ func classify(ctx context.Context, node string, err error) *Error {
 			}
 		}
 	case errors.Is(err, goredis.ErrPoolTimeout):
-	case errors.Is(err, context.DeadlineExceeded), ctx.Err() != nil, errors.As(err, &nerr) && nerr.Timeout():
+	case timedOut(ctx, err):
 		kind = KindTimeout
 	}
 	return &Error{Kind: kind, Node: node, Err: err}
+}
+
+// timedOut reports whether err is a timeout or ctx's deadline has passed.
+// It reads the deadline itself: a socket deadline taken from ctx can fire
+// before ctx's own timer marks ctx done (ADR-0025).
+func timedOut(ctx context.Context, err error) bool {
+	var nerr net.Error
+	deadline, ok := ctx.Deadline()
+	return errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil ||
+		ok && !time.Now().Before(deadline) || errors.As(err, &nerr) && nerr.Timeout()
 }
 
 // checkVersion makes sure the node at addr runs Redis 7 or later (RL-30),

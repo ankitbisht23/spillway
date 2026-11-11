@@ -151,6 +151,12 @@ func (timeoutErr) Error() string   { return "i/o timeout" }
 func (timeoutErr) Timeout() bool   { return true }
 func (timeoutErr) Temporary() bool { return true }
 
+// lateCtx is a context whose deadline has passed but whose timer has not
+// yet marked it done, as when a socket deadline taken from it fires first.
+type lateCtx struct{ context.Context }
+
+func (lateCtx) Deadline() (time.Time, bool) { return time.Now().Add(-time.Microsecond), true }
+
 type replyErr string
 
 func (e replyErr) Error() string { return string(e) }
@@ -167,6 +173,7 @@ func TestClassify(t *testing.T) {
 		{context.Background(), context.DeadlineExceeded, KindTimeout},
 		{context.Background(), fmt.Errorf("read: %w", timeoutErr{}), KindTimeout},
 		{expired, io.EOF, KindTimeout},
+		{lateCtx{context.Background()}, io.EOF, KindTimeout},
 		{context.Background(), io.EOF, KindConn},
 		{context.Background(), goredis.ErrPoolTimeout, KindConn},
 		{context.Background(), goredis.ErrClosed, KindConn},
