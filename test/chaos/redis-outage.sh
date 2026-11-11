@@ -97,12 +97,19 @@ run() {
 decisions() { # decisions <policy> <decision>: gateway-1's enforce decisions during the runs
 	delta gateway-1 "gw_ratelimit_decisions_total{decision=\"$2\",mode=\"enforce\",policy=\"$1\"} "
 }
+# closed_other <file>: the chaos-closed route's 5xx answers whose reason is
+# not fail_closed, the reason of the gateway's fail_closed 503.
+closed_other() {
+	awk 'index($0, "gw_requests_total{code_class=\"5xx\"") == 1 && index($0, "route=\"chaos-closed\"") && !index($0, "reason=\"fail_closed\"") { s += $NF }
+		END { printf "%d\n", s }' "$1"
+}
 
 run open 'if (.status["2xx"] // 0) * 1000 >= .requests.sent * 999 then 0 else 1 end' \
 	"; $(decisions chaos-open fail_open) fail_open decisions, warm-up included" "fail_open: >= 99.9% allowed"
 closed=$(decisions chaos-closed fail_closed)
-run closed "if (.status[\"5xx\"] // 0) == .requests.sent and $closed >= .requests.sent then 0 else 1 end" \
-	"; $closed fail_closed decisions, warm-up included" "fail_closed: every request 503"
+other=$(($(closed_other "$tmp/after-gateway-1") - $(closed_other "$tmp/before-gateway-1")))
+run closed "if (.status[\"5xx\"] // 0) == .requests.sent and $closed >= .requests.sent and $other == 0 then 0 else 1 end" \
+	"; $closed fail_closed decisions, warm-up included; $other 5xx for another reason" "fail_closed: every request 503"
 for i in 1 2 3; do
 	run "degraded-$i" '(((.status["2xx"] // 0) - 10) / '"$seconds"') as $r | if $r >= 90 and $r <= 110 then 0 else 1 end' \
 		"; admitted (2xx - burst 10) / ${seconds} s = \((((.status[\"2xx\"] // 0) - 10) / $seconds * 10 | round) / 10)/s, limit 300/s / 3 replicas" \
