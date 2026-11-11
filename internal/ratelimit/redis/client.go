@@ -93,6 +93,7 @@ type Client struct {
 	breakers *breakers
 	dialer   func(ctx context.Context, network, addr string) (net.Conn, error) // nil: go-redis's
 	stop     context.CancelFunc                                                // ends the health checks
+	checks   sync.WaitGroup                                                    // the health check loop
 
 	mu    sync.Mutex
 	nodes map[string]bool            // node addresses checked to run Redis 7+ (RL-30)
@@ -123,7 +124,7 @@ func NewClient(addrs []string, addrMap map[string]string, clock ratelimit.Clock,
 	c.breakers = newBreakers(clock, log, c.reload, func(addr string) { go c.refill(addr) })
 	ctx, stop := context.WithCancel(context.Background())
 	c.stop = stop
-	go c.health(ctx)
+	c.checks.Go(func() { c.health(ctx) })
 	return c
 }
 
@@ -263,6 +264,7 @@ func (c *Client) warm(ctx context.Context) (int, error) {
 // Close stops the health checks and closes the client's connections.
 func (c *Client) Close() error {
 	c.stop()
+	c.checks.Wait() // no round is left to make a health check client after this
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for _, node := range c.pings {
