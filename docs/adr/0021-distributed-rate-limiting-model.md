@@ -1,6 +1,6 @@
 # 0021. Distributed rate limiting model
 
-- **Status:** Accepted; GCRA emission interval formula superseded by [ADR-0023](0023-gcra-emission-interval-in-whole-microseconds.md)
+- **Status:** Accepted; GCRA emission interval formula superseded by [ADR-0023](0023-gcra-emission-interval-in-whole-microseconds.md); "nothing is loaded at start" superseded by [ADR-0024](0024-redis-limiter-warm-up.md)
 - **Date:** 2026-11-10
 - **Requirement IDs:** RL-01, RL-03 – RL-07, RL-11 – RL-17, RL-22 – RL-27, RL-29 – RL-31, GW-01, GW-24, GW-29, OB-01, OB-03, NFR-03, NFR-04, NFR-06, NFR-13
 

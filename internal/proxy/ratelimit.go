@@ -34,7 +34,8 @@ type limits struct {
 	policies []config.Policy
 	registry *local.Registry
 	redis    Redis         // nil without Redis: the gateway then has no Redis policies
-	budget   time.Duration // each Redis call's deadline (ADR-0021, until one budget per request)
+	budget   time.Duration // one Redis time budget for all of the request's calls (RL-22)
+	replicas int64         // degraded limiters' divisor (RL-31)
 	rec      *telemetry.Recorder
 	log      *slog.Logger
 	r        *http.Request
@@ -44,13 +45,16 @@ type limits struct {
 	checks   []check      // in evaluation order
 	calls    []*redisCall // the Redis calls that answered, in order
 	denied   bool         // an enforce limit denied the request
+	// unavailable: Redis failed for an enforce fail_closed policy, so the
+	// request is answered 503 (RL-23).
+	unavailable bool
 }
 
 // check is one limit's evaluation for the request.
 type check struct {
 	policy  *config.Policy
-	limit   config.Limit
-	limiter ratelimit.Limiter // nil for a Redis limit
+	limit   config.Limit      // a degraded limiter's per-replica limit
+	limiter ratelimit.Limiter // nil for a Redis limit; local or degraded otherwise
 	key     string
 	d       ratelimit.Decision // the last decision: the refund's once refunded
 	at      time.Time          // on the registry's clock, at or before the admission
@@ -61,11 +65,15 @@ type check struct {
 // (ADR-0021).
 type redisCall struct {
 	limits   []rlredis.Limit
-	policies []*config.Policy // of each limit
+	policies []*config.Policy // of each limit; a policy's limits are adjacent
 	conf     []config.Limit   // of each limit
 	checks   []int            // index in limits.checks of each limit, once answered
 	nowUS    int64            // the call's Redis TIME, which its refund names
 }
+
+// errBudgetSpent fails a Redis call that the request's budget left no time
+// for; it is never sent (RL-22).
+var errBudgetSpent = errors.New("redis time budget spent before the call")
 
 // refunder is a window limiter, whose refund is lost if it crosses a window
 // boundary since the admission (ADR-0017).
@@ -77,7 +85,7 @@ type refunder interface {
 // by the client at ip.
 func newLimits(s *config.Snapshot, route *config.Route, registry *local.Registry, redis Redis, rec *telemetry.Recorder, log *slog.Logger, r *http.Request, q *telemetry.Request, ip netip.Addr) *limits {
 	l := &limits{
-		policies: s.Policies, registry: registry, redis: redis, budget: s.RedisBudget, rec: rec, log: log, r: r, q: q, cost: route.Cost,
+		policies: s.Policies, registry: registry, redis: redis, budget: s.RedisBudget, replicas: s.Replicas, rec: rec, log: log, r: r, q: q, cost: route.Cost,
 		// Upper-cased: many upstreams take "post" for POST, so it must not
 		// skip POST policies or get a {method} bucket of its own (ADR-0020).
 		values: config.KeyValues{Route: route.Name, Method: strings.ToUpper(r.Method), Header: r.Header},
@@ -152,18 +160,37 @@ func (l *limits) check(identity bool) bool {
 // checkRedis evaluates the Redis policies once both local phases allowed
 // the request (ADR-0021): the tenant-slot call, or without a tenant one call
 // per {k:} digest, then one call per global policy (RL-05, RL-14). A call is
-// sent only if every call before it allowed. If one denies, everything the
-// request holds is refunded and checkRedis returns false.
+// sent only if every call before it allowed, or failed and its failure
+// modes let the request go on. All of them share one time budget from the
+// start of the first (RL-22): a call the budget leaves no time for is not
+// sent and fails as a timeout. If one denies, or a failure mode ends the
+// request, everything the request holds is refunded and checkRedis returns
+// false; unavailable then says whether the answer is 503 (RL-23).
 func (l *limits) checkRedis() bool {
 	if l.redis == nil {
 		return true
 	}
-	for _, c := range l.redisCalls() {
-		ctx, cancel := context.WithTimeout(context.WithoutCancel(l.r.Context()), l.budget)
-		res, err := l.redis.Call(ctx, l.cost, c.limits)
-		cancel()
+	calls := l.redisCalls()
+	if len(calls) == 0 {
+		return true
+	}
+	start := time.Now()
+	defer func() { l.rec.RateLimitCheck(telemetry.BackendRedis, time.Since(start)) }()
+	deadline := start.Add(l.budget)
+	// The request's values reach the calls, but a client that goes away
+	// cannot cut a sent call short.
+	ctx, cancel := context.WithDeadline(context.WithoutCancel(l.r.Context()), deadline)
+	defer cancel()
+	for _, c := range calls {
+		var res rlredis.Result
+		err := error(&rlredis.Error{Kind: rlredis.KindTimeout, Err: errBudgetSpent})
+		if time.Now().Before(deadline) {
+			res, err = l.redis.Call(ctx, l.cost, c.limits)
+		}
 		if err != nil {
-			l.failed(c, err)
+			if !l.failed(c, err) {
+				return false
+			}
 			continue
 		}
 		c.nowUS = res.NowUS
@@ -190,16 +217,75 @@ func (l *limits) checkRedis() bool {
 	return true
 }
 
-// failed handles a Redis call that failed. Until failure modes arrive, every
-// policy in it allows and records fail_open (ADR-0021, interim behaviour).
-func (l *limits) failed(c *redisCall, err error) {
-	var e *rlredis.Error
-	kind, node := rlredis.KindConn, ""
-	if errors.As(err, &e) {
-		kind, node = e.Kind, e.Node
+// failed applies the failure modes of the policies in c, a call that failed
+// (RL-23, ADR-0021). An enforce fail_closed policy makes the request a 503,
+// and nothing else in c is evaluated; otherwise every degraded policy is
+// checked against its in-memory limiter, and an enforce one that denies
+// makes it a 429. fail_open policies allow, and shadow policies never change
+// the outcome. It returns false, with everything the request holds
+// refunded, if the request ends here.
+func (l *limits) failed(c *redisCall, err error) bool {
+	kind, node := errorKind(err)
+	l.rec.RedisError(kind)
+	// Debug: during an outage every request fails; the metric and the
+	// breaker's transition logs carry it.
+	l.log.Debug("redis limiter call failed; failure modes apply", "kind", kind, "node", node, "request_id", l.q.ID)
+	for _, p := range c.policies {
+		l.unavailable = l.unavailable || p.FailureMode == config.FailClosed && p.Mode == config.Enforce
 	}
-	l.log.Warn("redis limiter call failed; its policies allow", "kind", kind, "node", node, "request_id", l.q.ID)
-	l.decide(c, func(int) string { return "fail_open" })
+	at := l.registry.Now()
+	for i := 0; i < len(c.limits); {
+		p, decision, applied := c.policies[i], "allow", true
+		j := i
+		for j < len(c.limits) && c.policies[j] == p {
+			j++
+		}
+		switch p.FailureMode {
+		case config.FailOpen:
+			decision = "fail_open"
+		case config.FailClosed:
+			decision = "fail_closed"
+		default: // config.Degraded
+			applied = false
+			if l.unavailable {
+				break // not evaluated: the request is answered 503
+			}
+			for k := i; k < j; k++ {
+				limiter := l.registry.Limiter(local.DegradedID(p, c.conf[k]))
+				if limiter == nil {
+					continue // removed by a reload since this request's snapshot
+				}
+				applied = true
+				// Keyed like the Redis key, so a tenant's degraded state is
+				// its own as in Redis.
+				key := ratelimit.Key(c.limits[k].Key)
+				d, _ := limiter.Allow(l.r.Context(), key, l.cost) // local limiters never fail
+				l.checks = append(l.checks, check{policy: p, limit: c.conf[k].PerReplica(l.replicas), limiter: limiter, key: key, d: d, at: at, held: d.Allowed})
+				if !d.Allowed {
+					decision = "deny"
+					l.denied = l.denied || p.Mode == config.Enforce
+				}
+			}
+		}
+		if applied {
+			l.q.Decisions = append(l.q.Decisions, telemetry.Decision{Policy: p.Name, Decision: decision, Mode: p.Mode})
+		}
+		i = j
+	}
+	if l.unavailable || l.denied {
+		l.refund()
+		return false
+	}
+	return true
+}
+
+// errorKind returns a limiter error's kind and node.
+func errorKind(err error) (kind, node string) {
+	var e *rlredis.Error
+	if errors.As(err, &e) {
+		return e.Kind, e.Node
+	}
+	return rlredis.KindConn, ""
 }
 
 // decide records one decision per policy of c: of its limits, the first
@@ -310,11 +396,9 @@ func (l *limits) refundRedis(admittedUS int64, written []rlredis.Limit) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(l.r.Context()), l.budget)
 	defer cancel()
 	if _, err := l.redis.Refund(ctx, l.cost, admittedUS, written); err != nil {
-		var e *rlredis.Error
-		kind, node := rlredis.KindConn, ""
-		if errors.As(err, &e) {
-			kind, node = e.Kind, e.Node
-		}
+		kind, node := errorKind(err)
+		l.rec.RedisError(kind)
+		l.rec.RefundFailure()
 		l.log.Debug("redis limiter refund failed", "kind", kind, "node", node, "request_id", l.q.ID)
 	}
 }

@@ -195,12 +195,18 @@ func TestMetricLabels(t *testing.T) {
 		{Route: NoRoute, Method: "GET", Status: 404, Origin: OriginGateway, Reason: ReasonNone},
 		{Route: "orders", Method: "GET", Status: 429, Origin: OriginGateway, Reason: ReasonRateLimited, Decisions: []Decision{{"per-ip", "deny", "enforce"}, {"per-agent", "deny", "shadow"}}},
 		{Route: "orders", Method: "POST", Status: 201, Origin: OriginUpstream, Reason: ReasonNone, Decisions: []Decision{{"per-ip", "allow", "enforce"}, {"per-agent", "deny", "shadow"}}},
+		{Route: "orders", Method: "POST", Status: 503, Origin: OriginGateway, Reason: ReasonFailClosed, Decisions: []Decision{{"global", "fail_closed", "enforce"}, {"tenant", "fail_open", "enforce"}}},
 	} {
 		q.ID, q.Tenant, q.Latency = "x", NoTenant, 3*time.Millisecond
 		rec.Request(t.Context(), &q)
 	}
 	rec.UpstreamAttempt("orders", 1, 2*time.Millisecond)
 	rec.RateLimitCheck(BackendLocal, 20*time.Microsecond)
+	rec.RateLimitCheck(BackendRedis, 6*time.Millisecond)
+	rec.RedisError("timeout")
+	rec.RedisError("timeout")
+	rec.RedisError("conn")
+	rec.RefundFailure()
 
 	m := scrape(t, reg)
 	for _, s := range []string{
@@ -216,7 +222,16 @@ func TestMetricLabels(t *testing.T) {
 		`gw_ratelimit_decisions_total{decision="deny",mode="shadow",policy="per-agent"} 2`,
 		`gw_ratelimit_check_duration_seconds_bucket{backend="local",le="1e-05"} 0`,
 		`gw_ratelimit_check_duration_seconds_bucket{backend="local",le="2.5e-05"} 1`,
-		`gw_request_duration_seconds_count{route="orders",tenant="none"} 7`,
+		`gw_ratelimit_check_duration_seconds_bucket{backend="redis",le="0.005"} 0`,
+		`gw_ratelimit_check_duration_seconds_bucket{backend="redis",le="0.007"} 1`,
+		`gw_requests_total{code_class="5xx",method="POST",origin="gateway",reason="fail_closed",route="orders",tenant="none"} 1`,
+		`gw_ratelimit_decisions_total{decision="fail_closed",mode="enforce",policy="global"} 1`,
+		`gw_ratelimit_decisions_total{decision="fail_open",mode="enforce",policy="tenant"} 1`,
+		`gw_redis_errors_total{kind="timeout"} 2`,
+		`gw_redis_errors_total{kind="conn"} 1`,
+		`gw_redis_errors_total{kind="script"} 0`,
+		`gw_ratelimit_refund_failures_total 1`,
+		`gw_request_duration_seconds_count{route="orders",tenant="none"} 8`,
 		`gw_request_duration_seconds_bucket{route="none",tenant="none",le="0.0025"} 0`,
 		`gw_request_duration_seconds_bucket{route="none",tenant="none",le="0.005"} 1`,
 		`gw_upstream_duration_seconds_count{attempt="1",upstream="orders"} 1`,

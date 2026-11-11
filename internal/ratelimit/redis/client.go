@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
@@ -87,25 +88,86 @@ type Result struct {
 
 // Client runs the limiter script on Redis Cluster.
 type Client struct {
-	rdb *goredis.ClusterClient
-	log *slog.Logger
+	rdb      *goredis.ClusterClient
+	log      *slog.Logger
+	breakers *breakers
 
 	mu    sync.Mutex
-	nodes map[string]bool // primary address → runs Redis 7+; absent until checked
+	nodes map[string]bool // node addresses checked to run Redis 7+ (RL-30)
 }
 
 // NewClient returns the limiter's cluster client, dialing through addrMap
-// when it is set (ADR-0004). It never contacts Redis itself; the first call
-// does (GW-24).
+// when it is set (ADR-0004), with one circuit breaker per primary on clock
+// (RL-22). It never contacts Redis itself; Warm and calls do (GW-24).
 //
 // MaxRetries 0 stops the node clients from retrying, and
 // ContextTimeoutEnabled makes a call's deadline reach the socket (RL-16).
-func NewClient(addrs []string, addrMap map[string]string, log *slog.Logger) *Client {
+func NewClient(addrs []string, addrMap map[string]string, clock ratelimit.Clock, log *slog.Logger) *Client {
 	opt := &goredis.ClusterOptions{Addrs: addrs, MaxRetries: 0, ContextTimeoutEnabled: true}
 	if addrMap != nil {
 		opt.Dialer = Dialer(addrMap)
 	}
-	return &Client{rdb: goredis.NewClusterClient(opt), log: log, nodes: make(map[string]bool)}
+	c := &Client{rdb: goredis.NewClusterClient(opt), log: log, nodes: make(map[string]bool)}
+	// A breaker that opens may mean a failover: reload the slot map now, so
+	// the slot reaches the promoted replica as soon as it is elected
+	// (ADR-0021). The reload runs in the background.
+	c.breakers = newBreakers(clock, log, func() { c.rdb.ReloadState(context.Background()) })
+	return c
+}
+
+// warmTimeout bounds one warm-up pass.
+const warmTimeout = 5 * time.Second
+
+// Warm prepares every node for the request path (ADR-0024): it loads the
+// slot map and, on every primary and replica, opens a connection, checks the
+// Redis version (RL-30) and loads the script, so that a request's first call
+// to a node, or to a replica promoted later, is one EVALSHA within its
+// budget. It tries again every retry until one pass succeeds or ctx ends.
+// The gateway runs it in the background, so readiness never waits for Redis
+// (GW-24).
+func (c *Client) Warm(ctx context.Context, retry time.Duration) {
+	t := time.NewTimer(0)
+	defer t.Stop()
+	for failed := false; ; {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		n, err := c.warm(ctx)
+		if err == nil {
+			c.log.Info("redis limiter warmed", "nodes", n)
+			return
+		}
+		if !failed {
+			c.log.Warn("redis limiter warm-up failed; trying again", "err", err, "every", retry)
+			failed = true
+		}
+		t.Reset(retry)
+	}
+}
+
+// warm makes one warm-up pass and returns how many nodes it prepared. A node
+// below Redis 7 is skipped: its breaker is held open for good.
+func (c *Client) warm(ctx context.Context) (int, error) {
+	ctx, cancel := context.WithTimeout(ctx, warmTimeout)
+	defer cancel()
+	var n atomic.Int64
+	err := c.rdb.ForEachShard(ctx, func(ctx context.Context, node *goredis.Client) error {
+		addr := node.Options().Addr
+		if err := c.checkVersion(ctx, node, addr); err != nil {
+			if errors.Is(err, errOldRedis) {
+				return nil
+			}
+			return err
+		}
+		if err := node.ScriptLoad(ctx, script).Err(); err != nil {
+			return classify(ctx, addr, err)
+		}
+		n.Add(1)
+		return nil
+	})
+	return int(n.Load()), err
 }
 
 // Close closes the client's connections.
@@ -157,12 +219,23 @@ func (c *Client) run(ctx context.Context, args []any, limits []Limit) (Result, e
 		return Result{}, &Error{Kind: kind, Err: err}
 	}
 	addr := node.Options().Addr
+	probe, err := c.breakers.allow(addr)
+	if err != nil {
+		return Result{}, &Error{Kind: KindConn, Node: addr, Err: err}
+	}
+	res, err := c.send(ctx, node, addr, keys, args, len(limits))
+	c.breakers.done(addr, probe, err == nil)
+	return res, err
+}
+
+// send runs the script on node, the primary at addr, once its version is
+// checked.
+func (c *Client) send(ctx context.Context, node *goredis.Client, addr string, keys []string, args []any, n int) (Result, error) {
 	if err := c.checkVersion(ctx, node, addr); err != nil {
 		return Result{}, err
 	}
-
 	cmd := scriptCmd(ctx, "evalsha", scriptSHA, keys, args)
-	err = c.rdb.Process(ctx, cmd)
+	err := c.rdb.Process(ctx, cmd)
 	if isNoScript(err) {
 		cmd = scriptCmd(ctx, "eval", script, keys, args)
 		err = c.rdb.Process(ctx, cmd)
@@ -170,7 +243,7 @@ func (c *Client) run(ctx context.Context, args []any, limits []Limit) (Result, e
 	if err != nil {
 		return Result{}, classify(ctx, addr, err)
 	}
-	res, err := decode(cmd.Val(), len(limits))
+	res, err := decode(cmd.Val(), n)
 	if err != nil {
 		return Result{}, &Error{Kind: KindScript, Node: addr, Err: err}
 	}
@@ -228,16 +301,13 @@ func classify(ctx context.Context, node string, err error) *Error {
 
 // checkVersion makes sure the node at addr runs Redis 7 or later (RL-30),
 // asking it with INFO server under ctx the first time. An INFO that fails
-// fails the call and is tried again next time; a node below 7 fails every
-// call for the life of the process.
+// fails the call and is tried again next time; a node below 7 has its
+// breaker held open, so every later call to it fails without being sent.
 func (c *Client) checkVersion(ctx context.Context, node *goredis.Client, addr string) error {
 	c.mu.Lock()
-	ok, checked := c.nodes[addr]
+	checked := c.nodes[addr]
 	c.mu.Unlock()
 	if checked {
-		if !ok {
-			return &Error{Kind: KindConn, Node: addr, Err: errOldRedis}
-		}
 		return nil
 	}
 	info, err := node.Info(ctx, "server").Result()
@@ -248,18 +318,16 @@ func (c *Client) checkVersion(ctx context.Context, node *goredis.Client, addr st
 	if err != nil {
 		return &Error{Kind: KindScript, Node: addr, Err: err}
 	}
-	ok = major >= 7
+	if major < 7 {
+		if c.breakers.hold(addr, errOldRedis) {
+			c.log.Error("redis limiter: node runs Redis older than 7; every call to it fails", "node", addr, "redis_version", version)
+		}
+		return &Error{Kind: KindConn, Node: addr, Err: errOldRedis}
+	}
 	c.mu.Lock()
-	_, checked = c.nodes[addr]
-	c.nodes[addr] = ok
+	c.nodes[addr] = true
 	c.mu.Unlock()
-	if ok {
-		return nil
-	}
-	if !checked {
-		c.log.Error("redis limiter: node runs Redis older than 7; every call to it fails", "node", addr, "redis_version", version)
-	}
-	return &Error{Kind: KindConn, Node: addr, Err: errOldRedis}
+	return nil
 }
 
 // redisVersion returns redis_version from an INFO server reply and its

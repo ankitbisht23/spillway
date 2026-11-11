@@ -91,12 +91,14 @@ func serve(ctx context.Context, s settings, log *slog.Logger) error {
 	// Upstream pools and rate limiters live outside the snapshot and are
 	// reconciled before each new one goes live (GW-29).
 	limiters := local.NewRegistry(ratelimit.SystemClock)
-	// Redis policies run on the limiter's cluster (ADR-0021); the client
-	// connects on its first call, so readiness never waits for Redis (GW-24).
+	// Redis policies run on the limiter's cluster (ADR-0021). The client
+	// warms up in the background, so readiness never waits for Redis
+	// (GW-24, ADR-0024).
 	var rl proxy.Redis
 	if len(s.redisAddrs) > 0 {
-		c := redis.NewClient(s.redisAddrs, s.redisAddrMap, log)
+		c := redis.NewClient(s.redisAddrs, s.redisAddrMap, ratelimit.SystemClock, log)
 		defer func() { _ = c.Close() }()
+		go c.Warm(ctx, time.Second)
 		rl = c
 	}
 	cfg, err := config.NewWatcher(s.configPath, log, func(snap *config.Snapshot) error {

@@ -79,6 +79,17 @@ type Limit struct {
 	Burst  int64         // GCRA only, after its default
 }
 
+// PerReplica is l divided among replicas gateways: rate and burst ÷
+// replicas, rounded down, minimum 1 (RL-31). A Redis policy's degraded
+// limiters use it during a Redis outage (RL-23, ADR-0021).
+func (l Limit) PerReplica(replicas int64) Limit {
+	l.Rate = max(1, l.Rate/replicas)
+	if l.Burst > 0 {
+		l.Burst = max(1, l.Burst/replicas)
+	}
+	return l
+}
+
 // Matches reports whether p's match covers a request for route and method.
 func (p *Policy) Matches(route, method string) bool {
 	if p.Routes != nil && !p.Routes[route] {

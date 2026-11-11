@@ -20,16 +20,30 @@ import (
 // for a sliding window), with no time; calls follow the script's write rule
 // (docs/design.md "Limiter script contract").
 type fakeRedis struct {
-	mu      sync.Mutex
-	used    map[string]int64
-	calls   []string            // one line per Call: cost, then each limit
-	refunds []string            // one line per Refund: cost, admitted_us, then each key
-	fail    map[string]struct{} // hash tags whose calls fail
-	now     int64
+	mu          sync.Mutex
+	used        map[string]int64
+	calls       []string                 // one line per Call: cost, then each limit
+	refunds     []string                 // one line per Refund: cost, admitted_us, then each key
+	fail        map[string]struct{}      // hash tags whose calls fail as conn
+	slow        map[string]time.Duration // hash tags whose calls answer this late, or time out at their deadline
+	failRefunds bool                     // every Refund fails as conn
+	deadlines   []time.Time              // of each Call's context
+	now         int64
 }
 
 func newFakeRedis() *fakeRedis {
-	return &fakeRedis{used: map[string]int64{}, fail: map[string]struct{}{}, now: 1_000_000}
+	return &fakeRedis{used: map[string]int64{}, fail: map[string]struct{}{}, slow: map[string]time.Duration{}, now: 1_000_000}
+}
+
+// tagged returns m's value for the hash tag key has, if any.
+func tagged[V any](m map[string]V, key string) (V, bool) {
+	for tag, v := range m {
+		if strings.Contains(key, tag) {
+			return v, true
+		}
+	}
+	var zero V
+	return zero, false
 }
 
 func capacity(l rlredis.Limit) int64 {
@@ -39,9 +53,8 @@ func capacity(l rlredis.Limit) int64 {
 	return l.Rate
 }
 
-func (f *fakeRedis) Call(_ context.Context, cost int64, limits []rlredis.Limit) (rlredis.Result, error) {
+func (f *fakeRedis) Call(ctx context.Context, cost int64, limits []rlredis.Limit) (rlredis.Result, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	line := fmt.Sprint("cost ", cost)
 	for _, l := range limits {
 		mode := "shadow"
@@ -51,10 +64,23 @@ func (f *fakeRedis) Call(_ context.Context, cost int64, limits []rlredis.Limit) 
 		line += fmt.Sprintf(" | %s %s %s %s %d/%v burst %d", l.Key, l.Level, mode, l.Algorithm, l.Rate, l.Period, l.Burst)
 	}
 	f.calls = append(f.calls, line)
-	for tag := range f.fail {
-		if strings.Contains(limits[0].Key, tag) {
-			return rlredis.Result{}, &rlredis.Error{Kind: rlredis.KindConn, Node: "redis-1:6379", Err: errors.New("connection refused")}
+	deadline, _ := ctx.Deadline()
+	f.deadlines = append(f.deadlines, deadline)
+	delay, _ := tagged(f.slow, limits[0].Key)
+	f.mu.Unlock()
+	if delay > 0 {
+		t := time.NewTimer(delay)
+		defer t.Stop()
+		select {
+		case <-t.C:
+		case <-ctx.Done():
+			return rlredis.Result{}, &rlredis.Error{Kind: rlredis.KindTimeout, Node: "redis-1:6379", Err: ctx.Err()}
 		}
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := tagged(f.fail, limits[0].Key); ok {
+		return rlredis.Result{}, &rlredis.Error{Kind: rlredis.KindConn, Node: "redis-1:6379", Err: errors.New("connection refused")}
 	}
 	f.now += 1000
 	res := rlredis.Result{Allowed: true, DenyingLimit: -1, NowUS: f.now, Limits: make([]ratelimit.Decision, len(limits))}
@@ -95,6 +121,10 @@ func (f *fakeRedis) Refund(_ context.Context, cost, admittedUS int64, limits []r
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	line := fmt.Sprint("cost ", cost, " at ", admittedUS)
+	if f.failRefunds {
+		f.refunds = append(f.refunds, line+" failed")
+		return rlredis.Result{}, &rlredis.Error{Kind: rlredis.KindConn, Node: "redis-1:6379", Err: errors.New("connection refused")}
+	}
 	res := rlredis.Result{Allowed: true, DenyingLimit: -1, NowUS: f.now, Limits: make([]ratelimit.Decision, len(limits))}
 	for i, l := range limits {
 		line += " | " + l.Key
@@ -136,6 +166,17 @@ func (f *fakeRedis) takeRefunds(t *testing.T, n int) []string {
 		t.Errorf("%d refunds, want %d:\n%s", len(refunds), n, strings.Join(refunds, "\n"))
 	}
 	return refunds
+}
+
+// setFail makes calls in hash tag tag fail, or answer again.
+func (f *fakeRedis) setFail(tag string, fail bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if fail {
+		f.fail[tag] = struct{}{}
+	} else {
+		delete(f.fail, tag)
+	}
 }
 
 func (f *fakeRedis) usedOf(key string) int64 {
@@ -379,9 +420,9 @@ policies:
 	}
 }
 
-// TestRedisCallFails: until failure modes arrive, a failed call allows every
-// policy in it, recorded as fail_open and left out of the fields, and the
-// next call still runs (ADR-0021, interim behaviour).
+// TestRedisCallFails: a failed call allows every fail_open policy in it, the
+// default failure mode, recorded as fail_open and left out of the fields,
+// and the next call still runs (RL-23, ADR-0021).
 func TestRedisCallFails(t *testing.T) {
 	u := newUpstream(t, "orders")
 	f := newFakeRedis()

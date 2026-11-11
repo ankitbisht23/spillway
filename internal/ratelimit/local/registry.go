@@ -12,16 +12,24 @@ import (
 
 // ID is a limit's stable ID: policy name, algorithm and period, so
 // "per-consumer|gcra|60s"; a concurrency limit has no period, so its policy
-// name alone tells it apart (GW-29, ADR-0017).
+// name alone tells it apart (GW-29, ADR-0017). Degraded marks the in-memory
+// limiter a Redis policy with failure_mode degraded falls back to (ADR-0021).
 type ID struct {
 	Policy    string
 	Algorithm string
 	Period    time.Duration // 0 for concurrency
+	Degraded  bool
 }
 
-// LimitID returns the ID of limit l of policy p.
+// LimitID returns the ID of limit l of local policy p.
 func LimitID(p *config.Policy, l config.Limit) ID {
 	return ID{Policy: p.Name, Algorithm: p.Algorithm, Period: l.Period}
+}
+
+// DegradedID returns the ID of the degraded limiter of limit l of Redis
+// policy p.
+func DegradedID(p *config.Policy, l config.Limit) ID {
+	return ID{Policy: p.Name, Algorithm: p.Algorithm, Period: l.Period, Degraded: true}
 }
 
 // Registry holds the limiter of every policy limit, keyed by ID and kept
@@ -44,8 +52,10 @@ func NewRegistry(clock ratelimit.Clock) *Registry {
 // (config.Watcher's apply hook). IDs that remain keep their state and take the
 // snapshot's per-replica rate and burst (RL-31); new IDs start empty; removed
 // ones are dropped. A request admitted by a removed concurrency limiter still
-// releases into it, so its count drains. Redis policies have no limiter here
-// (ADR-0021).
+// releases into it, so its count drains. A Redis policy has a limiter here
+// only with failure_mode degraded: its degraded limiter, at the per-replica
+// rate and burst, whose state survives reloads and outages alike (RL-23,
+// ADR-0021).
 func (r *Registry) Apply(s *config.Snapshot) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -53,12 +63,15 @@ func (r *Registry) Apply(s *config.Snapshot) {
 	next := map[ID]ratelimit.Limiter{}
 	for i := range s.Policies {
 		p := &s.Policies[i]
-		if !p.Local {
-			continue
-		}
 		for _, l := range p.Limits {
-			id := LimitID(p, l)
-			next[id] = r.newLimiter(p.Algorithm, l, old[id])
+			switch {
+			case p.Local:
+				id := LimitID(p, l)
+				next[id] = r.newLimiter(p.Algorithm, l, old[id])
+			case p.FailureMode == config.Degraded:
+				id := DegradedID(p, l)
+				next[id] = r.newLimiter(p.Algorithm, l.PerReplica(s.Replicas), old[id])
+			}
 		}
 	}
 	r.limiters.Store(&next)
