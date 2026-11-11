@@ -19,12 +19,18 @@ routes:
   - name: limited
     match: { path_prefix: /anything/limited }
     upstream: httpbin
+  # Redis policies (ADR-0021), keyed by X-Shared-Key so that each value has
+  # its own limits: see the policies below.
+  - name: shared
+    match: { path_prefix: /anything/shared }
+    upstream: httpbin
   - name: default
     match: { path_prefix: / }
     upstream: httpbin
 # Local policies (ADR-0017): each gateway keeps their state in memory, and
 # none touches Redis (RL-17). The limits stay well above what make verify-m1
-# and the benchmarks send.
+# and the benchmarks send. The last two policies run in Redis and apply only
+# to /anything/shared.
 policies:
   - name: per-ip # IP flood limit; covers anonymous traffic too
     level: global
@@ -54,3 +60,20 @@ policies:
     algorithm: fixed_window
     limits: [{ rate: 5, period: 10s }]
     local: true
+  # Redis policies (ADR-0021), shared by every gateway. With an API key whose
+  # consumer has a tenant (alice's), shared-tenant runs in the tenant-slot
+  # call; shared-global is called after it, and when it denies (the 4th
+  # request within 10 s for one X-Shared-Key), the tenant-slot deduction is
+  # refunded (RL-14). Without X-Shared-Key neither applies.
+  - name: shared-tenant
+    level: tenant
+    match: { routes: [shared] }
+    key_template: '{tenant}:{header:X-Shared-Key}'
+    algorithm: sliding_window
+    limits: [{ rate: 100, period: 1h }]
+  - name: shared-global
+    level: global
+    match: { routes: [shared] }
+    key_template: '{header:X-Shared-Key}'
+    algorithm: gcra
+    limits: [{ rate: 3, period: 10s }]

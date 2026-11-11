@@ -644,7 +644,7 @@ Exit (`make verify-m2`): property tests pass for every algorithm against its own
 
 - [x] Global `Limiter` implementations as Lua scripts for GCRA and sliding window, per the script contract: multi-level, multi-window, cost, shadow write rule (RL-01, RL-05–RL-07, RL-11)
 - [x] Redis `TIME`, versioned hash-tagged keys with fixed-length digests, TTLs, `EVALSHA`, no retry once sent, Redis 7+ (RL-12, RL-13, RL-15, RL-16, RL-29, RL-30)
-- [ ] Global level called after the tenant-slot script, with refunds; `{g:<policy_id>}` spreads global policies across slots (RL-14)
+- [x] Global level called after the tenant-slot script, with refunds; `{g:<policy_id>}` spreads global policies across slots (RL-14)
 - [ ] One Redis time budget per request, a circuit breaker per Redis node, fail-open / fail-closed / degraded; degraded mode divides by the static replica count from M2 until heartbeats land in M5 (RL-22, RL-23)
 - [ ] Accuracy harness v1 in the compose network against `gateway-1` … `gateway-5`; script tests on the compose Redis Cluster through the address-map Dialer (ADR-0004)
 - [ ] Chaos tests: Redis full outage and killed primary, with the pass rules in Chaos scenarios
