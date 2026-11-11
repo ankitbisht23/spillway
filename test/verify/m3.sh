@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# M3 exit checks (docs/design.md, M3; ADR-0021). Prints one PASS/FAIL line per
+# M3 exit checks (docs/design.md, M3; ADR-0021, ADR-0027). Prints one PASS/FAIL line per
 # check with what it measured, and exits 1 if any check fails. Run through
 # make:
 #   make verify-m3   the accuracy harness at 3 replicas (NFR-06), the Redis
@@ -113,13 +113,18 @@ if ! build=$("${compose[@]}" build --quiet loadgen 2>&1); then printf '%s\n' "$b
 # Alternating paired runs (U4, added-latency.sh). The rate and the length can
 # be changed for a quick look; the exit check uses these.
 rate=${VERIFY_M3_RATE:-1000} warmup=${VERIFY_M3_WARMUP:-30s} duration=${VERIFY_M3_DURATION:-60s}
-counts() { echo "verify-redis $(decisions verify-redis allow) $(decisions verify-redis deny) $(redis_errors)"; }
-# During a gateway run, warm-up included, the Redis policy must allow every
-# measured request and deny none, and no Redis call may fail.
+counts() {
+	echo "verify-redis $(decisions verify-redis allow) $(decisions verify-redis deny) $(decisions verify-redis fail_closed) $(redis_errors)"
+}
+# During a gateway run, warm-up included, the Redis policy must deny none and
+# allow every measured request but the fail_closed ones. At most one Redis
+# call may fail, and its fail_closed 503 is excused (ADR-0027): the run's
+# line reports it, and the run and its pair still count.
 judge() {
 	paste -d ' ' <(echo "$1") <(echo "$2") | awk -v sent="$3" '{
-		a = $6 - $2; d = $7 - $3; e = $8 - $4
-		print (a >= sent && d == 0 && e == 0 ? 0 : 1), sprintf("%s %d allow %d deny, %d Redis errors", $1, a, d, e)
+		a = $7 - $2; d = $8 - $3; f = $9 - $4; e = $10 - $5
+		print (a + f >= sent && d == 0 && e <= 1 && f <= e ? 0 : 1), f,
+			sprintf("%s %d allow %d deny %d fail_closed, %d Redis errors", $1, a, d, f, e) (e == 1 ? " (one excused, ADR-0027)" : "")
 	}'
 }
 if use test/verify/m3-latency.yaml; then

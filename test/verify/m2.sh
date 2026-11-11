@@ -119,7 +119,7 @@ if [ "$mode" = all ]; then
 		paste -d ' ' <(echo "$1") <(echo "$2") | awk -v sent="$3" '
 			{ a = $5 - $2; d = $6 - $3; if (a < sent || d > 0) bad = 1
 				s = s (NR > 1 ? ", " : "") sprintf("%s %d allow %d deny", $1, a, d) }
-			END { print (bad ? 1 : 0), s }'
+			END { print (bad ? 1 : 0), 0, s }'
 	}
 	if use test/verify/m2-latency.yaml; then
 		added_latency "NFR-03 added p99 <= 2 ms" 2000 "local policies" "$rate" "$warmup" "$duration"

@@ -4,23 +4,26 @@
 # upstream: straight to upstream-1, then through gateway-1, three times. The
 # added p99 is the median of the three gateway runs' p99s minus the median of
 # the three direct runs' p99s, and passes from 0 to the target. A run below
-# 99% of its target rate (loadgen's valid), with any answer other than 2xx,
-# or that the caller's judge rejects fails its line and leaves no three
-# pairs to compare; a negative added p99 fails too: the gateway cannot make
-# requests faster, so it means the measurement was noise.
+# 99% of its target rate (loadgen's valid), with an answer other than 2xx
+# that the caller's judge does not account for, or that the judge rejects
+# fails its line and leaves no three pairs to compare; a negative added p99
+# fails too: the gateway cannot make requests faster, so it means the
+# measurement was noise.
 #
 # The caller defines result, check, $failed and loadgen <url> <rate>
 # <warm-up> <duration> as m2.sh does, and for the gateway runs:
 #   counts                         prints gateway-1's counters, one line each
-#   judge <before> <after> <sent>  prints "<0 = pass> <what it saw>"
+#   judge <before> <after> <sent>  prints "<0 = pass> <failed answers it
+#                                  accounts for> <what it saw>"
 # shellcheck shell=bash
 
-# runline <check> <loadgen result> [extra] [judged]: prints the run's line
-# and sets p50 and p99 in µs; returns 0 if the run passes.
+# runline <check> <loadgen result> [extra] [judged] [excused]: prints the
+# run's line and sets p50 and p99 in µs; returns 0 if the run passes: valid,
+# judged 0 and at most excused failed answers.
 runline() {
 	local r ok line
-	r=$(jq -r --arg extra "${3:-}" --argjson judged "${4:-0}" "$failed"' as $failed
-		| "\(if $failed == 0 and .valid and $judged == 0 then 0 else 1 end) \(.latency_us.p50) \(.latency_us.p99) \(.status["2xx"] // 0)/\(.requests.sent) answered 2xx, \($failed) failed, \(.achieved_rps | round) of \(.target_rps) rps; p50 \(.latency_us.p50 / 1000) ms, p99 \(.latency_us.p99 / 1000) ms\($extra)"' <<<"$2" 2>/dev/null)
+	r=$(jq -r --arg extra "${3:-}" --argjson judged "${4:-0}" --argjson excused "${5:-0}" "$failed"' as $failed
+		| "\(if $failed <= $excused and .valid and $judged == 0 then 0 else 1 end) \(.latency_us.p50) \(.latency_us.p99) \(.status["2xx"] // 0)/\(.requests.sent) answered 2xx, \($failed) failed, \(.achieved_rps | round) of \(.target_rps) rps; p50 \(.latency_us.p50 / 1000) ms, p99 \(.latency_us.p99 / 1000) ms\($extra)"' <<<"$2" 2>/dev/null)
 	if [ -z "$r" ]; then
 		result FAIL "$1" "loadgen gave no result: $(tail -1 "$tmp/loadgen.err")"
 		return 1
@@ -35,15 +38,15 @@ median() { printf '%s\n' "$@" | sort -n | sed -n 2p; } # median of three
 # added_latency <check> <target µs> <gateway label> <rate> <warm-up> <duration>
 added_latency() {
 	local name=$1 target=$2 label=$3 rate=$4 warmup=$5 duration=$6
-	local i out before sent j valid=1 d50=() d99=() g50=() g99=()
+	local i out before sent j ok excused valid=1 d50=() d99=() g50=() g99=()
 	for i in 1 2 3; do
 		out=$(loadgen http://upstream-1:8080/bytes/1024 "$rate" "$warmup" "$duration")
 		if runline "direct to upstream-1, run $i" "$out"; then d50+=("$p50") d99+=("$p99"); else valid=0; fi
 		before=$(counts)
 		out=$(loadgen http://gateway-1:8000/bytes/1024 "$rate" "$warmup" "$duration")
 		sent=$(jq -r '.requests.sent // 0' <<<"$out" 2>/dev/null)
-		j=$(judge "$before" "$(counts)" "${sent:-0}")
-		if runline "gateway-1, $label, run $i" "$out" "; ${j#* }" "${j%% *}"; then g50+=("$p50") g99+=("$p99"); else valid=0; fi
+		read -r ok excused j < <(judge "$before" "$(counts)" "${sent:-0}")
+		if runline "gateway-1, $label, run $i" "$out" "; $j" "${ok:-1}" "${excused:-0}"; then g50+=("$p50") g99+=("$p99"); else valid=0; fi
 	done
 	if [ "$valid" -eq 0 ]; then
 		result FAIL "$name" "no three valid pairs of runs to compare"
