@@ -444,3 +444,69 @@ func TestRedisCallFails(t *testing.T) {
 		t.Error("/metrics has no fail_open decision for tenant")
 	}
 }
+
+// TestDecisionTime: in dev mode, a response whose Redis calls all answered
+// carries the now_us of the last one, on a 2xx and a 429 alike; a request
+// with a failed call or without Redis calls gets none, nor does any response
+// with dev mode off, even when something upstream of the recorder set one
+// (ADR-0021).
+func TestDecisionTime(t *testing.T) {
+	u := newUpstream(t, "orders")
+	cfg := fmt.Sprintf(`
+upstreams: [{name: orders, endpoints: [{address: 'orders:%s'}]}]
+routes:
+  - {name: r, upstream: orders, match: {path_prefix: /}, response_headers: {set: [{name: spillway-decision-time, value: '1'}]}}
+policies:
+  - {name: local, level: global, match: {routes: ['*']}, key_template: '{ip}', algorithm: gcra, limits: [{rate: 1000, period: 1s}], local: true}
+  - {name: tenant, level: tenant, match: {routes: ['*']}, key_template: '{tenant}', algorithm: gcra, limits: [{rate: 2, period: 1s}], failure_mode: fail_open}
+  - {name: global, level: global, match: {routes: ['*']}, key_template: '{route}', algorithm: gcra, limits: [{rate: 1000, period: 1s}], failure_mode: fail_open}
+`, u.port())
+	alice := http.Header{"X-Api-Key": {aliceKey}}
+	tenantKey := rlredis.TenantKey("acme", "tenant", time.Second, rlredis.Digest("acme"))
+
+	t.Run("on", func(t *testing.T) {
+		f := newFakeRedis()
+		g := newDevGateway(t, newResolver(u), cfg, nil, f, true)
+		g.identity.Store(identity(t, map[string]string{"alice": aliceKey}))
+		for _, tt := range []struct {
+			name   string
+			header http.Header
+			setup  func()
+			status int
+			want   string
+		}{
+			// The fake's TIME moves 1 ms per call: the tenant-slot call at
+			// 1001000, the global one at 1002000.
+			{"allowed", alice, func() {}, http.StatusOK, "1002000"},
+			// The tenant-slot call denies and is the last that ran.
+			{"denied", alice, func() { f.setUsed(tenantKey, 2) }, http.StatusTooManyRequests, "1003000"},
+			{"failed call", alice, func() { f.setUsed(tenantKey, 0); f.setFail("{t:acme}", true) }, http.StatusOK, ""},
+			// Anonymous: no tenant, and {route} fills, so only global runs.
+			{"one call", nil, func() { f.setFail("{t:acme}", false) }, http.StatusOK, "1005000"},
+		} {
+			tt.setup()
+			got := g.send(t, http.MethodGet, "/", tt.header)
+			if got.status != tt.status || got.header.Get("Spillway-Decision-Time") != tt.want || len(got.header.Values("Spillway-Decision-Time")) > 1 {
+				t.Errorf("%s: %d with Spillway-Decision-Time %q, want %d with %q", tt.name, got.status, got.header.Values("Spillway-Decision-Time"), tt.status, tt.want)
+			}
+		}
+
+		// Only local policies apply: no Redis call, no header.
+		g.apply(t, oneUpstream(u)+`
+policies:
+  - {name: local, level: global, match: {routes: ['*']}, key_template: '{ip}', algorithm: gcra, limits: [{rate: 1000, period: 1s}], local: true}
+`)
+		if got := g.send(t, http.MethodGet, "/", nil); got.status != http.StatusOK || got.header.Get("Spillway-Decision-Time") != "" {
+			t.Errorf("local only: %d with Spillway-Decision-Time %q, want 200 with none", got.status, got.header.Get("Spillway-Decision-Time"))
+		}
+	})
+
+	t.Run("off", func(t *testing.T) {
+		f := newFakeRedis()
+		g := newDevGateway(t, newResolver(u), cfg, nil, f, false)
+		g.identity.Store(identity(t, map[string]string{"alice": aliceKey}))
+		if got := g.send(t, http.MethodGet, "/", alice); got.status != http.StatusOK || len(f.take()) != 2 || got.header.Values("Spillway-Decision-Time") != nil {
+			t.Errorf("%d with Spillway-Decision-Time %q, want 200 with none", got.status, got.header.Values("Spillway-Decision-Time"))
+		}
+	})
+}

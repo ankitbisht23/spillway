@@ -68,6 +68,14 @@ func TestLoadSettings(t *testing.T) {
 	if s, err := loadSettings(env(redis)); err != nil || !slices.Equal(s.redisAddrs, []string{"redis-0:6379", "redis-1:6379"}) || s.redisAddrMap["redis-0:6379"] != "127.0.0.1:7000" {
 		t.Errorf("Redis: %+v, %v", s, err)
 	}
+	if s.devMode {
+		t.Error("dev mode on by default")
+	}
+	for v, want := range map[string]bool{"true": true, "1": true, "false": false} {
+		if s, err := loadSettings(env(map[string]string{"SPILLWAY_GATEWAY_DEV_MODE": v})); err != nil || s.devMode != want {
+			t.Errorf("dev mode %s: %+v, %v", v, s, err)
+		}
+	}
 	if s, err := loadSettings(env(map[string]string{"SPILLWAY_GATEWAY_DNS_REFRESH": "5s"})); err != nil || s.dnsRefresh != 5*time.Second {
 		t.Errorf("DNS refresh 5s: %+v, %v", s, err)
 	}
@@ -107,6 +115,7 @@ func TestLoadSettings(t *testing.T) {
 		{map[string]string{"SPILLWAY_GATEWAY_REDIS_ADDRS": "redis-0"}, `SPILLWAY_GATEWAY_REDIS_ADDRS: "redis-0" is not host:port`},
 		{map[string]string{"SPILLWAY_GATEWAY_REDIS_ADDRS": "redis-0:6379,:6379"}, `SPILLWAY_GATEWAY_REDIS_ADDRS: ":6379"`},
 		{map[string]string{"SPILLWAY_REDIS_ADDR_MAP": "redis-0:6379"}, "SPILLWAY_REDIS_ADDR_MAP"},
+		{map[string]string{"SPILLWAY_GATEWAY_DEV_MODE": "yes"}, `SPILLWAY_GATEWAY_DEV_MODE: "yes" is not true or false`},
 	} {
 		if _, err := loadSettings(env(tt.over)); err == nil || !strings.HasPrefix(err.Error(), tt.want) {
 			t.Errorf("%v: error = %v, want one starting %q", tt.over, err, tt.want)

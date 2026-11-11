@@ -30,6 +30,7 @@ type Handler struct {
 	pools    *Registry
 	limiters *local.Registry
 	redis    Redis
+	devMode  bool // Spillway-Decision-Time on Redis-decided responses (ADR-0021)
 	rec      *telemetry.Recorder
 	log      *slog.Logger
 	errLog   *log.Logger
@@ -41,9 +42,10 @@ type Handler struct {
 // (SEC-05), checks the snapshot's local rate limit policies with the
 // limiters in limiters (ADR-0017) and its Redis policies with redis, nil if
 // the gateway has no Redis (ADR-0021), and records requests with rec (OB-01,
-// OB-03).
-func NewHandler(snapshot func() *config.Snapshot, identity func() *config.Identity, trusted TrustedProxies, pools *Registry, limiters *local.Registry, redis Redis, rec *telemetry.Recorder, log *slog.Logger) *Handler {
-	return &Handler{snapshot: snapshot, identity: identity, trusted: trusted, pools: pools, limiters: limiters, redis: redis, rec: rec, log: log, errLog: slog.NewLogLogger(log.Handler(), slog.LevelWarn)}
+// OB-03). With devMode, a response decided in Redis carries the decision's
+// Redis time for the accuracy harness (ADR-0021).
+func NewHandler(snapshot func() *config.Snapshot, identity func() *config.Identity, trusted TrustedProxies, pools *Registry, limiters *local.Registry, redis Redis, devMode bool, rec *telemetry.Recorder, log *slog.Logger) *Handler {
+	return &Handler{snapshot: snapshot, identity: identity, trusted: trusted, pools: pools, limiters: limiters, redis: redis, devMode: devMode, rec: rec, log: log, errLog: slog.NewLogLogger(log.Handler(), slog.LevelWarn)}
 }
 
 // statusClientClosed is recorded for a request whose client went away before
@@ -120,6 +122,9 @@ func (h *Handler) serve(w *responseRecorder, r *http.Request, q *telemetry.Reque
 		allowed = lim.check(true) && lim.checkRedis()
 	}
 	w.rateLimitPolicy, w.rateLimit = lim.headers()
+	if h.devMode {
+		w.decisionTime = lim.decisionTime()
+	}
 	if lim.unavailable {
 		// Redis failed for an enforce fail_closed policy (RL-23); Retry-After
 		// is the breakers' open time (ADR-0021).
