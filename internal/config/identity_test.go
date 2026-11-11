@@ -200,11 +200,11 @@ func TestComposeFiles(t *testing.T) {
 	}
 }
 
-// TestVerifyConfigs: the configs the exit checks and the accuracy harness
-// swap into the gateways (ADR-0015, ADR-0019, ADR-0021) compile, so a check
-// never waits on a config the gateway rejects.
+// TestVerifyConfigs: the configs the exit checks, the accuracy harness and
+// the chaos tests swap into the gateways (ADR-0015, ADR-0019, ADR-0021)
+// compile, so a check never waits on a config the gateway rejects.
 func TestVerifyConfigs(t *testing.T) {
-	for _, d := range []string{"test/verify", "test/accuracy"} {
+	for _, d := range []string{"test/verify", "test/accuracy", "test/chaos"} {
 		dir := os.DirFS("../../" + d)
 		files, err := fs.Glob(dir, "*.yaml")
 		if err != nil || len(files) == 0 {
