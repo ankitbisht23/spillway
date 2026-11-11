@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/HdrHistogram/hdrhistogram-go"
+
+	"github.com/ankitbisht23/spillway/internal/hardware"
 )
 
 // clock is the generator's time source, so tests can run a schedule on a fake
@@ -180,7 +182,7 @@ type result struct {
 	Status      map[string]int64 `json:"status"`
 	Errors      map[string]int64 `json:"errors"`
 	LatencyUS   latencies        `json:"latency_us"`
-	Hardware    hardware         `json:"hardware"`
+	Hardware    hardware.Info    `json:"hardware"`
 }
 
 type requestCounts struct {

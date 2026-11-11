@@ -1,4 +1,6 @@
-package main
+// Package hardware describes the machine a measurement ran on, for loadgen
+// and the accuracy harness (ADR-0014, ADR-0021).
+package hardware
 
 import (
 	"os"
@@ -6,19 +8,20 @@ import (
 	"strings"
 )
 
-// hardware is the machine a result was measured on. Results are compared
-// only between runs with the same CPU model (docs/design.md, Benchmark
-// method; ADR-0003).
-type hardware struct {
+// Info is the machine a result was measured on. Results are compared only
+// between runs with the same CPU model (docs/design.md, Benchmark method;
+// ADR-0003).
+type Info struct {
 	CPUModel   string `json:"cpu_model"`
 	GOARCH     string `json:"goarch"`
 	NumCPU     int    `json:"num_cpu"`
 	GOMAXPROCS int    `json:"gomaxprocs"`
 }
 
-func readHardware() hardware {
+// Read returns this machine's Info.
+func Read() Info {
 	info, _ := os.ReadFile("/proc/cpuinfo") // absent off Linux: no CPU model
-	return hardware{
+	return Info{
 		CPUModel:   cpuModel(info),
 		GOARCH:     runtime.GOARCH,
 		NumCPU:     runtime.NumCPU(),

@@ -23,6 +23,8 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/ankitbisht23/spillway/internal/hardware"
 )
 
 func main() {
@@ -49,7 +51,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 	g := generator{clock: realClock{}, rate: o.rate, warmup: o.warmup, duration: o.duration, maxInFlight: o.maxInFlight, do: send}
 	r := g.run(ctx)
-	r.URL, r.Hardware = o.url, readHardware()
+	r.URL, r.Hardware = o.url, hardware.Read()
 	enc := json.NewEncoder(stdout)
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(r); err != nil {
