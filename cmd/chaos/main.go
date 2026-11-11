@@ -437,6 +437,9 @@ type report struct {
 	// them, with times from the kill.
 	OutsideWindow  int64    `json:"failure_mode_outside_window"`
 	OutsideSamples []string `json:"failure_mode_outside_window_samples,omitempty"`
+	// The first few failure-mode decisions for keys on the surviving
+	// primaries, with times from the kill.
+	SurvivingSamples []string `json:"surviving_failure_mode_samples,omitempty"`
 	// When the first failure-mode decision was answered, from the kill.
 	FirstFailureModeMS float64 `json:"first_failure_mode_ms"`
 	// Per killed key, from the kill to its first Redis decision after it;
@@ -502,6 +505,10 @@ func analyze(keys []key, arrivals []arrival, out []outcome, requested, kill time
 			c.Redis++
 		case o.status/100 == 2:
 			c.FailureMode++
+			if !keys[k].killed && len(r.SurvivingSamples) < 5 {
+				r.SurvivingSamples = append(r.SurvivingSamples, fmt.Sprintf("key %s sent at %+.1f ms, answered at %+.1f ms",
+					keys[k].name, float64(o.due.UnixMicro()-killUS)/1000, float64(o.done.UnixMicro()-killUS)/1000))
+			}
 			if ms := float64(o.done.UnixMicro()-killUS) / 1000; keys[k].killed && (c.FailureMode == 1 || ms < r.FirstFailureModeMS) {
 				r.FirstFailureModeMS = ms
 			}

@@ -155,6 +155,9 @@ func TestAnalyze(t *testing.T) {
 			if rep.Pass != tt.pass || rep.WindowMS.Max != tt.window {
 				t.Errorf("pass %v, window %v ms; want %v, %v ms; report %+v", rep.Pass, rep.WindowMS.Max, tt.pass, tt.window, rep)
 			}
+			if int64(len(rep.SurvivingSamples)) != rep.Surviving.FailureMode {
+				t.Errorf("%d surviving samples for %d failure-mode decisions: %q", len(rep.SurvivingSamples), rep.Surviving.FailureMode, rep.SurvivingSamples)
+			}
 			lines := rep.lines(10 * time.Second)
 			if failed := slices.ContainsFunc(lines, func(l string) bool { return strings.HasPrefix(l, "FAIL") }); failed == tt.pass {
 				t.Errorf("lines disagree with pass %v:\n%s", tt.pass, strings.Join(lines, "\n"))

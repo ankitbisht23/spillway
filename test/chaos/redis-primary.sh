@@ -49,7 +49,7 @@ wait "$pid"
 code=$?
 
 grep -E '^(PASS|FAIL|chaos:) ' "$tmp/chaos.err" # not compose's progress lines
-jq -r '.failure_mode_outside_window_samples[]? | "      outside the window: " + .' "$tmp/report.json" 2>/dev/null
+jq -r '(.surviving_failure_mode_samples[]? | "      surviving primary: " + .), (.failure_mode_outside_window_samples[]? | "      outside the window: " + .)' "$tmp/report.json" 2>/dev/null
 fails=$((fails + $(grep -c '^FAIL ' "$tmp/chaos.err")))
 if [ "$code" -ne 0 ] && ! grep -q '^FAIL ' "$tmp/chaos.err"; then
 	result FAIL "sender" "cmd/chaos exited $code${node:+ after the kill of $node}"
