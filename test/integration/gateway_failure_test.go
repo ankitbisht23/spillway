@@ -19,6 +19,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/ankitbisht23/spillway/internal/ratelimit/redis"
 )
 
 // TestGatewayRedisFailure runs a gateway on the host whose Redis nodes are
@@ -34,12 +36,17 @@ import (
 //   - in a second outage the degraded limiter carries on from the first.
 func TestGatewayRedisFailure(t *testing.T) {
 	run := scriptName("failure")
+	nodes, err := redis.ParseAddrMap(os.Getenv(redis.AddrMapEnv))
+	if err != nil || nodes == nil {
+		t.Fatalf("%s: %v; run make test-integration", redis.AddrMapEnv, err)
+	}
 	var proxies []*cutProxy
 	var addrMap []string
 	for i := range 6 {
-		p := newCutProxy(t, fmt.Sprintf("127.0.0.1:%d", 7000+i))
+		node := fmt.Sprintf("redis-%d:6379", i)
+		p := newCutProxy(t, nodes[node])
 		proxies = append(proxies, p)
-		addrMap = append(addrMap, fmt.Sprintf("redis-%d:6379=%s", i, p.addr))
+		addrMap = append(addrMap, node+"="+p.addr)
 	}
 	cut := func(down bool) {
 		for _, p := range proxies {
