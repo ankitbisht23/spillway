@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -196,6 +197,9 @@ type fakeNode struct {
 	version string
 	script  func(name string) string // the reply; "" drops the connection
 
+	setup        atomic.Int64 // ns each HELLO and CLUSTER reply is held back: connection and slot-map cost
+	infoFailures atomic.Int32 // INFO replies still to fail with LOADING
+
 	mu     sync.Mutex
 	counts map[string]int
 }
@@ -241,6 +245,9 @@ func (f *fakeNode) serve(c net.Conn) {
 		f.counts[name]++
 		f.mu.Unlock()
 		var reply string
+		if name == "hello" || name == "cluster" {
+			time.Sleep(time.Duration(f.setup.Load()))
+		}
 		switch name {
 		case "hello":
 			reply = "-ERR unknown command 'HELLO'\r\n"
@@ -253,8 +260,14 @@ func (f *fakeNode) serve(c net.Conn) {
 		case "command":
 			reply = "*0\r\n"
 		case "info":
+			if f.infoFailures.Add(-1) >= 0 {
+				reply = "-LOADING Redis is loading the dataset in memory\r\n"
+				break
+			}
 			s := "# Server\r\nredis_version:" + f.version + "\r\n"
 			reply = "$" + strconv.Itoa(len(s)) + "\r\n" + s + "\r\n"
+		case "script": // SCRIPT LOAD
+			reply = "$40\r\n" + scriptSHA + "\r\n"
 		case "evalsha", "eval":
 			if reply = f.script(name); reply == "" {
 				return
@@ -311,7 +324,7 @@ func callFake(t *testing.T, c *Client) (Result, error) {
 // the script call (it may have run) sees exactly one send.
 func TestNoResend(t *testing.T) {
 	f := newFakeNode(t, "7.2.4", func(string) string { return "" })
-	c := NewClient([]string{f.addr}, nil, slog.New(slog.DiscardHandler))
+	c := NewClient([]string{f.addr}, nil, ratelimit.SystemClock, slog.New(slog.DiscardHandler))
 	defer func() { _ = c.Close() }()
 
 	_, err := callFake(t, c)
@@ -331,7 +344,7 @@ func TestNoScriptFallback(t *testing.T) {
 		}
 		return allowedReply
 	})
-	c := NewClient([]string{f.addr}, nil, slog.New(slog.DiscardHandler))
+	c := NewClient([]string{f.addr}, nil, ratelimit.SystemClock, slog.New(slog.DiscardHandler))
 	defer func() { _ = c.Close() }()
 
 	for range 2 {
@@ -350,7 +363,7 @@ func TestNoScriptFallback(t *testing.T) {
 func TestOldRedis(t *testing.T) {
 	f := newFakeNode(t, "6.2.14", func(string) string { return allowedReply })
 	var logs bytes.Buffer
-	c := NewClient([]string{f.addr}, nil, slog.New(slog.NewTextHandler(&logs, nil)))
+	c := NewClient([]string{f.addr}, nil, ratelimit.SystemClock, slog.New(slog.NewTextHandler(&logs, nil)))
 	defer func() { _ = c.Close() }()
 
 	for range 3 {
@@ -369,7 +382,7 @@ func TestOldRedis(t *testing.T) {
 }
 
 func TestCallLimitCount(t *testing.T) {
-	c := NewClient([]string{"127.0.0.1:1"}, nil, slog.New(slog.DiscardHandler))
+	c := NewClient([]string{"127.0.0.1:1"}, nil, ratelimit.SystemClock, slog.New(slog.DiscardHandler))
 	defer func() { _ = c.Close() }()
 	for _, n := range []int{0, MaxLimits + 1} {
 		_, err := c.Call(context.Background(), 1, make([]Limit, n))
@@ -377,5 +390,127 @@ func TestCallLimitCount(t *testing.T) {
 		if !errors.As(err, &e) || e.Kind != KindScript {
 			t.Errorf("Call with %d limits: error %v, want a script error", n, err)
 		}
+	}
+}
+
+// TestClientBreaker: after 5 failed calls to a node, calls to it fail as
+// conn without being sent until the breaker's probe succeeds; opening it
+// reloads the slot map (RL-22, ADR-0021).
+func TestClientBreaker(t *testing.T) {
+	var up atomic.Bool
+	f := newFakeNode(t, "8.0.0", func(string) string {
+		if up.Load() {
+			return allowedReply
+		}
+		return "-ERR Error running script: boom\r\n"
+	})
+	clock := ratelimit.NewFakeClock(time.Unix(1_700_000_000, 0))
+	c := NewClient([]string{f.addr}, nil, clock, slog.New(slog.DiscardHandler))
+	defer func() { _ = c.Close() }()
+
+	for i := range 5 {
+		if _, err := callFake(t, c); !isKind(err, KindScript) {
+			t.Fatalf("call %d: %v, want a script error", i+1, err)
+		}
+	}
+	slotLoads := f.count("cluster")
+	for range 3 {
+		if _, err := callFake(t, c); !isKind(err, KindConn) || !errors.Is(err, errBreakerOpen) {
+			t.Fatalf("open breaker: %v, want conn: %v", err, errBreakerOpen)
+		}
+	}
+	if n := f.count("evalsha"); n != 5 {
+		t.Errorf("script sent %d times, want 5: none while the breaker is open", n)
+	}
+	for deadline := time.Now().Add(5 * time.Second); f.count("cluster") == slotLoads; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("opening the breaker did not reload the slot map")
+		}
+	}
+
+	clock.Advance(time.Second) // half-open: the probe fails
+	if _, err := callFake(t, c); !isKind(err, KindScript) {
+		t.Fatalf("probe: %v, want a script error", err)
+	}
+	if _, err := callFake(t, c); !errors.Is(err, errBreakerOpen) {
+		t.Fatalf("after a failed probe: %v, want %v", err, errBreakerOpen)
+	}
+	up.Store(true)
+	clock.Advance(time.Second) // the probe succeeds and closes it
+	for i := range 3 {
+		if res, err := callFake(t, c); err != nil || !res.Allowed {
+			t.Fatalf("closed again, call %d: %+v, %v", i+1, res, err)
+		}
+	}
+	if n := f.count("evalsha"); n != 9 {
+		t.Errorf("script sent %d times, want 9", n)
+	}
+}
+
+func isKind(err error, kind string) bool {
+	var e *Error
+	return errors.As(err, &e) && e.Kind == kind
+}
+
+// TestWarm: a warmed client's first call to a node, under a 5 ms budget, is
+// one EVALSHA, decided by Redis, even when a connection and the slot map
+// take far longer than the budget; an unwarmed client's first call times
+// out (ADR-0024).
+func TestWarm(t *testing.T) {
+	const setup = 50 * time.Millisecond
+	budget := func(c *Client) (Result, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
+		defer cancel()
+		return c.Call(ctx, 1, oneLimit)
+	}
+
+	cold := newFakeNode(t, "8.0.0", func(string) string { return allowedReply })
+	cold.setup.Store(int64(setup))
+	c := NewClient([]string{cold.addr}, nil, ratelimit.SystemClock, slog.New(slog.DiscardHandler))
+	defer func() { _ = c.Close() }()
+	if _, err := budget(c); !isKind(err, KindTimeout) {
+		t.Errorf("unwarmed first call: %v, want a timeout", err)
+	}
+
+	f := newFakeNode(t, "8.0.0", func(string) string { return allowedReply })
+	f.setup.Store(int64(setup))
+	f.infoFailures.Store(1) // the first pass fails, the second succeeds
+	var logs bytes.Buffer
+	c = NewClient([]string{f.addr}, nil, ratelimit.SystemClock, slog.New(slog.NewTextHandler(&logs, nil)))
+	defer func() { _ = c.Close() }()
+	c.Warm(t.Context(), 10*time.Millisecond)
+	if f.count("info") != 2 || f.count("script") != 1 || f.count("evalsha") != 0 {
+		t.Errorf("warm-up: info %d, script %d, evalsha %d; want 2, 1, 0", f.count("info"), f.count("script"), f.count("evalsha"))
+	}
+	if strings.Count(logs.String(), "warm-up failed") != 1 || !strings.Contains(logs.String(), `msg="redis limiter warmed" nodes=1`) {
+		t.Errorf("logs:\n%s", logs.String())
+	}
+	res, err := budget(c)
+	if err != nil || !res.Allowed || res.NowUS != 1700000000000000 {
+		t.Fatalf("warmed first call: %+v, %v; want Redis's decision", res, err)
+	}
+	if f.count("info") != 2 || f.count("evalsha") != 1 || f.count("eval") != 0 {
+		t.Errorf("first call: info %d, evalsha %d, eval %d; want 2, 1, 0", f.count("info"), f.count("evalsha"), f.count("eval"))
+	}
+}
+
+// TestWarmStops: warm-up against a cluster that never answers returns when
+// its context ends, and never holds a node open (GW-24).
+func TestWarmStops(t *testing.T) {
+	var lc net.ListenConfig
+	ln, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	_ = ln.Close()
+	c := NewClient([]string{addr}, nil, ratelimit.SystemClock, slog.New(slog.DiscardHandler))
+	defer func() { _ = c.Close() }()
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	c.Warm(ctx, 20*time.Millisecond)
+	if d := time.Since(start); d > 2*time.Second {
+		t.Errorf("Warm returned %v after its context ended", d-200*time.Millisecond)
 	}
 }
