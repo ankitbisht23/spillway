@@ -32,6 +32,8 @@ In the scripts: `test/chaos/redis-outage.sh` reads the `le="0.01"` bucket. In `t
 - The integration test in `test/integration/gateway_failure_test.go` keeps its own 7 ms line: it is not the exit check and runs in CI, where it passes.
 - `make verify-m3`'s pass rate under these rules is measured and recorded in the M3 exit PR.
 
+Measured on the dev laptop: `make verify-m3` passed 2 of 3 full runs under these rules (runs 1 and 3). Run 2 failed NFR-04 only: gateway run 2 had 165 Redis errors and 165 `fail_closed` 503s, all within about 370 ms (latencies 7–18 ms), with no fork, save, slowlog or log entry on Redis. That fits one longer host or VM stall, which the one-error tolerance does not cover. Every other check in run 2 passed. The user chose to ship M3 at this pass rate with no further rule change.
+
 ## Alternatives considered
 
 - **A count allowance in the full-outage check (say, 1 in 10,000 over 7 ms)** — lets a regression that adds a few slow calls pass, and the number would be as arbitrary as the slack. The user chose a line that every call must meet.
