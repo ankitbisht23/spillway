@@ -24,14 +24,14 @@ func TestGatewayGlobalLimit(t *testing.T) {
 	run := scriptName("shared")
 	awayFromEdge(time.Hour) // shared-tenant's sliding window
 	client := &http.Client{Timeout: 10 * time.Second}
-	send := func() (int, http.Header, string) {
+	send := func(sharedKey string) (int, http.Header, string) {
 		t.Helper()
 		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://127.0.0.1:8000/anything/shared", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
 		req.Header.Set("X-API-Key", "alice-example-key-1")
-		req.Header.Set("X-Shared-Key", run)
+		req.Header.Set("X-Shared-Key", sharedKey)
 		resp, err := client.Do(req)
 		if err != nil {
 			t.Fatal(err)
@@ -45,13 +45,26 @@ func TestGatewayGlobalLimit(t *testing.T) {
 	}
 
 	const policy = `"per-ip";q=5000;w=1, "shared-tenant";q=100;w=3600, "shared-global";q=3;w=10`
+	// A gateway's first call to a node loads the slot map, dials, checks the
+	// Redis version and loads the script, which can overrun the budget and
+	// fail open (ADR-0021). Both calls' slots depend only on the tenant and
+	// the policy, so requests with another X-Shared-Key warm them up.
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(50 * time.Millisecond) {
+		_, h, _ := send(run + "-warm")
+		if h.Get("RateLimit-Policy") == policy {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("warm-up: RateLimit-Policy %q, want %q", h.Get("RateLimit-Policy"), policy)
+		}
+	}
 	for i := 1; i <= 3; i++ {
-		status, h, _ := send()
+		status, h, _ := send(run)
 		if status != http.StatusOK || h.Get("RateLimit-Policy") != policy || !strings.Contains(h.Get("RateLimit"), `"shared-global";r=`+strconv.Itoa(3-i)+";") {
 			t.Fatalf("request %d: %d with RateLimit-Policy %q and RateLimit %q, want 200 with %q and shared-global r=%d", i, status, h.Get("RateLimit-Policy"), h.Get("RateLimit"), policy, 3-i)
 		}
 	}
-	status, h, body := send()
+	status, h, body := send(run)
 	if status != http.StatusTooManyRequests || body != `{"error":"rate limited"}` || h.Get("Retry-After") == "" || h.Get("RateLimit-Policy") != policy ||
 		!strings.Contains(h.Get("RateLimit"), `"shared-tenant";r=97;t=`) || !strings.Contains(h.Get("RateLimit"), `"shared-global";r=0;t=`) {
 		t.Fatalf("4th request: %d %q, Retry-After %q, RateLimit %q; want 429 with shared-tenant r=97 (refunded) and shared-global r=0", status, body, h.Get("Retry-After"), h.Get("RateLimit"))
