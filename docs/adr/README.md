@@ -33,4 +33,5 @@ Decisions that shape Spillway and are not obvious from the code or from docs/des
 | [0022](0022-multi-region.md) | Multi-region | Accepted | 2026-11-10 |
 | [0023](0023-gcra-emission-interval-in-whole-microseconds.md) | GCRA emission interval in whole microseconds | Accepted | 2026-11-10 |
 | [0024](0024-redis-limiter-warm-up.md) | Redis limiter warm-up | Accepted | 2026-11-11 |
-| [0025](0025-health-check-driven-redis-breakers.md) | Health-check driven Redis breakers | Accepted | 2026-11-11 |
+| [0025](0025-health-check-driven-redis-breakers.md) | Health-check driven Redis breakers | Accepted; refill count superseded by 0026 | 2026-11-11 |
+| [0026](0026-refill-redis-connections-after-an-outage.md) | Refill Redis connections after an outage | Accepted | 2026-11-11 |

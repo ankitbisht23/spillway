@@ -133,10 +133,18 @@ func NewClient(addrs []string, addrMap map[string]string, clock ratelimit.Clock,
 // reload per 200 ms.
 func (c *Client) reload() { c.rdb.ReloadState(context.Background()) }
 
-// refill opens one request connection to the node at addr, outside any
-// budget: the timeouts of an outage closed the node's pooled connections,
-// so without it the first call after the breaker closes would dial inside
-// its budget (ADR-0025).
+// refillConns is how many request connections a closing breaker opens to
+// its node: as many as the dev stack's loads keep per primary, so calls
+// after an outage find them open instead of dialing inside their budget
+// (ADR-0026).
+const refillConns = 4
+
+// refill opens refillConns request connections to the node at addr, outside
+// any budget: the timeouts of an outage closed the node's pooled
+// connections, and a dial inside the VM takes up to the whole budget
+// (ADR-0025, ADR-0026). Each dedicated Conn holds its own pooled
+// connection until it is closed, so the PINGs dial and initialise that
+// many, and closing them hands them back to the pool.
 func (c *Client) refill(addr string) {
 	ctx, cancel := context.WithTimeout(context.Background(), warmTimeout)
 	defer cancel()
@@ -144,7 +152,17 @@ func (c *Client) refill(addr string) {
 		if node.Options().Addr != addr {
 			return nil
 		}
-		return node.Ping(ctx).Err()
+		conns := make([]*goredis.Conn, refillConns)
+		var wg sync.WaitGroup
+		for i := range conns {
+			conns[i] = node.Conn()
+			wg.Go(func() { _ = conns[i].Ping(ctx).Err() })
+		}
+		wg.Wait()
+		for _, cn := range conns {
+			_ = cn.Close()
+		}
+		return nil
 	})
 }
 

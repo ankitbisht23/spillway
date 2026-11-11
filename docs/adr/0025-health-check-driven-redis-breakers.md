@@ -1,6 +1,6 @@
 # 0025. Health-check driven Redis breakers
 
-- **Status:** Accepted
+- **Status:** Accepted; refill count superseded by [ADR-0026](0026-refill-redis-connections-after-an-outage.md)
 - **Date:** 2026-11-11
 - **Requirement IDs:** RL-22, RL-23, NFR-06, NFR-13
 
