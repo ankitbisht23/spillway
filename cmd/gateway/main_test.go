@@ -12,6 +12,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -57,6 +58,16 @@ func TestLoadSettings(t *testing.T) {
 	if s, err := loadSettings(env(map[string]string{"SPILLWAY_GATEWAY_TRUSTED_PROXIES": "10.0.0.0/8, 2001:db8::/32"})); err != nil || len(s.trusted) != 2 {
 		t.Errorf("trusted proxies: %+v, %v", s, err)
 	}
+	if s.redisAddrs != nil || s.redisAddrMap != nil {
+		t.Errorf("Redis by default: %v, %v; want none", s.redisAddrs, s.redisAddrMap)
+	}
+	redis := map[string]string{
+		"SPILLWAY_GATEWAY_REDIS_ADDRS": "redis-0:6379, redis-1:6379,",
+		"SPILLWAY_REDIS_ADDR_MAP":      "redis-0:6379=127.0.0.1:7000",
+	}
+	if s, err := loadSettings(env(redis)); err != nil || !slices.Equal(s.redisAddrs, []string{"redis-0:6379", "redis-1:6379"}) || s.redisAddrMap["redis-0:6379"] != "127.0.0.1:7000" {
+		t.Errorf("Redis: %+v, %v", s, err)
+	}
 	if s, err := loadSettings(env(map[string]string{"SPILLWAY_GATEWAY_DNS_REFRESH": "5s"})); err != nil || s.dnsRefresh != 5*time.Second {
 		t.Errorf("DNS refresh 5s: %+v, %v", s, err)
 	}
@@ -93,6 +104,9 @@ func TestLoadSettings(t *testing.T) {
 		{map[string]string{"SPILLWAY_GATEWAY_OTLP_ENDPOINT": "grpc://otel-collector:4317"}, "SPILLWAY_GATEWAY_OTLP_ENDPOINT"},
 		{map[string]string{"SPILLWAY_GATEWAY_OTLP_ENDPOINT": "http://otel-collector"}, "SPILLWAY_GATEWAY_OTLP_ENDPOINT"},
 		{map[string]string{"SPILLWAY_GATEWAY_OTLP_ENDPOINT": "http://:4317"}, "SPILLWAY_GATEWAY_OTLP_ENDPOINT"},
+		{map[string]string{"SPILLWAY_GATEWAY_REDIS_ADDRS": "redis-0"}, `SPILLWAY_GATEWAY_REDIS_ADDRS: "redis-0" is not host:port`},
+		{map[string]string{"SPILLWAY_GATEWAY_REDIS_ADDRS": "redis-0:6379,:6379"}, `SPILLWAY_GATEWAY_REDIS_ADDRS: ":6379"`},
+		{map[string]string{"SPILLWAY_REDIS_ADDR_MAP": "redis-0:6379"}, "SPILLWAY_REDIS_ADDR_MAP"},
 	} {
 		if _, err := loadSettings(env(tt.over)); err == nil || !strings.HasPrefix(err.Error(), tt.want) {
 			t.Errorf("%v: error = %v, want one starting %q", tt.over, err, tt.want)
@@ -242,6 +256,44 @@ func TestServeRejectsInvalidIdentity(t *testing.T) {
 	s := settings{configPath: cfg, identity: identity, httpAddr: freeAddr(t), adminAddr: freeAddr(t), dnsRefresh: time.Minute}
 	if err := serve(t.Context(), s, slog.New(slog.DiscardHandler)); err == nil || !strings.Contains(err.Error(), `consumer "a": defined twice`) {
 		t.Errorf("serve = %v, want the identity error", err)
+	}
+}
+
+// TestServeRedisPolicies: a config with a Redis policy stops a gateway that
+// has no Redis; with Redis set but unreachable, the gateway is ready anyway
+// (GW-24), and the policy allows until failure modes arrive (ADR-0021).
+func TestServeRedisPolicies(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "upstream") }))
+	t.Cleanup(up.Close)
+	cfg := filepath.Join(t.TempDir(), "config.yaml")
+	yaml := "version: 1\nupstreams: [{ name: up, endpoints: [{ address: '" + up.Listener.Addr().String() + "' }] }]\n" +
+		"routes: [{ name: all, match: { path_prefix: / }, upstream: up }]\n" +
+		"policies: [{ name: shared, level: route, match: { routes: ['*'] }, key_template: '{route}', algorithm: gcra, limits: [{ rate: 1, period: 1h, burst: 1 }] }]\n"
+	if err := os.WriteFile(cfg, []byte(yaml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := settings{configPath: cfg, httpAddr: freeAddr(t), adminAddr: freeAddr(t), allow: proxy.Allowlist{netip.MustParsePrefix("127.0.0.0/8")}, dnsRefresh: time.Minute}
+	if err := serve(t.Context(), s, slog.New(slog.DiscardHandler)); err == nil || !strings.Contains(err.Error(), `policy "shared" runs in Redis (local is not true), but SPILLWAY_GATEWAY_REDIS_ADDRS is not set`) {
+		t.Errorf("serve without Redis = %v, want the Redis policy error", err)
+	}
+
+	// With TLS on, as in TestServe: serve reads srv.TLSConfig after starting
+	// the plain-HTTP server, which sets it when it is nil.
+	s.tlsCert, s.tlsKey, s.tlsAddr = filepath.Join(t.TempDir(), "cert.pem"), filepath.Join(t.TempDir(), "key.pem"), freeAddr(t)
+	testcert.Write(t, s.tlsCert, s.tlsKey, 1)
+	s.redisAddrs = []string{freeAddr(t)} // nothing listens there
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- serve(ctx, s, slog.New(slog.DiscardHandler)) }()
+	waitFor(t, "/readyz 200", func() bool { code, _ := get(t, "http://"+s.adminAddr+"/readyz"); return code == http.StatusOK })
+	for range 2 {
+		if code, body := get(t, "http://"+s.httpAddr+"/x"); code != http.StatusOK || body != "upstream" {
+			t.Errorf("GET /x with Redis down = %d %q, want 200 from the upstream", code, body)
+		}
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Errorf("serve: %v", err)
 	}
 }
 

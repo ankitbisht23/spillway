@@ -3,7 +3,7 @@
 # no .ONESHELL, no `!=`, no $(file ...).
 
 SHELL := /bin/bash
-export GOTOOLCHAIN := go1.27.3
+export GOTOOLCHAIN := go1.27.4
 
 BIN := $(CURDIR)/bin
 FUZZTIME ?= 5s

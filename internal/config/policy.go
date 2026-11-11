@@ -1,6 +1,7 @@
 package config
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"net/http"
@@ -20,6 +21,10 @@ const (
 	Enforce = "enforce"
 	Shadow  = "shadow"
 	Off     = "off"
+
+	FailOpen   = "fail_open"
+	FailClosed = "fail_closed"
+	Degraded   = "degraded"
 )
 
 // Policy validation bounds (ADR-0017).
@@ -32,12 +37,20 @@ const (
 	// maxDefaultBurstPeriod is the longest period whose burst defaults to
 	// its rate (RL-03).
 	maxDefaultBurstPeriod = time.Minute
+	// maxCallLimits is the most limits one Redis call carries: the script's
+	// shadow_would_deny is a 32-bit mask (ADR-0021).
+	maxCallLimits = 32
+	// defaultRedisBudget and maxRedisBudget bound ratelimit.redis_budget
+	// (RL-22, ADR-0021).
+	defaultRedisBudget = 5 * time.Millisecond
+	maxRedisBudget     = time.Second
 )
 
 var (
 	levels     = map[string]bool{"global": true, "tenant": true, "consumer": true, "route": true}
 	algorithms = map[string]bool{GCRA: true, SlidingWindow: true, FixedWindow: true, Concurrency: true}
 	modes      = map[string]bool{Enforce: true, Shadow: true, Off: true}
+	failModes  = map[string]bool{FailOpen: true, FailClosed: true, Degraded: true}
 )
 
 // Policy is a compiled rate limiting policy (RL-03, ADR-0017).
@@ -50,10 +63,16 @@ type Policy struct {
 	Algorithm string // GCRA, SlidingWindow, FixedWindow or Concurrency
 	Limits    []Limit
 	Mode      string // Enforce, Shadow or Off
+	// Local is true for a policy that runs in gateway memory (local: true,
+	// or concurrency); the others run in Redis (ADR-0021).
+	Local       bool
+	FailureMode string // Redis policies: FailOpen, FailClosed or Degraded; "" if Local
 }
 
-// Limit is one limit of a policy, with per-replica values: the configured
-// rate and burst ÷ ratelimit.replicas, rounded down, minimum 1 (RL-31).
+// Limit is one limit of a policy. A local policy's limits hold per-replica
+// values, the configured rate and burst ÷ ratelimit.replicas, rounded down,
+// minimum 1 (RL-31); a Redis policy's hold the configured, cluster-wide ones
+// (ADR-0021).
 type Limit struct {
 	Rate   int64         // cost units per period; for Concurrency, the max in flight
 	Period time.Duration // whole seconds; 0 for Concurrency
@@ -76,13 +95,27 @@ func (p *Policy) Matches(route, method string) bool {
 	return false
 }
 
-// compilePolicies validates the policies of c, whose routes are compiled.
-func compilePolicies(c *configpb.Config, routes []Route) ([]Policy, error) {
+// compileRateLimit validates c's ratelimit settings into s.
+func (s *Snapshot) compileRateLimit(c *configpb.Config) error {
 	replicas := int64(c.GetRatelimit().GetReplicas())
 	if replicas < 0 {
-		return nil, errors.New("ratelimit.replicas must not be negative")
+		return errors.New("ratelimit.replicas must not be negative")
 	}
-	replicas = max(replicas, 1)
+	s.Replicas = max(replicas, 1)
+	s.RedisBudget = defaultRedisBudget
+	if v := c.GetRatelimit().GetRedisBudget(); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d <= 0 || d > maxRedisBudget {
+			return fmt.Errorf("ratelimit.redis_budget: %q is not a duration greater than 0 and at most %v", v, maxRedisBudget)
+		}
+		s.RedisBudget = d
+	}
+	return nil
+}
+
+// compilePolicies validates the policies of c, whose routes are compiled,
+// with replicas gateways sharing each limit.
+func compilePolicies(c *configpb.Config, routes []Route, replicas int64) ([]Policy, error) {
 	names := map[string]bool{}
 	var out []Policy
 	for _, p := range c.GetPolicies() {
@@ -98,6 +131,19 @@ func compilePolicies(c *configpb.Config, routes []Route) ([]Policy, error) {
 			return nil, fmt.Errorf("policy %q: %w", p.GetName(), err)
 		}
 		out = append(out, pol)
+	}
+	// A route's tenant-slot call carries the Redis limits of every tenant-,
+	// consumer- and route-level policy that matches it (ADR-0021).
+	for _, r := range routes {
+		n := 0
+		for _, p := range out {
+			if !p.Local && p.Level != "global" && p.Mode != Off && (p.Routes == nil || p.Routes[r.Name]) {
+				n += len(p.Limits)
+			}
+		}
+		if n > maxCallLimits {
+			return nil, fmt.Errorf("route %q would carry %d Redis limits in one call; at most %d", r.Name, n, maxCallLimits)
+		}
 	}
 	return out, nil
 }
@@ -118,9 +164,24 @@ func compilePolicy(p *configpb.Policy, replicas int64, routes []Route) (Policy, 
 	} else if !modes[pol.Mode] {
 		return pol, fmt.Errorf("mode %q: want enforce, shadow or off", pol.Mode)
 	}
-	// Concurrency is always local (RL-02).
-	if !p.GetLocal() && pol.Algorithm != Concurrency {
-		return pol, errors.New("only local policies (local: true) are supported until global Redis policies arrive in M3")
+	// Concurrency is always local (RL-02); the other policies run in Redis
+	// unless they say local: true (ADR-0021).
+	pol.Local = p.GetLocal() || pol.Algorithm == Concurrency
+	if pol.Local {
+		if p.GetFailureMode() != "" {
+			return pol, errors.New("failure_mode applies only to Redis policies; local policies never fail")
+		}
+	} else {
+		if pol.Algorithm != GCRA && pol.Algorithm != SlidingWindow {
+			return pol, fmt.Errorf("algorithm %s must be local (local: true); Redis policies use gcra or sliding_window", pol.Algorithm)
+		}
+		pol.FailureMode = cmp.Or(p.GetFailureMode(), FailOpen)
+		if !failModes[pol.FailureMode] {
+			return pol, fmt.Errorf("failure_mode %q: want fail_open, fail_closed or degraded", pol.FailureMode)
+		}
+		if len(p.GetLimits()) > maxCallLimits {
+			return pol, fmt.Errorf("limits: a Redis policy has at most %d", maxCallLimits)
+		}
 	}
 	if err := pol.compileMatch(p.GetMatch(), routes); err != nil {
 		return pol, err
@@ -129,11 +190,17 @@ func compilePolicy(p *configpb.Policy, replicas int64, routes []Route) (Policy, 
 	if pol.Key, err = parseKeyTemplate(p.GetKeyTemplate()); err != nil {
 		return pol, err
 	}
-	if err := pol.compileLimits(p.GetLimits(), replicas); err != nil {
+	// Redis policies keep the cluster-wide numbers (ADR-0021).
+	perReplica := replicas
+	if !pol.Local {
+		perReplica = 1
+	}
+	if err := pol.compileLimits(p.GetLimits(), perReplica); err != nil {
 		return pol, err
 	}
-	// A route whose cost is above a limit's per-replica capacity could never
-	// be admitted (RL-03).
+	// A route whose cost is above a limit's capacity could never be admitted
+	// (RL-03); a degraded policy's per-replica capacity counts too, since it
+	// applies during a Redis outage (ADR-0021).
 	for _, r := range routes {
 		if pol.Routes != nil && !pol.Routes[r.Name] {
 			continue
@@ -143,8 +210,13 @@ func compilePolicy(p *configpb.Policy, replicas int64, routes []Route) (Policy, 
 			if pol.Algorithm == GCRA {
 				capacity = l.Burst
 			}
-			if r.Cost > capacity {
+			switch {
+			case r.Cost > capacity && pol.Local:
 				return pol, fmt.Errorf("route %q costs %d, more than the %d that limits[%d] admits per replica, so its requests could never be admitted", r.Name, r.Cost, capacity, i)
+			case r.Cost > capacity:
+				return pol, fmt.Errorf("route %q costs %d, more than the %d that limits[%d] admits, so its requests could never be admitted", r.Name, r.Cost, capacity, i)
+			case pol.FailureMode == Degraded && r.Cost > max(1, capacity/replicas):
+				return pol, fmt.Errorf("route %q costs %d, more than the %d that limits[%d] admits per replica in degraded mode, so its requests could never be admitted during a Redis outage", r.Name, r.Cost, max(1, capacity/replicas), i)
 			}
 		}
 	}

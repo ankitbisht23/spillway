@@ -44,7 +44,8 @@ func NewRegistry(clock ratelimit.Clock) *Registry {
 // (config.Watcher's apply hook). IDs that remain keep their state and take the
 // snapshot's per-replica rate and burst (RL-31); new IDs start empty; removed
 // ones are dropped. A request admitted by a removed concurrency limiter still
-// releases into it, so its count drains.
+// releases into it, so its count drains. Redis policies have no limiter here
+// (ADR-0021).
 func (r *Registry) Apply(s *config.Snapshot) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -52,6 +53,9 @@ func (r *Registry) Apply(s *config.Snapshot) {
 	next := map[ID]ratelimit.Limiter{}
 	for i := range s.Policies {
 		p := &s.Policies[i]
+		if !p.Local {
+			continue
+		}
 		for _, l := range p.Limits {
 			id := LimitID(p, l)
 			next[id] = r.newLimiter(p.Algorithm, l, old[id])

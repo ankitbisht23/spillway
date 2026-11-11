@@ -146,11 +146,17 @@ func newGateway(t *testing.T, res Resolver, yaml string) *gateway {
 // newGatewayBehind is newGateway with trusted proxies (SEC-05).
 func newGatewayBehind(t *testing.T, res Resolver, yaml string, trusted TrustedProxies) *gateway {
 	t.Helper()
+	return newGatewayWith(t, res, yaml, trusted, nil)
+}
+
+// newGatewayWith is newGateway with trusted proxies and a Redis backend.
+func newGatewayWith(t *testing.T, res Resolver, yaml string, trusted TrustedProxies, redis Redis) *gateway {
+	t.Helper()
 	g := &gateway{reg: NewRegistry(loopback, res, slog.New(slog.DiscardHandler)), clock: ratelimit.NewFakeClock(t0), metrics: prometheus.NewRegistry(), logs: &logBuffer{}}
 	g.limiters = local.NewRegistry(g.clock)
 	g.apply(t, yaml)
 	rec := telemetry.NewRecorder(g.metrics, slog.New(slog.NewJSONHandler(g.logs, nil)), 1)
-	g.Server = httptest.NewServer(NewHandler(g.current.Load, g.identity.Load, trusted, g.reg, g.limiters, rec, slog.New(slog.DiscardHandler)))
+	g.Server = httptest.NewServer(NewHandler(g.current.Load, g.identity.Load, trusted, g.reg, g.limiters, redis, rec, slog.New(slog.DiscardHandler)))
 	t.Cleanup(g.Close)
 	return g
 }
@@ -377,7 +383,7 @@ routes:
 }
 
 func TestProxyErrorStatus(t *testing.T) {
-	h := NewHandler(nil, nil, nil, nil, nil, nil, slog.New(slog.DiscardHandler))
+	h := NewHandler(nil, nil, nil, nil, nil, nil, nil, slog.New(slog.DiscardHandler))
 	for _, tt := range []struct {
 		err    error
 		want   int

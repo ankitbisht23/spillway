@@ -29,6 +29,7 @@ type Handler struct {
 	trusted  TrustedProxies
 	pools    *Registry
 	limiters *local.Registry
+	redis    Redis
 	rec      *telemetry.Recorder
 	log      *slog.Logger
 	errLog   *log.Logger
@@ -37,10 +38,12 @@ type Handler struct {
 // NewHandler returns a Handler that reads the current snapshot from snapshot
 // and the current identity from identity once per request (GW-21, GW-17),
 // takes the client IP from X-Forwarded-For only behind trusted proxies
-// (SEC-05), checks the snapshot's rate limit policies with the limiters in
-// limiters (ADR-0017), and records requests with rec (OB-01, OB-03).
-func NewHandler(snapshot func() *config.Snapshot, identity func() *config.Identity, trusted TrustedProxies, pools *Registry, limiters *local.Registry, rec *telemetry.Recorder, log *slog.Logger) *Handler {
-	return &Handler{snapshot: snapshot, identity: identity, trusted: trusted, pools: pools, limiters: limiters, rec: rec, log: log, errLog: slog.NewLogLogger(log.Handler(), slog.LevelWarn)}
+// (SEC-05), checks the snapshot's local rate limit policies with the
+// limiters in limiters (ADR-0017) and its Redis policies with redis, nil if
+// the gateway has no Redis (ADR-0021), and records requests with rec (OB-01,
+// OB-03).
+func NewHandler(snapshot func() *config.Snapshot, identity func() *config.Identity, trusted TrustedProxies, pools *Registry, limiters *local.Registry, redis Redis, rec *telemetry.Recorder, log *slog.Logger) *Handler {
+	return &Handler{snapshot: snapshot, identity: identity, trusted: trusted, pools: pools, limiters: limiters, redis: redis, rec: rec, log: log, errLog: slog.NewLogLogger(log.Handler(), slog.LevelWarn)}
 }
 
 // statusClientClosed is recorded for a request whose client went away before
@@ -97,12 +100,13 @@ func (h *Handler) serve(w *responseRecorder, r *http.Request, q *telemetry.Reque
 	}
 	q.Route = route.Name
 
-	// Rate limits (ADR-0017): the policies that need no identity, then API
-	// key resolution, then the policies that use the key's identity. They
-	// run before the size limits, so oversized requests count too. A request
-	// denied in the first phase is not authenticated.
+	// Rate limits (ADR-0017, ADR-0021): the local policies that need no
+	// identity, then API key resolution, then the local policies that use
+	// the key's identity, then the Redis policies. They run before the size
+	// limits, so oversized requests count too. A request denied in the first
+	// phase is not authenticated.
 	peer, _ := netip.ParseAddrPort(r.RemoteAddr)
-	lim := newLimits(s, route, h.limiters, h.rec, r, q, h.trusted.ClientIP(peer.Addr(), r.Header.Values("X-Forwarded-For")))
+	lim := newLimits(s, route, h.limiters, h.redis, h.rec, h.log, r, q, h.trusted.ClientIP(peer.Addr(), r.Header.Values("X-Forwarded-For")))
 	defer lim.release()
 	allowed := lim.check(false)
 	if allowed {
@@ -113,7 +117,7 @@ func (h *Handler) serve(w *responseRecorder, r *http.Request, q *telemetry.Reque
 			return
 		}
 		lim.identify(consumer, r.Header.Get("X-API-Key"))
-		allowed = lim.check(true)
+		allowed = lim.check(true) && lim.checkRedis()
 	}
 	w.rateLimitPolicy, w.rateLimit = lim.headers()
 	if !allowed {

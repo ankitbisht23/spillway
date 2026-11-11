@@ -25,6 +25,7 @@ import (
 	"github.com/ankitbisht23/spillway/internal/proxy"
 	"github.com/ankitbisht23/spillway/internal/ratelimit"
 	"github.com/ankitbisht23/spillway/internal/ratelimit/local"
+	"github.com/ankitbisht23/spillway/internal/ratelimit/redis"
 	"github.com/ankitbisht23/spillway/internal/telemetry"
 )
 
@@ -90,7 +91,18 @@ func serve(ctx context.Context, s settings, log *slog.Logger) error {
 	// Upstream pools and rate limiters live outside the snapshot and are
 	// reconciled before each new one goes live (GW-29).
 	limiters := local.NewRegistry(ratelimit.SystemClock)
+	// Redis policies run on the limiter's cluster (ADR-0021); the client
+	// connects on its first call, so readiness never waits for Redis (GW-24).
+	var rl proxy.Redis
+	if len(s.redisAddrs) > 0 {
+		c := redis.NewClient(s.redisAddrs, s.redisAddrMap, log)
+		defer func() { _ = c.Close() }()
+		rl = c
+	}
 	cfg, err := config.NewWatcher(s.configPath, log, func(snap *config.Snapshot) error {
+		if err := checkRedis(snap, rl != nil); err != nil {
+			return err
+		}
 		if err := pools.Apply(snap); err != nil {
 			return err
 		}
@@ -113,7 +125,7 @@ func serve(ctx context.Context, s settings, log *slog.Logger) error {
 	}
 	reg := telemetry.NewRegistry()
 	rec := telemetry.NewRecorder(reg, log, s.accessLogSampleRate)
-	srv := proxy.NewServer(proxy.NewHandler(cfg.Snapshot, identity, s.trusted, pools, limiters, rec, log), log)
+	srv := proxy.NewServer(proxy.NewHandler(cfg.Snapshot, identity, s.trusted, pools, limiters, rl, rec, log), log)
 	if s.tlsCert != "" {
 		certs, err := proxy.NewCerts(s.tlsCert, s.tlsKey, log)
 		if err != nil {
@@ -184,6 +196,17 @@ func serve(ctx context.Context, s settings, log *slog.Logger) error {
 	_ = admin.Close()
 	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
+	}
+	return nil
+}
+
+// checkRedis rejects a snapshot with a Redis policy when the gateway has no
+// Redis (ADR-0021).
+func checkRedis(snap *config.Snapshot, haveRedis bool) error {
+	for _, p := range snap.Policies {
+		if !p.Local && !haveRedis {
+			return fmt.Errorf("policy %q runs in Redis (local is not true), but SPILLWAY_GATEWAY_REDIS_ADDRS is not set", p.Name)
+		}
 	}
 	return nil
 }

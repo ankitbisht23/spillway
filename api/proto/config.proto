@@ -126,6 +126,9 @@ message RateLimitSettings {
   // Gateway replicas sharing every limit; each runs limit / replicas, rounded
   // down, minimum 1 (RL-31). Unset means 1.
   int32 replicas = 1;
+  // One Redis time budget per request (RL-22): a Go duration greater than 0
+  // and at most 1s. Unset means 5ms.
+  string redis_budget = 2;
 }
 
 // Policy is a rate limiting policy (RL-03, ADR-0017).
@@ -142,8 +145,12 @@ message Policy {
   repeated Limit limits = 6;
   // enforce, shadow or off; unset means enforce (RL-26).
   string mode = 7;
-  // Runs in gateway memory only and never touches Redis (RL-17).
+  // Runs in gateway memory only and never touches Redis (RL-17); otherwise
+  // the policy runs in Redis (ADR-0021).
   bool local = 8;
+  // Redis policies only: fail_open, fail_closed or degraded; unset means
+  // fail_open (RL-23).
+  string failure_mode = 9;
 }
 
 // PolicyMatch is the requests a policy applies to.
@@ -179,7 +186,8 @@ message Identity {
 message Consumer {
   // Unique.
   string name = 1;
-  // Optional; empty leaves {tenant} unfilled.
+  // Optional; empty leaves {tenant} unfilled. 1-64 characters from
+  // [A-Za-z0-9._-] (ADR-0021).
   string tenant = 2;
 }
 

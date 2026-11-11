@@ -707,7 +707,10 @@ type RateLimitSettings struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Gateway replicas sharing every limit; each runs limit / replicas, rounded
 	// down, minimum 1 (RL-31). Unset means 1.
-	Replicas      int32 `protobuf:"varint,1,opt,name=replicas,proto3" json:"replicas,omitempty"`
+	Replicas int32 `protobuf:"varint,1,opt,name=replicas,proto3" json:"replicas,omitempty"`
+	// One Redis time budget per request (RL-22): a Go duration greater than 0
+	// and at most 1s. Unset means 5ms.
+	RedisBudget   string `protobuf:"bytes,2,opt,name=redis_budget,json=redisBudget,proto3" json:"redis_budget,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -749,6 +752,13 @@ func (x *RateLimitSettings) GetReplicas() int32 {
 	return 0
 }
 
+func (x *RateLimitSettings) GetRedisBudget() string {
+	if x != nil {
+		return x.RedisBudget
+	}
+	return ""
+}
+
 // Policy is a rate limiting policy (RL-03, ADR-0017).
 type Policy struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -764,8 +774,12 @@ type Policy struct {
 	Limits    []*Limit `protobuf:"bytes,6,rep,name=limits,proto3" json:"limits,omitempty"`
 	// enforce, shadow or off; unset means enforce (RL-26).
 	Mode string `protobuf:"bytes,7,opt,name=mode,proto3" json:"mode,omitempty"`
-	// Runs in gateway memory only and never touches Redis (RL-17).
-	Local         bool `protobuf:"varint,8,opt,name=local,proto3" json:"local,omitempty"`
+	// Runs in gateway memory only and never touches Redis (RL-17); otherwise
+	// the policy runs in Redis (ADR-0021).
+	Local bool `protobuf:"varint,8,opt,name=local,proto3" json:"local,omitempty"`
+	// Redis policies only: fail_open, fail_closed or degraded; unset means
+	// fail_open (RL-23).
+	FailureMode   string `protobuf:"bytes,9,opt,name=failure_mode,json=failureMode,proto3" json:"failure_mode,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -854,6 +868,13 @@ func (x *Policy) GetLocal() bool {
 		return x.Local
 	}
 	return false
+}
+
+func (x *Policy) GetFailureMode() string {
+	if x != nil {
+		return x.FailureMode
+	}
+	return ""
 }
 
 // PolicyMatch is the requests a policy applies to.
@@ -1045,7 +1066,8 @@ type Consumer struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Unique.
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	// Optional; empty leaves {tenant} unfilled.
+	// Optional; empty leaves {tenant} unfilled. 1-64 characters from
+	// [A-Za-z0-9._-] (ADR-0021).
 	Tenant        string `protobuf:"bytes,2,opt,name=tenant,proto3" json:"tenant,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1216,9 +1238,10 @@ const file_config_proto_rawDesc = "" +
 	"\vHeaderMatch\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05exact\x18\x02 \x01(\tR\x05exact\x12\x14\n" +
-	"\x05regex\x18\x03 \x01(\tR\x05regex\"/\n" +
+	"\x05regex\x18\x03 \x01(\tR\x05regex\"R\n" +
 	"\x11RateLimitSettings\x12\x1a\n" +
-	"\breplicas\x18\x01 \x01(\x05R\breplicas\"\x87\x02\n" +
+	"\breplicas\x18\x01 \x01(\x05R\breplicas\x12!\n" +
+	"\fredis_budget\x18\x02 \x01(\tR\vredisBudget\"\xaa\x02\n" +
 	"\x06Policy\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05level\x18\x02 \x01(\tR\x05level\x125\n" +
@@ -1227,7 +1250,8 @@ const file_config_proto_rawDesc = "" +
 	"\talgorithm\x18\x05 \x01(\tR\talgorithm\x121\n" +
 	"\x06limits\x18\x06 \x03(\v2\x19.spillway.config.v1.LimitR\x06limits\x12\x12\n" +
 	"\x04mode\x18\a \x01(\tR\x04mode\x12\x14\n" +
-	"\x05local\x18\b \x01(\bR\x05local\"?\n" +
+	"\x05local\x18\b \x01(\bR\x05local\x12!\n" +
+	"\ffailure_mode\x18\t \x01(\tR\vfailureMode\"?\n" +
 	"\vPolicyMatch\x12\x16\n" +
 	"\x06routes\x18\x01 \x03(\tR\x06routes\x12\x18\n" +
 	"\amethods\x18\x02 \x03(\tR\amethods\"I\n" +
