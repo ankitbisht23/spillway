@@ -35,9 +35,9 @@ func TestRegistryApply(t *testing.T) {
 	clock := ratelimit.NewFakeClock(base)
 	r := NewRegistry(clock)
 	key := ratelimit.Key("k")
-	gcra := ID{"g", config.GCRA, time.Second}
-	window := ID{"w", config.FixedWindow, time.Minute}
-	inflight := ID{"c", config.Concurrency, 0}
+	gcra := ID{"g", config.GCRA, time.Second, false}
+	window := ID{"w", config.FixedWindow, time.Minute, false}
+	inflight := ID{"c", config.Concurrency, 0, false}
 
 	r.Apply(compile(t, "policies:\n"+
 		policy("g", "gcra", "[{rate: 10, period: 1s}]")+
@@ -85,7 +85,7 @@ func TestRegistryApply(t *testing.T) {
 			t.Errorf("%v kept after its policy changed or went", id)
 		}
 	}
-	if d := take(r.Limiter(ID{"g", config.GCRA, 2 * time.Second}), key, 0); d.Remaining != 20 {
+	if d := take(r.Limiter(ID{"g", config.GCRA, 2 * time.Second, false}), key, 0); d.Remaining != 20 {
 		t.Errorf("new period: %d left, want a full 20", d.Remaining)
 	}
 
@@ -105,8 +105,45 @@ func TestRegistryApply(t *testing.T) {
 	// A policy that turns into a Redis policy loses its local limiter
 	// (ADR-0021).
 	r.Apply(compile(t, "policies:\n  - {name: g, level: global, match: {routes: ['*']}, key_template: '{ip}', algorithm: gcra, limits: [{rate: 20, period: 2s}]}\n"))
-	if r.Limiter(ID{"g", config.GCRA, 2 * time.Second}) != nil {
+	if r.Limiter(ID{"g", config.GCRA, 2 * time.Second, false}) != nil {
 		t.Error("a Redis policy has a local limiter")
+	}
+}
+
+// TestRegistryDegraded: a Redis policy with failure_mode degraded has an
+// in-memory limiter per limit at limit ÷ replicas, rounded down, minimum 1,
+// under its own ID, whose state survives reloads; other Redis policies have
+// none (RL-23, RL-31, ADR-0021).
+func TestRegistryDegraded(t *testing.T) {
+	r := NewRegistry(ratelimit.NewFakeClock(base))
+	key := ratelimit.Key("k")
+	redisPolicies := func(replicas string) string {
+		return "ratelimit: {replicas: " + replicas + "}\npolicies:\n" +
+			"  - {name: d, level: tenant, match: {routes: ['*']}, key_template: '{ip}', algorithm: gcra, limits: [{rate: 100, period: 1s, burst: 200}, {rate: 10000, period: 1h, burst: 500}], failure_mode: degraded}\n" +
+			"  - {name: w, level: global, match: {routes: ['*']}, key_template: '{ip}', algorithm: sliding_window, limits: [{rate: 6000, period: 1m}], failure_mode: degraded}\n" +
+			"  - {name: o, level: global, match: {routes: ['*']}, key_template: '{ip}', algorithm: gcra, limits: [{rate: 10, period: 1s}]}\n"
+	}
+	r.Apply(compile(t, redisPolicies("3")))
+	second := ID{"d", config.GCRA, time.Second, true}
+	hour := ID{"d", config.GCRA, time.Hour, true}
+	window := ID{"w", config.SlidingWindow, time.Minute, true}
+	for id, want := range map[ID]int64{second: 66, hour: 166, window: 2000} {
+		if d := take(r.Limiter(id), key, 0); d.Remaining != want {
+			t.Errorf("%v: %d left, want %d", id, d.Remaining, want)
+		}
+	}
+	for _, id := range []ID{{"d", config.GCRA, time.Second, false}, {"o", config.GCRA, time.Second, true}, {"o", config.GCRA, time.Second, false}} {
+		if r.Limiter(id) != nil {
+			t.Errorf("%v has a limiter", id)
+		}
+	}
+
+	take(r.Limiter(hour), key, 100)
+	r.Apply(compile(t, redisPolicies("2")))
+	// The TAT stays: 100 taken at 3333/h is 108 s of the 180 s τ that
+	// 5000/h with burst 250 has.
+	if d := take(r.Limiter(hour), key, 0); d.Remaining != 99 {
+		t.Errorf("after a reload to 2 replicas: %d left, want 99", d.Remaining)
 	}
 }
 
@@ -118,17 +155,17 @@ func TestRegistrySweep(t *testing.T) {
 		policy("g", "gcra", "[{rate: 10, period: 1s}]")+
 		policy("s", "sliding_window", "[{rate: 10, period: 1s}]")+
 		policy("c", "concurrency", "[{rate: 4}]")))
-	g := r.Limiter(ID{"g", config.GCRA, time.Second}).(*GCRA)
-	sw := r.Limiter(ID{"s", config.SlidingWindow, time.Second}).(*SlidingWindow)
+	g := r.Limiter(ID{"g", config.GCRA, time.Second, false}).(*GCRA)
+	sw := r.Limiter(ID{"s", config.SlidingWindow, time.Second, false}).(*SlidingWindow)
 	take(g, ratelimit.Key("a"), 1)
 	take(sw, ratelimit.Key("a"), 1)
-	take(r.Limiter(ID{"c", config.Concurrency, 0}), ratelimit.Key("a"), 1)
+	take(r.Limiter(ID{"c", config.Concurrency, 0, false}), ratelimit.Key("a"), 1)
 	clock.Advance(2 * time.Second)
 	r.sweep()
 	if g.state.len() != 0 || sw.state.len() != 0 {
 		t.Errorf("after a sweep: %d gcra and %d sliding-window entries, want none", g.state.len(), sw.state.len())
 	}
-	if n := r.Limiter(ID{"c", config.Concurrency, 0}).(*Concurrency).state.len(); n != 1 {
+	if n := r.Limiter(ID{"c", config.Concurrency, 0, false}).(*Concurrency).state.len(); n != 1 {
 		t.Errorf("a sweep dropped an in-flight count")
 	}
 }

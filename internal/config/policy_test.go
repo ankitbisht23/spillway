@@ -172,6 +172,25 @@ func TestRedisPolicies(t *testing.T) {
 	}
 }
 
+// TestPerReplica: a degraded limiter's limit is rate and burst ÷ replicas,
+// rounded down, minimum 1 (RL-23, RL-31).
+func TestPerReplica(t *testing.T) {
+	for _, tt := range []struct {
+		in       Limit
+		replicas int64
+		want     Limit
+	}{
+		{Limit{Rate: 100, Period: time.Second, Burst: 200}, 3, Limit{Rate: 33, Period: time.Second, Burst: 66}},
+		{Limit{Rate: 6000, Period: time.Minute}, 3, Limit{Rate: 2000, Period: time.Minute}},
+		{Limit{Rate: 2, Period: time.Second, Burst: 2}, 5, Limit{Rate: 1, Period: time.Second, Burst: 1}},
+		{Limit{Rate: 7, Period: time.Hour, Burst: 9}, 1, Limit{Rate: 7, Period: time.Hour, Burst: 9}},
+	} {
+		if got := tt.in.PerReplica(tt.replicas); got != tt.want {
+			t.Errorf("%+v.PerReplica(%d) = %+v, want %+v", tt.in, tt.replicas, got, tt.want)
+		}
+	}
+}
+
 func TestPolicyRejects(t *testing.T) {
 	tests := []struct {
 		name, yaml, want string
