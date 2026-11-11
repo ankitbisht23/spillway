@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/ankitbisht23/spillway/internal/gen/configpb"
 	"github.com/ankitbisht23/spillway/internal/router"
@@ -18,7 +19,12 @@ type Snapshot struct {
 	Routes    []Route
 	Upstreams map[string]*Upstream // by name
 	Policies  []Policy             // in evaluation order (ADR-0017)
-	router    *router.Router
+	// Replicas is ratelimit.replicas, at least 1 (RL-31).
+	Replicas int64
+	// RedisBudget is ratelimit.redis_budget: one Redis time budget per
+	// request (RL-22, ADR-0021).
+	RedisBudget time.Duration
+	router      *router.Router
 }
 
 // Route is a compiled route.
@@ -112,7 +118,10 @@ func Compile(c *configpb.Config) (*Snapshot, error) {
 		}
 		return nil, err
 	}
-	if s.Policies, err = compilePolicies(c, s.Routes); err != nil {
+	if err := s.compileRateLimit(c); err != nil {
+		return nil, err
+	}
+	if s.Policies, err = compilePolicies(c, s.Routes, s.Replicas); err != nil {
 		return nil, err
 	}
 	return s, nil

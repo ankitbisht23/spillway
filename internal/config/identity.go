@@ -70,6 +70,10 @@ func CompileIdentity(c *configpb.Identity) (*Identity, error) {
 		if consumers[cc.GetName()] != nil {
 			return nil, fmt.Errorf("consumer %q: defined twice", cc.GetName())
 		}
+		// Tenant names go into Redis hash tags, {t:<tenant>} (ADR-0021).
+		if t := cc.GetTenant(); t != "" && (len(t) > 64 || strings.ContainsFunc(t, notNameChar)) {
+			return nil, fmt.Errorf("consumer %q: tenant must be 1-64 characters from A-Z, a-z, 0-9, '.', '_' and '-'", cc.GetName())
+		}
 		consumers[cc.GetName()] = &Consumer{Name: cc.GetName(), Tenant: cc.GetTenant()}
 	}
 	prefixes := map[string]int{}

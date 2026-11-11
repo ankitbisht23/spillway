@@ -101,6 +101,13 @@ func TestRegistryApply(t *testing.T) {
 	if d := take(r.Limiter(inflight), key, 0); d.Remaining != 4 {
 		t.Errorf("concurrency added back: %d free, want 4", d.Remaining)
 	}
+
+	// A policy that turns into a Redis policy loses its local limiter
+	// (ADR-0021).
+	r.Apply(compile(t, "policies:\n  - {name: g, level: global, match: {routes: ['*']}, key_template: '{ip}', algorithm: gcra, limits: [{rate: 20, period: 2s}]}\n"))
+	if r.Limiter(ID{"g", config.GCRA, 2 * time.Second}) != nil {
+		t.Error("a Redis policy has a local limiter")
+	}
 }
 
 // TestRegistrySweep: a sweep drops idle keys of every limiter.
