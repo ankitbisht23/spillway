@@ -45,10 +45,11 @@ func TestGatewayGlobalLimit(t *testing.T) {
 	}
 
 	const policy = `"per-ip";q=5000;w=1, "shared-tenant";q=100;w=3600, "shared-global";q=3;w=10`
-	// A gateway's first call to a node loads the slot map, dials, checks the
-	// Redis version and loads the script, which can overrun the budget and
-	// fail open (ADR-0021). Both calls' slots depend only on the tenant and
-	// the policy, so requests with another X-Shared-Key warm them up.
+	// Until a freshly started gateway has warmed up (ADR-0024), its first
+	// call to a node loads the slot map, dials, checks the Redis version and
+	// loads the script, which can overrun the budget and fail open. Both
+	// calls' slots depend only on the tenant and the policy, so requests
+	// with another X-Shared-Key wait for that.
 	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(50 * time.Millisecond) {
 		_, h, _ := send(run + "-warm")
 		if h.Get("RateLimit-Policy") == policy {

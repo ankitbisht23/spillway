@@ -24,9 +24,17 @@ const (
 	// ReasonRateLimited: the gateway answered 429 because a rate limit
 	// denied the request (RL-25).
 	ReasonRateLimited = "ratelimited"
+	// ReasonFailClosed: the gateway answered 503 because Redis failed for
+	// an enforce-mode fail_closed policy (RL-23).
+	ReasonFailClosed = "fail_closed"
 
 	BackendLocal = "local" // rate limit checks in the gateway's memory
+	BackendRedis = "redis" // rate limit checks on Redis Cluster (ADR-0021)
 )
+
+// redisErrorKinds are the label values of gw_redis_errors_total{kind}: the
+// limiter's error kinds (ADR-0021).
+var redisErrorKinds = []string{"timeout", "conn", "script"}
 
 // maxTenants is how many tenants keep their own tenant label (OB-01).
 const maxTenants = 50
@@ -36,8 +44,9 @@ const maxTenants = 50
 var durationBuckets = []float64{.0005, .001, .0025, .005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10, 30, 60}
 
 // checkBuckets, in seconds, run from 10 µs, for local checks, to 50 ms, past
-// M3's 5 ms Redis budget (ADR-0017).
-var checkBuckets = []float64{.00001, .000025, .00005, .0001, .00025, .0005, .001, .0025, .005, .01, .025, .05}
+// M3's 5 ms Redis budget (ADR-0017); 7 ms is the budget plus the chaos
+// tests' 2 ms slack (ADR-0021).
+var checkBuckets = []float64{.00001, .000025, .00005, .0001, .00025, .0005, .001, .0025, .005, .007, .01, .025, .05}
 
 // Request is what the access log and the metrics record about a request once
 // it has been answered.
@@ -76,6 +85,8 @@ type Recorder struct {
 	upstream   *prometheus.HistogramVec
 	decisions  *prometheus.CounterVec
 	checks     *prometheus.HistogramVec
+	redis      *prometheus.CounterVec
+	refunds    prometheus.Counter
 
 	mu      sync.Mutex // a tenant rotation never runs between labelling and observing
 	tenants *tenantCapper
@@ -107,12 +118,23 @@ func NewRecorder(reg prometheus.Registerer, log *slog.Logger, sampleRate float64
 		}, []string{"policy", "decision", "mode"}),
 		checks: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Name:    "gw_ratelimit_check_duration_seconds",
-			Help:    "Time to evaluate one phase of a request's rate limit policies, refunds included.",
+			Help:    "Time to evaluate a request's rate limit policies: per local phase, refunds included, or all of its Redis calls, failure modes included.",
 			Buckets: checkBuckets,
 		}, []string{"backend"}),
+		redis: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "gw_redis_errors_total",
+			Help: "Redis limiter calls that failed, refunds included, by kind: timeout (incl. calls the request's budget left no time for), conn (incl. calls an open breaker refused) or script.",
+		}, []string{"kind"}),
+		refunds: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "gw_ratelimit_refund_failures_total",
+			Help: "Redis refunds that failed; each leaves at most a request's cost held until the limit's state decays.",
+		}),
 		tenants: newTenantCapper(maxTenants),
 	}
-	reg.MustRegister(rec.requests, rec.duration, rec.upstream, rec.decisions, rec.checks)
+	for _, k := range redisErrorKinds {
+		rec.redis.WithLabelValues(k) // every kind is exported from the start, at 0
+	}
+	reg.MustRegister(rec.requests, rec.duration, rec.upstream, rec.decisions, rec.checks, rec.redis, rec.refunds)
 	return rec
 }
 
@@ -158,9 +180,19 @@ func (rec *Recorder) observe(q *Request) {
 }
 
 // RateLimitCheck records how long one phase of a request's rate limit checks
-// took on backend (ADR-0017).
+// took on backend (ADR-0017), or all of its Redis calls (ADR-0021).
 func (rec *Recorder) RateLimitCheck(backend string, d time.Duration) {
 	rec.checks.WithLabelValues(backend).Observe(d.Seconds())
+}
+
+// RedisError records a failed Redis limiter call of kind (ADR-0021).
+func (rec *Recorder) RedisError(kind string) {
+	rec.redis.WithLabelValues(kind).Inc()
+}
+
+// RefundFailure records a Redis refund that failed (ADR-0021).
+func (rec *Recorder) RefundFailure() {
+	rec.refunds.Inc()
 }
 
 // UpstreamAttempt records how long one attempt at an upstream took.

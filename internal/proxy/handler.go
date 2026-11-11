@@ -120,6 +120,14 @@ func (h *Handler) serve(w *responseRecorder, r *http.Request, q *telemetry.Reque
 		allowed = lim.check(true) && lim.checkRedis()
 	}
 	w.rateLimitPolicy, w.rateLimit = lim.headers()
+	if lim.unavailable {
+		// Redis failed for an enforce fail_closed policy (RL-23); Retry-After
+		// is the breakers' open time (ADR-0021).
+		q.Reason = telemetry.ReasonFailClosed
+		w.Header().Set("Retry-After", "1")
+		jsonError(w, http.StatusServiceUnavailable, "rate limit unavailable")
+		return
+	}
 	if !allowed {
 		q.Reason = telemetry.ReasonRateLimited
 		w.Header().Set("Retry-After", strconv.FormatInt(lim.retryAfter(), 10))
