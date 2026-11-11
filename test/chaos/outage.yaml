@@ -1,0 +1,43 @@
+# gateway-1 … gateway-3's config during make chaos-redis-outage (NFR-13,
+# ADR-0021): three routes to upstream-1, each with one route-level Redis
+# policy keyed {route}, one per failure mode. The open and closed limits are
+# far above what the test sends; the degraded one is 300/s cluster-wide, so
+# each of the three replicas runs 100/s, burst 10, while Redis is down.
+version: 41
+ratelimit: { replicas: 3 }
+upstreams:
+  - name: upstream-1
+    endpoints:
+      - address: upstream-1:8080
+routes:
+  - name: chaos-open
+    match: { path_prefix: /anything/chaos-open }
+    upstream: upstream-1
+  - name: chaos-closed
+    match: { path_prefix: /anything/chaos-closed }
+    upstream: upstream-1
+  - name: chaos-degraded
+    match: { path_prefix: /anything/chaos-degraded }
+    upstream: upstream-1
+policies:
+  - name: chaos-open
+    level: route
+    match: { routes: [chaos-open] }
+    key_template: '{route}'
+    algorithm: gcra
+    limits: [{ rate: 10000, period: 1s }]
+    failure_mode: fail_open
+  - name: chaos-closed
+    level: route
+    match: { routes: [chaos-closed] }
+    key_template: '{route}'
+    algorithm: gcra
+    limits: [{ rate: 10000, period: 1s }]
+    failure_mode: fail_closed
+  - name: chaos-degraded
+    level: route
+    match: { routes: [chaos-degraded] }
+    key_template: '{route}'
+    algorithm: gcra
+    limits: [{ rate: 300, period: 1s, burst: 30 }]
+    failure_mode: degraded

@@ -1,0 +1,21 @@
+# gateway-1's config during make chaos-redis-primary (NFR-13, ADR-0021): one
+# route to upstream-1 and one fail_open Redis policy keyed by the header
+# cmd/chaos sets, far above what it sends. Requests are anonymous, so each
+# key is its own {k:} call, in the slot cmd/chaos computes for it.
+version: 42
+upstreams:
+  - name: upstream-1
+    endpoints:
+      - address: upstream-1:8080
+routes:
+  - name: chaos
+    match: { path_prefix: /anything/chaos }
+    upstream: upstream-1
+policies:
+  - name: chaos-primary
+    level: route
+    match: { routes: [chaos] }
+    key_template: '{header:X-Chaos-Key}'
+    algorithm: gcra
+    limits: [{ rate: 10000, period: 1s }]
+    failure_mode: fail_open
