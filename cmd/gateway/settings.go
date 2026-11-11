@@ -34,6 +34,7 @@ type settings struct {
 	// Rate limiting (ADR-0021)
 	redisAddrs   []string          // SPILLWAY_GATEWAY_REDIS_ADDRS: comma-separated host:port seeds of the limiter's Redis Cluster, none by default
 	redisAddrMap map[string]string // SPILLWAY_REDIS_ADDR_MAP: dev and tests only (ADR-0004)
+	devMode      bool              // SPILLWAY_GATEWAY_DEV_MODE: dev-only behaviour, the Spillway-Decision-Time header (ADR-0021), default false
 
 	// Logs (OB-03)
 	accessLogSampleRate float64 // SPILLWAY_GATEWAY_ACCESS_LOG_SAMPLE_RATE: share of 1xx-3xx and upstream 4xx requests access-logged, 0 to 1, default 1
@@ -85,6 +86,11 @@ func loadSettings(getenv func(string) string) (settings, error) {
 	}
 	if s.redisAddrMap, err = redis.ParseAddrMap(getenv(redis.AddrMapEnv)); err != nil {
 		return s, err
+	}
+	if v := getenv("SPILLWAY_GATEWAY_DEV_MODE"); v != "" {
+		if s.devMode, err = strconv.ParseBool(v); err != nil {
+			return s, fmt.Errorf("SPILLWAY_GATEWAY_DEV_MODE: %q is not true or false", v)
+		}
 	}
 	if v := getenv("SPILLWAY_GATEWAY_DNS_REFRESH"); v != "" {
 		if s.dnsRefresh, err = time.ParseDuration(v); err != nil || s.dnsRefresh <= 0 {

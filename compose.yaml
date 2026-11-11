@@ -231,6 +231,7 @@ services:
         SPILLWAY_GATEWAY_ALLOWED_NETWORKS: 172.29.0.0/16 # the compose network below (SEC-06)
         SPILLWAY_GATEWAY_OTLP_ENDPOINT: http://otel-collector:4317 # logs to Loki through the Collector, plaintext in the compose network (OB-03)
         SPILLWAY_GATEWAY_REDIS_ADDRS: redis-0:6379,redis-1:6379,redis-2:6379,redis-3:6379,redis-4:6379,redis-5:6379 # seeds of the limiter's cluster; Redis policies need it (ADR-0021)
+        SPILLWAY_GATEWAY_DEV_MODE: "true" # Spillway-Decision-Time on Redis-decided responses, for the accuracy harness; never in production (ADR-0021)
       volumes: ["./deploy/compose/gateway:/etc/spillway:ro", "./deploy/certs:/etc/spillway-certs:ro"]
       read_only: true
       ulimits:
@@ -269,6 +270,18 @@ services:
     profiles: [tools]
     env_file: *env-local
     volumes: ["./deploy/certs:/etc/spillway-certs:ro"]
+    read_only: true
+    ulimits:
+      nofile: 65536
+
+  # Accuracy harness (NFR-06, ADR-0021), run by make accuracy REPLICAS=N in
+  # the compose network against gateway-1 … gateway-N; it prints its JSON
+  # report and exits.
+  accuracy:
+    build: { context: ., target: accuracy }
+    image: spillway-accuracy:dev
+    profiles: [harness]
+    env_file: *env-local
     read_only: true
     ulimits:
       nofile: 65536

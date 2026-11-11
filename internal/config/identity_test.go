@@ -200,22 +200,24 @@ func TestComposeFiles(t *testing.T) {
 	}
 }
 
-// TestVerifyConfigs: the configs the exit checks swap into gateway-1
-// (ADR-0015, ADR-0019) compile, so a check never waits on a config the
-// gateway rejects.
+// TestVerifyConfigs: the configs the exit checks and the accuracy harness
+// swap into the gateways (ADR-0015, ADR-0019, ADR-0021) compile, so a check
+// never waits on a config the gateway rejects.
 func TestVerifyConfigs(t *testing.T) {
-	dir := os.DirFS("../../test/verify")
-	files, err := fs.Glob(dir, "*.yaml")
-	if err != nil || len(files) == 0 {
-		t.Fatalf("no configs in test/verify: %v", err)
-	}
-	for _, f := range files {
-		data, err := fs.ReadFile(dir, f)
-		if err != nil {
-			t.Fatal(err)
+	for _, d := range []string{"test/verify", "test/accuracy"} {
+		dir := os.DirFS("../../" + d)
+		files, err := fs.Glob(dir, "*.yaml")
+		if err != nil || len(files) == 0 {
+			t.Fatalf("no configs in %s: %v", d, err)
 		}
-		if _, err := parse(data); err != nil {
-			t.Errorf("%s: %v", f, err)
+		for _, f := range files {
+			data, err := fs.ReadFile(dir, f)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := parse(data); err != nil {
+				t.Errorf("%s/%s: %v", d, f, err)
+			}
 		}
 	}
 }

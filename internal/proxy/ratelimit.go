@@ -45,6 +45,7 @@ type limits struct {
 	checks   []check      // in evaluation order
 	calls    []*redisCall // the Redis calls that answered, in order
 	denied   bool         // an enforce limit denied the request
+	failures bool         // a Redis call failed or was not sent for lack of budget
 	// unavailable: Redis failed for an enforce fail_closed policy, so the
 	// request is answered 503 (RL-23).
 	unavailable bool
@@ -225,6 +226,7 @@ func (l *limits) checkRedis() bool {
 // the outcome. It returns false, with everything the request holds
 // refunded, if the request ends here.
 func (l *limits) failed(c *redisCall, err error) bool {
+	l.failures = true
 	kind, node := errorKind(err)
 	l.rec.RedisError(kind)
 	// Debug: during an outage every request fails; the metric and the
@@ -277,6 +279,20 @@ func (l *limits) failed(c *redisCall, err error) bool {
 		return false
 	}
 	return true
+}
+
+// decisionTimeHeader carries, in dev mode, the Redis time of the call that
+// decided the request (ADR-0021).
+const decisionTimeHeader = "Spillway-Decision-Time"
+
+// decisionTime is the Spillway-Decision-Time value: the now_us of the last
+// Redis call that ran, if the request made at least one and none failed;
+// otherwise "" (ADR-0021).
+func (l *limits) decisionTime() string {
+	if len(l.calls) == 0 || l.failures {
+		return ""
+	}
+	return strconv.FormatInt(l.calls[len(l.calls)-1].nowUS, 10)
 }
 
 // errorKind returns a limiter error's kind and node.

@@ -83,12 +83,12 @@ jobs:
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Build linux/amd64 and linux/arm64
         run: |
-          for target in gateway loadgen; do
+          for target in gateway loadgen accuracy; do
             docker buildx build --target "$target" --platform linux/amd64,linux/arm64 --build-arg VERSION=${{ github.sha }} .
           done
       - name: Runs as non-root with a read-only root filesystem (SEC-10)
         run: |
-          for target in gateway loadgen; do
+          for target in gateway loadgen accuracy; do
             docker buildx build --target "$target" --build-arg VERSION=${{ github.sha }} --load -t "spillway-${target}:ci" .
             user=$(docker image inspect "spillway-${target}:ci" --format '{{.Config.User}}')
             echo "$target user=$user"
@@ -96,6 +96,7 @@ jobs:
           done
           docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges spillway-gateway:ci version
           docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges spillway-loadgen:ci -h
+          docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges spillway-accuracy:ci -h
 
   # Boots the dev stack from a clean checkout, runs the integration tests, the
   # stack part of the M0 exit check, the reload part of the M1 exit check and

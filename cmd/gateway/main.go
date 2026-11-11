@@ -127,7 +127,7 @@ func serve(ctx context.Context, s settings, log *slog.Logger) error {
 	}
 	reg := telemetry.NewRegistry()
 	rec := telemetry.NewRecorder(reg, log, s.accessLogSampleRate)
-	srv := proxy.NewServer(proxy.NewHandler(cfg.Snapshot, identity, s.trusted, pools, limiters, rl, rec, log), log)
+	srv := proxy.NewServer(proxy.NewHandler(cfg.Snapshot, identity, s.trusted, pools, limiters, rl, s.devMode, rec, log), log)
 	if s.tlsCert != "" {
 		certs, err := proxy.NewCerts(s.tlsCert, s.tlsKey, log)
 		if err != nil {
