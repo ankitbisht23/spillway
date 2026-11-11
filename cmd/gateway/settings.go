@@ -4,11 +4,14 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ankitbisht23/spillway/internal/proxy"
+	"github.com/ankitbisht23/spillway/internal/ratelimit/redis"
 )
 
 // settings are the gateway's own settings. They come from the environment,
@@ -27,6 +30,10 @@ type settings struct {
 
 	// Clients (SEC-05)
 	trusted proxy.TrustedProxies // SPILLWAY_GATEWAY_TRUSTED_PROXIES: comma-separated CIDRs of proxies whose X-Forwarded-For is believed, default none
+
+	// Rate limiting (ADR-0021)
+	redisAddrs   []string          // SPILLWAY_GATEWAY_REDIS_ADDRS: comma-separated host:port seeds of the limiter's Redis Cluster, none by default
+	redisAddrMap map[string]string // SPILLWAY_REDIS_ADDR_MAP: dev and tests only (ADR-0004)
 
 	// Logs (OB-03)
 	accessLogSampleRate float64 // SPILLWAY_GATEWAY_ACCESS_LOG_SAMPLE_RATE: share of 1xx-3xx and upstream 4xx requests access-logged, 0 to 1, default 1
@@ -66,6 +73,18 @@ func loadSettings(getenv func(string) string) (settings, error) {
 	}
 	if s.trusted, err = proxy.ParseTrustedProxies(getenv("SPILLWAY_GATEWAY_TRUSTED_PROXIES")); err != nil {
 		return s, fmt.Errorf("SPILLWAY_GATEWAY_TRUSTED_PROXIES: %w", err)
+	}
+	for _, a := range strings.Split(getenv("SPILLWAY_GATEWAY_REDIS_ADDRS"), ",") {
+		if a = strings.TrimSpace(a); a == "" {
+			continue
+		}
+		if host, port, err := net.SplitHostPort(a); err != nil || host == "" || port == "" {
+			return s, fmt.Errorf("SPILLWAY_GATEWAY_REDIS_ADDRS: %q is not host:port", a)
+		}
+		s.redisAddrs = append(s.redisAddrs, a)
+	}
+	if s.redisAddrMap, err = redis.ParseAddrMap(getenv(redis.AddrMapEnv)); err != nil {
+		return s, err
 	}
 	if v := getenv("SPILLWAY_GATEWAY_DNS_REFRESH"); v != "" {
 		if s.dnsRefresh, err = time.ParseDuration(v); err != nil || s.dnsRefresh <= 0 {
