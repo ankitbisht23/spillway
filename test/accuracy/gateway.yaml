@@ -1,0 +1,22 @@
+# The gateways' config during make accuracy (NFR-06, ADR-0021): one route to
+# upstream-1 and one fail-closed GCRA policy in Redis, keyed by the header
+# the harness sets, so each of its keys is its own {k:} call and the keys
+# spread over the three primaries. ratelimit.replicas stays 1: a fail-closed
+# policy has no degraded limiter.
+version: 31
+upstreams:
+  - name: upstream-1
+    endpoints:
+      - address: upstream-1:8080
+routes:
+  - name: accuracy
+    match: { path_prefix: /bytes }
+    upstream: upstream-1
+policies:
+  - name: accuracy
+    level: route
+    match: { routes: [accuracy] }
+    key_template: '{header:X-Accuracy-Key}'
+    algorithm: gcra
+    limits: [{ rate: 100, period: 1s, burst: 100 }]
+    failure_mode: fail_closed

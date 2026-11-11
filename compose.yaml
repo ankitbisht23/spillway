@@ -274,6 +274,18 @@ services:
     ulimits:
       nofile: 65536
 
+  # Accuracy harness (NFR-06, ADR-0021), run by make accuracy REPLICAS=N in
+  # the compose network against gateway-1 … gateway-N; it prints its JSON
+  # report and exits.
+  accuracy:
+    build: { context: ., target: accuracy }
+    image: spillway-accuracy:dev
+    profiles: [harness]
+    env_file: *env-local
+    read_only: true
+    ulimits:
+      nofile: 65536
+
 # A fixed subnet, so the gateways' upstream allow-list can be exactly this
 # network (SEC-06, ADR-0010).
 networks:

@@ -11,7 +11,7 @@ FUZZTIME ?= 5s
 # Committed dev defaults first, then local overrides if present (ADR-0004).
 COMPOSE := docker compose --env-file .env.example $(if $(wildcard .env.local),--env-file .env.local)
 
-.PHONY: tools hooks certs dev test fuzz test-integration proto lint lint-go lint-web lint-proto bench verify-m0 verify-m0-stack verify-m1 verify-m1-reload verify-m2 verify-m2-shadow
+.PHONY: tools hooks certs dev test fuzz test-integration proto lint lint-go lint-web lint-proto bench verify-m0 verify-m0-stack verify-m1 verify-m1-reload verify-m2 verify-m2-shadow accuracy
 
 # Host-run processes and tests reach Redis Cluster nodes through this map
 # (ADR-0004). Set only here, never in compose or .env files.
@@ -142,3 +142,10 @@ verify-m2: dev
 
 verify-m2-shadow: dev
 	@test/verify/m2.sh shadow
+
+# Accuracy harness v1 (NFR-06, ADR-0021): gateway-1 … gateway-$(REPLICAS)
+# (1 to 5) run test/accuracy/gateway.yaml and cmd/accuracy drives them from
+# the compose network for about 3 minutes. Prints its JSON report.
+REPLICAS ?= 3
+accuracy: dev
+	@test/accuracy/run.sh $(REPLICAS)
