@@ -402,6 +402,11 @@ func TestNoScriptFallback(t *testing.T) {
 	if f.count("evalsha") != 2 || f.count("eval") != 2 || f.count("info") != 1 {
 		t.Errorf("evalsha %d, eval %d, info %d; want 2, 2, 1", f.count("evalsha"), f.count("eval"), f.count("info"))
 	}
+	// Routing policies off: no COMMAND fetch inside a call's budget
+	// (ADR-0025).
+	if n := f.count("command"); n != 0 {
+		t.Errorf("COMMAND sent %d times, want 0", n)
+	}
 }
 
 // TestOldRedis checks RL-30: a node below Redis 7 fails every call as conn

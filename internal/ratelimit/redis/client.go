@@ -107,8 +107,12 @@ type Client struct {
 //
 // MaxRetries 0 stops the node clients from retrying, and
 // ContextTimeoutEnabled makes a call's deadline reach the socket (RL-16).
+// DisableRoutingPolicies sends each call straight to its slot's node: with
+// routing policies on, go-redis fetches COMMAND on the first call, inside
+// that call's budget, and takes one client-wide lock on every call
+// (ADR-0025).
 func NewClient(addrs []string, addrMap map[string]string, clock ratelimit.Clock, log *slog.Logger) *Client {
-	opt := &goredis.ClusterOptions{Addrs: addrs, MaxRetries: 0, ContextTimeoutEnabled: true}
+	opt := &goredis.ClusterOptions{Addrs: addrs, MaxRetries: 0, ContextTimeoutEnabled: true, DisableRoutingPolicies: true}
 	if addrMap != nil {
 		opt.Dialer = Dialer(addrMap)
 	}
