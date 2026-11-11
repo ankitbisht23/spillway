@@ -19,6 +19,7 @@ import (
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
+	"github.com/redis/go-redis/v9/maintnotifications"
 
 	"github.com/ankitbisht23/spillway/internal/config"
 	"github.com/ankitbisht23/spillway/internal/ratelimit"
@@ -551,6 +552,18 @@ func TestClientBreaker(t *testing.T) {
 	mustOpen("after 3 missed PINGs")
 	f.paused.Store(false)
 	mustClose("after the node is back")
+}
+
+// TestPingerOptions: the health checks' clients have maintenance
+// notifications off, so building one never resolves the node's host name
+// (ADR-0025).
+func TestPingerOptions(t *testing.T) {
+	c := NewClient([]string{"redis-0:6379"}, nil, ratelimit.SystemClock, slog.New(slog.DiscardHandler))
+	defer func() { _ = c.Close() }()
+	c.stop()
+	if mode := c.pinger("redis-0:6379").Options().MaintNotificationsConfig.Mode; mode != maintnotifications.ModeDisabled {
+		t.Errorf("maintenance notifications %q, want %q", mode, maintnotifications.ModeDisabled)
+	}
 }
 
 // TestHealthChecks runs the background health checks on the system clock: a

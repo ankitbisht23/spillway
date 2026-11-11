@@ -16,6 +16,7 @@ import (
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
+	"github.com/redis/go-redis/v9/maintnotifications"
 
 	"github.com/ankitbisht23/spillway/internal/config"
 	"github.com/ankitbisht23/spillway/internal/ratelimit"
@@ -190,7 +191,10 @@ func (c *Client) ping(ctx context.Context) {
 }
 
 // pinger returns the health checks' client for addr: one connection, no
-// retries, every timeout pingTimeout.
+// retries, every timeout pingTimeout. Maintenance notifications are off: in
+// their default auto mode go-redis resolves addr's host name while it builds
+// the client, which held up the first health check round by milliseconds
+// per node (ADR-0025).
 func (c *Client) pinger(addr string) *goredis.Client {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -199,6 +203,7 @@ func (c *Client) pinger(addr string) *goredis.Client {
 		node = goredis.NewClient(&goredis.Options{
 			Addr: addr, Dialer: c.dialer, MaxRetries: -1, PoolSize: 1, ContextTimeoutEnabled: true,
 			DialTimeout: pingTimeout, ReadTimeout: pingTimeout, WriteTimeout: pingTimeout,
+			MaintNotificationsConfig: &maintnotifications.Config{Mode: maintnotifications.ModeDisabled},
 		})
 		c.pings[addr] = node
 	}
