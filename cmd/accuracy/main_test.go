@@ -53,9 +53,8 @@ func TestParseFlags(t *testing.T) {
 // fakeGateway answers as a gateway running the harness policy in dev mode:
 // GCRA per X-Accuracy-Key with its decision time in Spillway-Decision-Time.
 // admitAll admits everything instead; noHeader leaves the header out except
-// for the harness's probes. Its
-// admin port reports the config version from the third scrape on, and
-// counts every request as a Redis timeout.
+// for the harness's probes. Its admin port reports the config version from
+// the third scrape on, and counts every request as a Redis timeout.
 type fakeGateway struct {
 	admitAll, noHeader bool
 
