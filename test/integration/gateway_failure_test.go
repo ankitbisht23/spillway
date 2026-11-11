@@ -25,14 +25,17 @@ import (
 
 // TestGatewayRedisFailure runs a gateway on the host whose Redis nodes are
 // reached through proxies that the test can cut, so Redis becomes
-// unreachable for this gateway alone (RL-22, RL-23, ADR-0021, ADR-0024):
+// unreachable for this gateway alone (RL-22, RL-23, ADR-0021, ADR-0024,
+// ADR-0025):
 //
 //   - once warmed up, its first request, with a fail_closed policy and the
 //     default 5 ms budget, is decided by Redis, not by its failure mode;
 //   - with every node cut off, a fail_open policy allows, a fail_closed one
 //     answers 503, and a degraded one admits limit ÷ replicas, each decided
-//     within one budget; the breakers open;
-//   - once the nodes are back, the breakers close and Redis decides again;
+//     within one budget; the health checks open the breakers;
+//   - once the nodes are back, the first answered health check PINGs close
+//     the breakers within a second, and Redis decides again from the first
+//     request to each node;
 //   - in a second outage the degraded limiter carries on from the first.
 func TestGatewayRedisFailure(t *testing.T) {
 	run := scriptName("failure")
@@ -91,7 +94,7 @@ policies:
 
 	cut(true)
 	before := g.metrics(t)
-	for i := range 6 { // enough failures to open the closed route's node's breaker
+	for i := range 6 { // timeouts at first, then refused by the breaker the health checks open
 		expect(fmt.Sprint("outage, request ", i+1), "closed", http.StatusServiceUnavailable, "")
 	}
 	expect("outage", "open", http.StatusOK, "") // fail_open policies are left out of the fields
@@ -125,9 +128,11 @@ policies:
 		}
 	}
 
-	// Back up: the breaker's probe closes it and Redis decides again.
+	// Back up: the health checks' first answered PING closes the breaker,
+	// with no request sent as a probe, and Redis decides again.
 	cut(false)
-	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(100 * time.Millisecond) {
+	back := time.Now()
+	for deadline := back.Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
 		status, h, _ := g.get(t, "/anything/closed")
 		if status == http.StatusOK && h.Get("RateLimit-Policy") == closed {
 			break
@@ -135,6 +140,10 @@ policies:
 		if time.Now().After(deadline) {
 			t.Fatalf("after the outage: GET /anything/closed is still %d", status)
 		}
+	}
+	t.Logf("measure: Redis decides again %v after the outage", time.Since(back))
+	if d := time.Since(back); d > time.Second {
+		t.Errorf("Redis decides again %v after the outage, want within a second", d)
 	}
 	g.waitLog(t, `"msg":"redis limiter: circuit breaker closed"`)
 	expect("Redis back", "degraded", http.StatusOK, degraded(4))

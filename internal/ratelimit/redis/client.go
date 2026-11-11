@@ -91,14 +91,19 @@ type Client struct {
 	rdb      *goredis.ClusterClient
 	log      *slog.Logger
 	breakers *breakers
+	dialer   func(ctx context.Context, network, addr string) (net.Conn, error) // nil: go-redis's
+	stop     context.CancelFunc                                                // ends the health checks
 
 	mu    sync.Mutex
-	nodes map[string]bool // node addresses checked to run Redis 7+ (RL-30)
+	nodes map[string]bool            // node addresses checked to run Redis 7+ (RL-30)
+	pings map[string]*goredis.Client // the health checks' own client per node
 }
 
 // NewClient returns the limiter's cluster client, dialing through addrMap
-// when it is set (ADR-0004), with one circuit breaker per primary on clock
-// (RL-22). It never contacts Redis itself; Warm and calls do (GW-24).
+// when it is set (ADR-0004), with one circuit breaker per node on clock and
+// the health checks that drive them (RL-22, ADR-0025). It never contacts
+// Redis itself; Warm and calls do (GW-24), and the health checks PING only
+// the nodes those have met.
 //
 // MaxRetries 0 stops the node clients from retrying, and
 // ContextTimeoutEnabled makes a call's deadline reach the socket (RL-16).
@@ -107,12 +112,92 @@ func NewClient(addrs []string, addrMap map[string]string, clock ratelimit.Clock,
 	if addrMap != nil {
 		opt.Dialer = Dialer(addrMap)
 	}
-	c := &Client{rdb: goredis.NewClusterClient(opt), log: log, nodes: make(map[string]bool)}
+	c := &Client{rdb: goredis.NewClusterClient(opt), log: log, dialer: opt.Dialer, nodes: make(map[string]bool), pings: make(map[string]*goredis.Client)}
 	// A breaker that opens may mean a failover: reload the slot map now, so
 	// the slot reaches the promoted replica as soon as it is elected
 	// (ADR-0021). The reload runs in the background.
-	c.breakers = newBreakers(clock, log, func() { c.rdb.ReloadState(context.Background()) })
+	c.breakers = newBreakers(clock, log, c.reload, func(addr string) { go c.refill(addr) })
+	ctx, stop := context.WithCancel(context.Background())
+	c.stop = stop
+	go c.health(ctx)
 	return c
+}
+
+// reload reloads the slot map in the background; go-redis runs at most one
+// reload per 200 ms.
+func (c *Client) reload() { c.rdb.ReloadState(context.Background()) }
+
+// refill opens one request connection to the node at addr, outside any
+// budget: the timeouts of an outage closed the node's pooled connections,
+// so without it the first call after the breaker closes would dial inside
+// its budget (ADR-0025).
+func (c *Client) refill(addr string) {
+	ctx, cancel := context.WithTimeout(context.Background(), warmTimeout)
+	defer cancel()
+	_ = c.rdb.ForEachShard(ctx, func(ctx context.Context, node *goredis.Client) error {
+		if node.Options().Addr != addr {
+			return nil
+		}
+		return node.Ping(ctx).Err()
+	})
+}
+
+// health PINGs every node the client has met every pingEvery, until ctx
+// ends (ADR-0025).
+func (c *Client) health(ctx context.Context) {
+	t := time.NewTicker(pingEvery)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		c.ping(ctx)
+	}
+}
+
+// ping makes one health check round: one PING to each node at once, each
+// on the node's own health check connection with pingTimeout, outside any
+// request budget. While a breaker is open each round also reloads the slot
+// map, so a failover reaches the client soon after the cluster elects the
+// replica.
+func (c *Client) ping(ctx context.Context) {
+	addrs, open := c.breakers.checked()
+	if open {
+		c.reload()
+	}
+	var wg sync.WaitGroup
+	for _, addr := range addrs {
+		node := c.pinger(addr)
+		wg.Go(func() {
+			sent := c.breakers.clock.Now()
+			ctx, cancel := context.WithTimeout(ctx, pingTimeout)
+			defer cancel()
+			err := node.Ping(ctx).Err()
+			if errors.Is(ctx.Err(), context.Canceled) {
+				return // the client is closing
+			}
+			c.breakers.pinged(addr, sent, err == nil)
+		})
+	}
+	wg.Wait()
+}
+
+// pinger returns the health checks' client for addr: one connection, no
+// retries, every timeout pingTimeout.
+func (c *Client) pinger(addr string) *goredis.Client {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	node := c.pings[addr]
+	if node == nil {
+		node = goredis.NewClient(&goredis.Options{
+			Addr: addr, Dialer: c.dialer, MaxRetries: -1, PoolSize: 1, ContextTimeoutEnabled: true,
+			DialTimeout: pingTimeout, ReadTimeout: pingTimeout, WriteTimeout: pingTimeout,
+		})
+		c.pings[addr] = node
+	}
+	return node
 }
 
 // warmTimeout bounds one warm-up pass.
@@ -155,6 +240,7 @@ func (c *Client) warm(ctx context.Context) (int, error) {
 	var n atomic.Int64
 	err := c.rdb.ForEachShard(ctx, func(ctx context.Context, node *goredis.Client) error {
 		addr := node.Options().Addr
+		c.breakers.add(addr) // health checks cover replicas before a failover promotes them
 		if err := c.checkVersion(ctx, node, addr); err != nil {
 			if errors.Is(err, errOldRedis) {
 				return nil
@@ -170,8 +256,16 @@ func (c *Client) warm(ctx context.Context) (int, error) {
 	return int(n.Load()), err
 }
 
-// Close closes the client's connections.
-func (c *Client) Close() error { return c.rdb.Close() }
+// Close stops the health checks and closes the client's connections.
+func (c *Client) Close() error {
+	c.stop()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, node := range c.pings {
+		_ = node.Close()
+	}
+	return c.rdb.Close()
+}
 
 // Call checks every limit and writes per the write rule, in one script call.
 // cost must be positive.
@@ -219,13 +313,33 @@ func (c *Client) run(ctx context.Context, args []any, limits []Limit) (Result, e
 		return Result{}, &Error{Kind: kind, Err: err}
 	}
 	addr := node.Options().Addr
-	probe, err := c.breakers.allow(addr)
-	if err != nil {
+	if err := c.breakers.allow(addr); err != nil {
 		return Result{}, &Error{Kind: KindConn, Node: addr, Err: err}
 	}
 	res, err := c.send(ctx, node, addr, keys, args, len(limits))
-	c.breakers.done(addr, probe, err == nil)
+	replied, broken := outcome(err)
+	c.breakers.done(addr, replied, broken)
 	return res, err
+}
+
+// outcome says what a call's error means for its node's breaker
+// (ADR-0025): replied, Redis answered (a decision or an error reply);
+// broken, the connection broke without a reply (a dial error, a reset, EOF,
+// a broken pipe). A timeout is neither: it says how long the call waited,
+// not that the node is down; the health checks find a node that stopped
+// answering.
+func outcome(err error) (replied, broken bool) {
+	var e *Error
+	var rerr goredis.Error
+	switch {
+	case err == nil, errors.As(err, &rerr):
+		return true, false
+	case !errors.As(err, &e), e.Kind != KindConn:
+		return false, false
+	}
+	// Waiting for a pooled connection or a closing client says nothing
+	// about the node; nor does a node refused for its version (RL-30).
+	return false, !errors.Is(err, goredis.ErrPoolTimeout) && !errors.Is(err, goredis.ErrClosed) && !errors.Is(err, errOldRedis)
 }
 
 // send runs the script on node, the primary at addr, once its version is

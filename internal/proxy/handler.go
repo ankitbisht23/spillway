@@ -127,7 +127,8 @@ func (h *Handler) serve(w *responseRecorder, r *http.Request, q *telemetry.Reque
 	}
 	if lim.unavailable {
 		// Redis failed for an enforce fail_closed policy (RL-23); Retry-After
-		// is the breakers' open time (ADR-0021).
+		// is the shortest whole number of seconds, longer than the health
+		// checks take to find a node back (ADR-0021, ADR-0025).
 		q.Reason = telemetry.ReasonFailClosed
 		w.Header().Set("Retry-After", "1")
 		jsonError(w, http.StatusServiceUnavailable, "rate limit unavailable")

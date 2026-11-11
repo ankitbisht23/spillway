@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -197,6 +198,37 @@ func TestClassify(t *testing.T) {
 	}
 }
 
+// TestOutcome: which failed calls count towards a breaker (ADR-0025).
+func TestOutcome(t *testing.T) {
+	expired, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	tests := []struct {
+		err             error
+		replied, broken bool
+	}{
+		{nil, true, false},
+		{classify(context.Background(), "n", replyErr("ERR Error running script: boom")), true, false},
+		{classify(context.Background(), "n", replyErr("OOM command not allowed")), true, false},
+		{classify(context.Background(), "n", replyErr("CLUSTERDOWN The cluster is down")), true, false},
+		{classify(context.Background(), "n", io.EOF), false, true},
+		{classify(context.Background(), "n", &net.OpError{Op: "dial", Err: errors.New("connection refused")}), false, true},
+		{classify(context.Background(), "n", fmt.Errorf("write: %w", syscall.EPIPE)), false, true},
+		{classify(context.Background(), "n", fmt.Errorf("read: %w", syscall.ECONNRESET)), false, true},
+		{classify(expired, "n", io.EOF), false, false},
+		{classify(context.Background(), "n", context.DeadlineExceeded), false, false},
+		{classify(context.Background(), "n", fmt.Errorf("read: %w", timeoutErr{})), false, false},
+		{classify(context.Background(), "n", goredis.ErrPoolTimeout), false, false},
+		{classify(context.Background(), "n", goredis.ErrClosed), false, false},
+		{&Error{Kind: KindConn, Node: "n", Err: errOldRedis}, false, false},
+		{&Error{Kind: KindScript, Node: "n", Err: errors.New("limiter reply: short")}, false, false},
+	}
+	for _, tt := range tests {
+		if replied, broken := outcome(tt.err); replied != tt.replied || broken != tt.broken {
+			t.Errorf("outcome(%v) = %v, %v; want %v, %v", tt.err, replied, broken, tt.replied, tt.broken)
+		}
+	}
+}
+
 // fakeNode is a one-node "cluster" that speaks enough RESP for go-redis:
 // it owns every slot and answers the limiter script with script.
 type fakeNode struct {
@@ -206,6 +238,7 @@ type fakeNode struct {
 
 	setup        atomic.Int64 // ns each HELLO and CLUSTER reply is held back: connection and slot-map cost
 	infoFailures atomic.Int32 // INFO replies still to fail with LOADING
+	paused       atomic.Bool  // commands get no reply; the connection drops once it is unpaused
 
 	mu     sync.Mutex
 	counts map[string]int
@@ -251,6 +284,12 @@ func (f *fakeNode) serve(c net.Conn) {
 		f.mu.Lock()
 		f.counts[name]++
 		f.mu.Unlock()
+		if f.paused.Load() {
+			for f.paused.Load() {
+				time.Sleep(time.Millisecond)
+			}
+			return
+		}
 		var reply string
 		if name == "hello" || name == "cluster" {
 			time.Sleep(time.Duration(f.setup.Load()))
@@ -400,57 +439,148 @@ func TestCallLimitCount(t *testing.T) {
 	}
 }
 
-// TestClientBreaker: after 5 failed calls to a node, calls to it fail as
-// conn without being sent until the breaker's probe succeeds; opening it
-// reloads the slot map (RL-22, ADR-0021).
+// TestClientBreaker: request calls whose connection breaks open the node's
+// breaker after 3 in a row, and opening it reloads the slot map; script
+// errors and timeouts never open it; the first answered PING closes it and
+// refills the request pool, and a node that stops answering PINGs is opened
+// by them (RL-22, ADR-0025).
 func TestClientBreaker(t *testing.T) {
-	var up atomic.Bool
+	const (
+		allowed = iota
+		scriptError
+		drop
+		slow
+	)
+	var mode atomic.Int32
 	f := newFakeNode(t, "8.0.0", func(string) string {
-		if up.Load() {
-			return allowedReply
+		switch mode.Load() {
+		case scriptError:
+			return "-ERR Error running script: boom\r\n"
+		case drop:
+			return ""
+		case slow:
+			time.Sleep(20 * time.Millisecond)
 		}
-		return "-ERR Error running script: boom\r\n"
+		return allowedReply
 	})
 	clock := ratelimit.NewFakeClock(time.Unix(1_700_000_000, 0))
 	c := NewClient([]string{f.addr}, nil, clock, slog.New(slog.DiscardHandler))
 	defer func() { _ = c.Close() }()
-
-	for i := range 5 {
-		if _, err := callFake(t, c); !isKind(err, KindScript) {
-			t.Fatalf("call %d: %v, want a script error", i+1, err)
+	c.stop() // the test runs the health check rounds itself
+	budget := func() (Result, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
+		defer cancel()
+		return c.Call(ctx, 1, oneLimit)
+	}
+	mustOpen := func(step string) {
+		t.Helper()
+		sent := f.count("evalsha")
+		for range 3 {
+			if _, err := callFake(t, c); !isKind(err, KindConn) || !errors.Is(err, errBreakerOpen) {
+				t.Fatalf("%s: %v, want conn: %v", step, err, errBreakerOpen)
+			}
 		}
+		if n := f.count("evalsha") - sent; n != 0 {
+			t.Errorf("%s: script sent %d times while the breaker is open", step, n)
+		}
+	}
+	mustClose := func(step string) {
+		t.Helper()
+		mode.Store(allowed)
+		pings := f.count("ping")
+		c.ping(t.Context())
+		// Closing also opens a request connection in the background: a
+		// second PING, through the request pool.
+		for deadline := time.Now().Add(5 * time.Second); f.count("ping") < pings+2; time.Sleep(time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatalf("%s: no request connection opened on closing", step)
+			}
+		}
+		if res, err := callFake(t, c); err != nil || !res.Allowed {
+			t.Fatalf("%s: %+v, %v", step, res, err)
+		}
+	}
+
+	mode.Store(scriptError)
+	for i := range 10 {
+		if _, err := callFake(t, c); !isKind(err, KindScript) {
+			t.Fatalf("script error %d: %v", i+1, err)
+		}
+	}
+	mode.Store(slow)
+	for i := range 10 {
+		if _, err := budget(); !isKind(err, KindTimeout) {
+			t.Fatalf("timeout %d: %v", i+1, err)
+		}
+	}
+	mode.Store(drop)
+	for i := range 3 {
+		if _, err := callFake(t, c); !isKind(err, KindConn) || errors.Is(err, errBreakerOpen) {
+			t.Fatalf("broken connection %d: %v, want a conn error from the node", i+1, err)
+		}
+	}
+	if n := f.count("evalsha"); n != 23 {
+		t.Errorf("script sent %d times, want 23: script errors and timeouts never open the breaker", n)
 	}
 	slotLoads := f.count("cluster")
-	for range 3 {
-		if _, err := callFake(t, c); !isKind(err, KindConn) || !errors.Is(err, errBreakerOpen) {
-			t.Fatalf("open breaker: %v, want conn: %v", err, errBreakerOpen)
-		}
-	}
-	if n := f.count("evalsha"); n != 5 {
-		t.Errorf("script sent %d times, want 5: none while the breaker is open", n)
-	}
+	mustOpen("after 3 broken connections")
 	for deadline := time.Now().Add(5 * time.Second); f.count("cluster") == slotLoads; time.Sleep(10 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatal("opening the breaker did not reload the slot map")
 		}
 	}
+	clock.Advance(time.Hour)
+	mustOpen("time alone")
+	mustClose("after an answered PING")
 
-	clock.Advance(time.Second) // half-open: the probe fails
-	if _, err := callFake(t, c); !isKind(err, KindScript) {
-		t.Fatalf("probe: %v, want a script error", err)
+	// The node stops answering: three health check rounds open it, and the
+	// first answered PING closes it.
+	f.paused.Store(true)
+	for range 2 {
+		c.ping(t.Context())
 	}
-	if _, err := callFake(t, c); !errors.Is(err, errBreakerOpen) {
-		t.Fatalf("after a failed probe: %v, want %v", err, errBreakerOpen)
+	if _, err := budget(); !isKind(err, KindTimeout) {
+		t.Fatalf("paused, before the third missed PING: %v, want a timeout", err)
 	}
-	up.Store(true)
-	clock.Advance(time.Second) // the probe succeeds and closes it
-	for i := range 3 {
-		if res, err := callFake(t, c); err != nil || !res.Allowed {
-			t.Fatalf("closed again, call %d: %+v, %v", i+1, res, err)
+	c.ping(t.Context())
+	mustOpen("after 3 missed PINGs")
+	f.paused.Store(false)
+	mustClose("after the node is back")
+}
+
+// TestHealthChecks runs the background health checks on the system clock: a
+// node that stops answering has its breaker opened within a few rounds, and
+// closed within a round of answering again (ADR-0025).
+func TestHealthChecks(t *testing.T) {
+	f := newFakeNode(t, "8.0.0", func(string) string { return allowedReply })
+	c := NewClient([]string{f.addr}, nil, ratelimit.SystemClock, slog.New(slog.DiscardHandler))
+	defer func() { _ = c.Close() }()
+	budget := func() error {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
+		defer cancel()
+		_, err := c.Call(ctx, 1, oneLimit)
+		return err
+	}
+	if err := budget(); err != nil { // the client meets the node
+		t.Fatal(err)
+	}
+	wait := func(step string, done func(error) bool) time.Duration {
+		t.Helper()
+		start := time.Now()
+		for deadline := start.Add(5 * time.Second); !done(budget()); time.Sleep(5 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatalf("%s: not after 5s", step)
+			}
 		}
+		return time.Since(start)
 	}
-	if n := f.count("evalsha"); n != 9 {
-		t.Errorf("script sent %d times, want 9", n)
+	f.paused.Store(true)
+	opened := wait("breaker open", func(err error) bool { return errors.Is(err, errBreakerOpen) })
+	f.paused.Store(false)
+	closed := wait("breaker closed", func(err error) bool { return err == nil })
+	t.Logf("measure: breaker open %v after the node paused, closed %v after it came back", opened, closed)
+	if opened > 2*time.Second || closed > time.Second {
+		t.Errorf("open after %v, closed after %v; want about 300 ms and 100 ms", opened, closed)
 	}
 }
 
@@ -485,6 +615,7 @@ func TestWarm(t *testing.T) {
 	var logs bytes.Buffer
 	c = NewClient([]string{f.addr}, nil, ratelimit.SystemClock, slog.New(slog.NewTextHandler(&logs, nil)))
 	defer func() { _ = c.Close() }()
+	c.stop() // no health checks: the node's slow connection setup would miss them
 	c.Warm(t.Context(), 10*time.Millisecond)
 	if f.count("info") != 2 || f.count("script") != 1 || f.count("evalsha") != 0 {
 		t.Errorf("warm-up: info %d, script %d, evalsha %d; want 2, 1, 0", f.count("info"), f.count("script"), f.count("evalsha"))
