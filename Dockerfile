@@ -4,7 +4,7 @@
 # emulation. Final images run as non-root and work with a read-only root
 # filesystem (SEC-10).
 
-FROM --platform=$BUILDPLATFORM golang:1.27.3-trixie AS build
+FROM --platform=$BUILDPLATFORM golang:1.27.4-trixie AS build
 ARG TARGETOS TARGETARCH VERSION=dev
 WORKDIR /src
 COPY go.mod go.sum ./
