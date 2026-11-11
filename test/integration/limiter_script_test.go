@@ -524,7 +524,8 @@ func TestScriptTimeoutAfterExecution(t *testing.T) {
 	c := redis.NewClient([]string{"redis-0:6379"}, proxied, ratelimit.SystemClock, slog.New(slog.DiscardHandler))
 	defer func() { _ = c.Close() }()
 
-	l := gcraLimit(redis.GlobalKey(scriptName("timeout"), time.Hour, redis.Digest("k")), "global", true, 1, time.Hour, 10)
+	name := scriptName("timeout")
+	l := gcraLimit(redis.GlobalKey(name, time.Hour, redis.Digest("k")), "global", true, 1, time.Hour, 10)
 	if res := scriptCall(t, c, 1, l); res.Limits[0].Remaining != 9 {
 		t.Fatalf("first call = %+v", res)
 	}
@@ -539,6 +540,21 @@ func TestScriptTimeoutAfterExecution(t *testing.T) {
 	}
 	time.Sleep(400 * time.Millisecond) // the held-back reply arrives, and is dropped
 	delay.Store(0)
+	// The delay held back the health checks' PONGs too, so the
+	// node's breaker may be open (ADR-0025). Wait until a PING has closed
+	// it, calling with another key in the same slot.
+	poll := gcraLimit(redis.GlobalKey(name, time.Hour, redis.Digest("poll")), "global", true, 1000, time.Hour, 1000)
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		_, err := c.Call(ctx, 1, []redis.Limit{poll})
+		cancel()
+		if err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("node not back after the delay: %v", err)
+		}
+	}
 
 	res := scriptCall(t, c, 1, l)
 	t.Logf("measure: remaining after 3 calls with one timed out after execution = %d (want 7)", res.Limits[0].Remaining)

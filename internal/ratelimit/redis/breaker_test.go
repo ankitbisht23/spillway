@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"log/slog"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -11,115 +12,201 @@ import (
 	"github.com/ankitbisht23/spillway/internal/ratelimit"
 )
 
-// TestBreakerTransitions walks one node's breaker through every transition
-// on the fake clock (RL-22, ADR-0021): closed until 5 consecutive failures,
-// open for 1 s, half-open with one probe, closed again on a successful probe
-// and open for another second on a failed one.
-func TestBreakerTransitions(t *testing.T) {
-	clock := ratelimit.NewFakeClock(time.Unix(1_700_000_000, 0))
-	var logs bytes.Buffer
-	opened := 0
-	b := newBreakers(clock, slog.New(slog.NewTextHandler(&logs, nil)), func() { opened++ })
-	const node = "redis-1:6379"
-	call := func(ok bool) error {
-		t.Helper()
-		probe, err := b.allow(node)
-		if err == nil {
-			b.done(node, probe, ok)
-		}
-		return err
-	}
-	mustAllow := func(step string) {
-		t.Helper()
-		if probe, err := b.allow(node); err != nil || probe {
-			t.Fatalf("%s: allow = %v, %v; want a closed breaker", step, probe, err)
-		} else {
-			b.done(node, false, true)
-		}
-	}
-	mustRefuse := func(step string) {
-		t.Helper()
-		if _, err := b.allow(node); !errors.Is(err, errBreakerOpen) {
-			t.Fatalf("%s: allow error = %v, want %v", step, err, errBreakerOpen)
-		}
-	}
+// breakerTest is one node's breaker on the fake clock.
+type breakerTest struct {
+	t      *testing.T
+	clock  *ratelimit.FakeClock
+	logs   *bytes.Buffer
+	b      *breakers
+	opened int
+	closed []string
+}
 
-	// Four failures, then a success: the count starts again.
-	for range 4 {
-		_ = call(false)
+const testNode = "redis-1:6379"
+
+func newBreakerTest(t *testing.T) *breakerTest {
+	bt := &breakerTest{t: t, clock: ratelimit.NewFakeClock(time.Unix(1_700_000_000, 0)), logs: &bytes.Buffer{}}
+	bt.b = newBreakers(bt.clock, slog.New(slog.NewTextHandler(bt.logs, nil)), func() { bt.opened++ }, func(addr string) { bt.closed = append(bt.closed, addr) })
+	return bt
+}
+
+// call sends one request call that ends replied, broken or neither (a
+// timeout), if the breaker lets it.
+func (bt *breakerTest) call(replied, broken bool) error {
+	err := bt.b.allow(testNode)
+	if err == nil {
+		bt.b.done(testNode, replied, broken)
 	}
-	mustAllow("a success after 4 failures")
-	for range 4 {
-		_ = call(false)
+	return err
+}
+
+func (bt *breakerTest) mustAllow(step string) {
+	bt.t.Helper()
+	if err := bt.call(true, false); err != nil {
+		bt.t.Fatalf("%s: %v; want a closed breaker", step, err)
 	}
-	if opened != 0 {
-		t.Fatal("opened before 5 consecutive failures")
+}
+
+func (bt *breakerTest) mustRefuse(step string) {
+	bt.t.Helper()
+	if err := bt.b.allow(testNode); !errors.Is(err, errBreakerOpen) {
+		bt.t.Fatalf("%s: allow = %v, want %v", step, err, errBreakerOpen)
 	}
-	// The 5th consecutive failure opens it for 1 s; refused calls neither
-	// count nor extend it.
-	_ = call(false)
-	if opened != 1 {
-		t.Fatalf("opened %d times after 5 failures, want 1", opened)
+}
+
+// round is one health check round on the fake clock: the PING is sent now
+// and answered, or missed after pingTimeout; then the clock moves on to the
+// next round.
+func (bt *breakerTest) round(ok bool) {
+	sent := bt.clock.Now()
+	if !ok {
+		bt.clock.Advance(pingTimeout)
 	}
-	mustRefuse("just opened")
-	clock.Advance(999 * time.Millisecond)
-	mustRefuse("after 999ms")
+	bt.b.pinged(testNode, sent, ok)
+	bt.clock.Advance(pingEvery - (bt.clock.Now().Sub(sent)))
+}
+
+// TestBreakerBrokenConnections: 3 consecutive request calls whose
+// connection broke open a breaker; a reply resets the count, a timeout
+// leaves it; open, it refuses every call until a PING is answered (RL-22,
+// ADR-0025).
+func TestBreakerBrokenConnections(t *testing.T) {
+	bt := newBreakerTest(t)
+
+	// Two broken, a script error reply: the count starts again. Two broken,
+	// a timeout: the count holds, and the next broken one opens it.
+	_, _ = bt.call(false, true), bt.call(false, true)
+	_ = bt.call(true, false)
+	_, _ = bt.call(false, true), bt.call(false, true)
+	_ = bt.call(false, false)
+	if bt.opened != 0 {
+		t.Fatal("opened before 3 consecutive broken connections")
+	}
+	_ = bt.call(false, true)
+	if bt.opened != 1 {
+		t.Fatalf("opened %d times after 3 broken connections, want 1", bt.opened)
+	}
+	bt.mustRefuse("just opened")
+	// Time alone never closes it: no request is sent as a probe.
+	bt.clock.Advance(time.Hour)
+	bt.mustRefuse("an hour later")
+	// A late failure of a call sent before it opened changes nothing.
+	bt.b.done(testNode, false, true)
+	if bt.opened != 1 {
+		t.Errorf("opened %d times, want 1", bt.opened)
+	}
 	// Another node is not affected.
-	if _, err := b.allow("redis-2:6379"); err != nil {
+	if err := bt.b.allow("redis-2:6379"); err != nil {
 		t.Errorf("another node's breaker: %v", err)
 	}
 
-	// Half-open: one probe at a time; a failed probe opens it for another
-	// second.
-	clock.Advance(time.Millisecond)
-	probe, err := b.allow(node)
-	if err != nil || !probe {
-		t.Fatalf("after 1s: allow = %v, %v; want the probe", probe, err)
-	}
-	mustRefuse("while the probe is out")
-	b.done(node, true, false)
-	if opened != 2 {
-		t.Errorf("opened %d times after a failed probe, want 2", opened)
-	}
-	mustRefuse("after a failed probe")
-	clock.Advance(time.Second)
+	// The first answered PING closes it, and the count starts again.
+	bt.round(true)
+	bt.mustAllow("after an answered PING")
+	_, _ = bt.call(false, true), bt.call(false, true)
+	bt.mustAllow("2 broken connections after closing")
 
-	// A late failure of a call sent before the breaker opened does not
-	// extend it.
-	b.done(node, false, false)
-	probe, err = b.allow(node)
-	if err != nil || !probe {
-		t.Fatalf("after another 1s: allow = %v, %v; want the probe", probe, err)
+	got := bt.logs.String()
+	if strings.Count(got, `circuit breaker open" node=`+testNode+" failures=3") != 1 || strings.Count(got, `circuit breaker closed" node=`+testNode+" open_for=1h0m0s") != 1 {
+		t.Errorf("transition logs:\n%s", got)
 	}
-	// A successful probe closes it.
-	b.done(node, true, true)
-	mustAllow("after a successful probe")
-	for range 4 {
-		_ = call(false)
+}
+
+// TestBreakerHotKey: a storm of request timeouts, as a burst on one hot key
+// past the budget makes, never opens a breaker; nor do script errors from
+// Redis (ADR-0025).
+func TestBreakerHotKey(t *testing.T) {
+	bt := newBreakerTest(t)
+	for i := range 10_000 {
+		if err := bt.call(false, false); err != nil {
+			t.Fatalf("timeout %d: %v", i+1, err)
+		}
+		if i%100 == 0 {
+			bt.round(true) // the node still answers its PINGs
+		}
 	}
-	mustAllow("4 failures after closing")
-	if opened != 2 {
-		t.Errorf("opened %d times, want 2", opened)
+	for range 100 {
+		bt.mustAllow("a script error")
+	}
+	if bt.opened != 0 || bt.logs.Len() != 0 {
+		t.Errorf("opened %d times:\n%s", bt.opened, bt.logs.String())
+	}
+}
+
+// TestBreakerPings: a node that stops answering is found by the health
+// checks alone, its breaker open 300 to 400 ms after it stopped; the first
+// answered PING closes it (RL-22, ADR-0025).
+func TestBreakerPings(t *testing.T) {
+	bt := newBreakerTest(t)
+	for range 5 {
+		bt.round(true)
+	}
+	// Two misses, an answer: the count starts again.
+	bt.round(false)
+	bt.round(false)
+	bt.round(true)
+	if bt.opened != 0 {
+		t.Fatal("opened before 3 consecutive missed PINGs")
 	}
 
-	got := logs.String()
-	if strings.Count(got, `circuit breaker open"`) != 1 || strings.Count(got, "probe failed") != 1 || strings.Count(got, "circuit breaker closed") != 1 || strings.Count(got, "node="+node) != 3 {
+	// The node pauses at some point within a round.
+	bt.clock.Advance(30 * time.Millisecond)
+	paused := bt.clock.Now()
+	bt.clock.Advance(pingEvery - 30*time.Millisecond)
+	for bt.opened == 0 {
+		if err := bt.b.allow(testNode); err != nil {
+			t.Fatalf("open before its third missed PING: %v", err)
+		}
+		bt.round(false)
+	}
+	// The third miss is known pingTimeout after its PING was sent.
+	detected := bt.clock.Now().Sub(paused) - (pingEvery - pingTimeout)
+	if detected < 300*time.Millisecond || detected > 400*time.Millisecond {
+		t.Errorf("open %v after the node paused, want 300 to 400 ms", detected)
+	}
+	t.Logf("measure: open %v after the node paused", detected)
+	bt.mustRefuse("open")
+	// More misses keep it open without opening it again.
+	for range 20 {
+		bt.round(false)
+	}
+	bt.mustRefuse("still down")
+	if bt.opened != 1 {
+		t.Errorf("opened %d times, want 1", bt.opened)
+	}
+
+	bt.round(true)
+	bt.mustAllow("the first answered PING")
+	if !slices.Equal(bt.closed, []string{testNode}) {
+		t.Errorf("closed callbacks %v, want one for %s", bt.closed, testNode)
+	}
+	// Closed afresh: it takes three new misses to open again.
+	bt.round(false)
+	bt.round(false)
+	bt.mustAllow("two misses after closing")
+
+	got := bt.logs.String()
+	if strings.Count(got, `circuit breaker open" node=`+testNode+" missed_pings=3 since_first_miss=250ms") != 1 || strings.Count(got, `circuit breaker closed" node=`+testNode+" open_for=2.05s") != 1 {
 		t.Errorf("transition logs:\n%s", got)
 	}
 }
 
 // TestBreakerHold: a node held open fails every call with the held error,
-// whatever the clock says (RL-30).
+// whatever the clock or its PINGs say, and is not PINGed (RL-30).
 func TestBreakerHold(t *testing.T) {
-	clock := ratelimit.NewFakeClock(time.Unix(1_700_000_000, 0))
-	b := newBreakers(clock, slog.New(slog.DiscardHandler), func() {})
-	if !b.hold("old:6379", errOldRedis) || b.hold("old:6379", errOldRedis) {
+	bt := newBreakerTest(t)
+	bt.b.add("redis-2:6379")
+	if !bt.b.hold("old:6379", errOldRedis) || bt.b.hold("old:6379", errOldRedis) {
 		t.Error("hold reported the first time wrongly")
 	}
 	for range 3 {
-		if _, err := b.allow("old:6379"); !errors.Is(err, errOldRedis) {
+		bt.b.pinged("old:6379", bt.clock.Now(), true)
+		if err := bt.b.allow("old:6379"); !errors.Is(err, errOldRedis) {
 			t.Fatalf("allow = %v, want %v", err, errOldRedis)
 		}
-		clock.Advance(time.Hour)
+		bt.clock.Advance(time.Hour)
+	}
+	if addrs, open := bt.b.checked(); !slices.Equal(addrs, []string{"redis-2:6379"}) || open {
+		t.Errorf("checked = %v, %v; want only redis-2:6379, none open", addrs, open)
 	}
 }
