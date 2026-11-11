@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Redis full-outage chaos test (NFR-13, ADR-0021; breakers per ADR-0025).
+# Redis full-outage chaos test (NFR-13, ADR-0021; breakers per ADR-0025,
+# the budget line per ADR-0027).
 # gateway-1 … gateway-3 run test/chaos/outage.yaml: one route per failure
 # mode. loadgen drives 200 rps on the fail_open and the fail_closed route
 # through gateway-1 and 200 rps on the degraded route through each of
@@ -117,16 +118,18 @@ for i in 1 2 3; do
 done
 
 # Every Redis check during the runs, warm-up and pause included, ended
-# within the 5 ms budget plus the 2 ms slack (ADR-0021): all of gateway-1 …
-# gateway-3's observations of gw_ratelimit_check_duration_seconds{backend=
-# "redis"} in the le="0.007" bucket. The timeouts are the calls sent before
-# the breakers opened.
-count=0 within=0 within5=0 per=() errors=
+# within the 5 ms budget plus the 5 ms slack for host and VM stalls
+# (ADR-0027): all of gateway-1 … gateway-3's observations of
+# gw_ratelimit_check_duration_seconds{backend="redis"} in the le="0.01"
+# bucket. The timeouts are the calls sent before the breakers opened. The
+# counts within 5 ms and 7 ms are printed too.
+count=0 within=0 within5=0 within7=0 per=() errors=
 for g in "${gateways[@]}"; do
 	n=$(delta "$g" 'gw_ratelimit_check_duration_seconds_count{backend="redis"} ')
 	count=$((count + n))
-	within=$((within + $(delta "$g" 'gw_ratelimit_check_duration_seconds_bucket{backend="redis",le="0.007"} ')))
+	within=$((within + $(delta "$g" 'gw_ratelimit_check_duration_seconds_bucket{backend="redis",le="0.01"} ')))
 	within5=$((within5 + $(delta "$g" 'gw_ratelimit_check_duration_seconds_bucket{backend="redis",le="0.005"} ')))
+	within7=$((within7 + $(delta "$g" 'gw_ratelimit_check_duration_seconds_bucket{backend="redis",le="0.007"} ')))
 	per+=("$g $n")
 done
 for kind in timeout conn script; do
@@ -134,8 +137,8 @@ for kind in timeout conn script; do
 	for g in "${gateways[@]}"; do n=$((n + $(delta "$g" "gw_redis_errors_total{kind=\"$kind\"} "))); done
 	errors+="${errors:+, }$kind $n"
 done
-check $([ "$count" -gt 0 ] && [ "$within" -eq "$count" ]; echo $?) "every decision within one budget (7 ms)" \
-	"$within/$count Redis checks <= 7 ms ($within5 <= 5 ms; $(IFS=,; echo "${per[*]}" | sed 's/,/, /g')); redis errors: $errors"
+check $([ "$count" -gt 0 ] && [ "$within" -eq "$count" ]; echo $?) "every decision within one budget (10 ms)" \
+	"$within/$count Redis checks <= 10 ms ($within7 <= 7 ms, $within5 <= 5 ms; $(IFS=,; echo "${per[*]}" | sed 's/,/, /g')); redis errors: $errors"
 
 echo
 if [ "$fails" -eq 0 ]; then echo "Redis full outage: PASS"; else echo "Redis full outage: FAIL ($fails checks)"; fi

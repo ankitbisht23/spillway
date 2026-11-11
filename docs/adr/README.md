@@ -27,10 +27,12 @@ Decisions that shape Spillway and are not obvious from the code or from docs/des
 | [0016](0016-per-architecture-bench-rates-and-cpu-topology.md) | Per-architecture benchmark rates and CPU topology | Accepted | 2026-11-04 |
 | [0017](0017-local-rate-limiting-model.md) | Local rate limiting model | Accepted; scope rule superseded by 0021 | 2026-11-10 |
 | [0018](0018-ratelimit-headers.md) | RateLimit headers | Accepted | 2026-11-10 |
-| [0019](0019-m2-exit-check.md) | The M2 exit check | Accepted | 2026-11-10 |
+| [0019](0019-m2-exit-check.md) | The M2 exit check | Accepted; NFR-03 method superseded by 0021 | 2026-11-10 |
 | [0020](0020-method-case-in-policies.md) | Method case in rate limit policies | Accepted | 2026-11-10 |
-| [0021](0021-distributed-rate-limiting-model.md) | Distributed rate limiting model | Accepted; GCRA emission interval superseded by 0023, start-up loading by 0024, breaker rule by 0025 | 2026-11-10 |
+| [0021](0021-distributed-rate-limiting-model.md) | Distributed rate limiting model | Accepted; GCRA emission interval superseded by 0023, start-up loading by 0024, breaker rule by 0025, full-outage budget line and NFR-04 run voiding by 0027 | 2026-11-10 |
 | [0022](0022-multi-region.md) | Multi-region | Accepted | 2026-11-10 |
 | [0023](0023-gcra-emission-interval-in-whole-microseconds.md) | GCRA emission interval in whole microseconds | Accepted | 2026-11-10 |
 | [0024](0024-redis-limiter-warm-up.md) | Redis limiter warm-up | Accepted | 2026-11-11 |
-| [0025](0025-health-check-driven-redis-breakers.md) | Health-check driven Redis breakers | Accepted | 2026-11-11 |
+| [0025](0025-health-check-driven-redis-breakers.md) | Health-check driven Redis breakers | Accepted; refill count superseded by 0026 | 2026-11-11 |
+| [0026](0026-refill-redis-connections-after-an-outage.md) | Refill Redis connections after an outage | Accepted | 2026-11-11 |
+| [0027](0027-tolerance-for-host-stalls-in-the-m3-exit-check.md) | Tolerance for host stalls in the M3 exit check | Accepted | 2026-11-12 |

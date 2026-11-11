@@ -1,0 +1,23 @@
+# gateway-1's config during make verify-m3's added-latency check (NFR-04,
+# ADR-0021): one route to upstream-1, the upstream the direct runs measure,
+# behind one global-level GCRA policy in Redis whose limit is far above the
+# rate loadgen sends, so every request makes one {g:verify-redis} call that
+# allows it. It is fail_closed, so a failed call shows up as a 503 rather
+# than as a faster local answer.
+version: 32
+upstreams:
+  - name: upstream-1
+    endpoints:
+      - address: upstream-1:8080
+routes:
+  - name: bytes
+    match: { path_prefix: /bytes }
+    upstream: upstream-1
+policies:
+  - name: verify-redis
+    level: global
+    match: { routes: [bytes] }
+    key_template: '{route}'
+    algorithm: gcra
+    limits: [{ rate: 100000, period: 1s }]
+    failure_mode: fail_closed

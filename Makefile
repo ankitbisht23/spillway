@@ -11,7 +11,7 @@ FUZZTIME ?= 5s
 # Committed dev defaults first, then local overrides if present (ADR-0004).
 COMPOSE := docker compose --env-file .env.example $(if $(wildcard .env.local),--env-file .env.local)
 
-.PHONY: tools hooks certs dev test fuzz test-integration proto lint lint-go lint-web lint-proto bench verify-m0 verify-m0-stack verify-m1 verify-m1-reload verify-m2 verify-m2-shadow accuracy chaos-redis-outage chaos-redis-primary
+.PHONY: tools hooks certs dev test fuzz test-integration proto lint lint-go lint-web lint-proto bench verify-m0 verify-m0-stack verify-m1 verify-m1-reload verify-m2 verify-m2-shadow verify-m3 accuracy chaos-redis-outage chaos-redis-primary
 
 # Host-run processes and tests reach Redis Cluster nodes through this map
 # (ADR-0004). Set only here, never in compose or .env files.
@@ -136,12 +136,21 @@ verify-m1-reload: dev
 
 # M2 exit checks (docs/design.md, ADR-0019): the property tests, shadow mode
 # never rejecting and NFR-03's added latency on the dev stack. CI runs only the
-# shadow part; the latency pair takes 3 minutes and needs a quiet machine.
+# shadow part; the latency pairs (U4, ADR-0021) take 10 minutes and need a
+# quiet machine.
 verify-m2: dev
 	@test/verify/m2.sh all
 
 verify-m2-shadow: dev
 	@test/verify/m2.sh shadow
+
+# M3 exit checks (docs/design.md, ADR-0021): the accuracy harness at 3
+# replicas (NFR-06), both Redis chaos tests (NFR-13) and NFR-04's added
+# latency with a Redis check on the dev stack, about 15 minutes. CI runs none
+# of it: the chaos tests take the shared cluster down and the latency pairs
+# need a quiet machine.
+verify-m3: dev
+	@test/verify/m3.sh
 
 # Accuracy harness v1 (NFR-06, ADR-0021): gateway-1 … gateway-$(REPLICAS)
 # (1 to 5) run test/accuracy/gateway.yaml and cmd/accuracy drives them from

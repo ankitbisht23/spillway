@@ -448,8 +448,8 @@ func TestCallLimitCount(t *testing.T) {
 // TestClientBreaker: request calls whose connection breaks open the node's
 // breaker after 3 in a row, and opening it reloads the slot map; script
 // errors and timeouts never open it; the first answered PING closes it and
-// refills the request pool, and a node that stops answering PINGs is opened
-// by them (RL-22, ADR-0025).
+// refills the request pool with refillConns connections, and a node that
+// stops answering PINGs is opened by them (RL-22, ADR-0025, ADR-0026).
 func TestClientBreaker(t *testing.T) {
 	const (
 		allowed = iota
@@ -495,15 +495,26 @@ func TestClientBreaker(t *testing.T) {
 		mode.Store(allowed)
 		pings := f.count("ping")
 		c.ping(t.Context())
-		// Closing also opens a request connection in the background: a
-		// second PING, through the request pool.
-		for deadline := time.Now().Add(5 * time.Second); f.count("ping") < pings+2; time.Sleep(time.Millisecond) {
+		// Closing also opens refillConns request connections in the
+		// background: one more PING on each, through the request pool.
+		for deadline := time.Now().Add(5 * time.Second); f.count("ping") < pings+1+refillConns; time.Sleep(time.Millisecond) {
 			if time.Now().After(deadline) {
-				t.Fatalf("%s: no request connection opened on closing", step)
+				t.Fatalf("%s: %d request connections opened on closing, want %d", step, f.count("ping")-pings-1, refillConns)
 			}
 		}
-		if res, err := callFake(t, c); err != nil || !res.Allowed {
-			t.Fatalf("%s: %+v, %v", step, res, err)
+		// As many concurrent calls find them open: none dials (HELLO).
+		dials := f.count("hello")
+		var wg sync.WaitGroup
+		for range refillConns {
+			wg.Go(func() {
+				if res, err := callFake(t, c); err != nil || !res.Allowed {
+					t.Errorf("%s: %+v, %v", step, res, err)
+				}
+			})
+		}
+		wg.Wait()
+		if n := f.count("hello") - dials; n != 0 {
+			t.Errorf("%s: %d calls dialed after the refill", step, n)
 		}
 	}
 

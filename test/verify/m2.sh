@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# M2 exit checks (docs/design.md, M2; ADR-0017, ADR-0019). Prints one
-# PASS/FAIL line per check with what it measured, and exits 1 if any check
-# fails. Run through make:
+# M2 exit checks (docs/design.md, M2; ADR-0017, ADR-0019; NFR-03's method is
+# U4 in ADR-0021). Prints one PASS/FAIL line per check with what it measured,
+# and exits 1 if any check fails. Run through make:
 #   make verify-m2-shadow   shadow mode never rejects, on the dev stack (CI runs this part)
 #   make verify-m2          property tests, the shadow check, then NFR-03 added latency
 set -uo pipefail
@@ -61,6 +61,8 @@ loadgen() { # loadgen <url> <rate> <warm-up> <duration>: loadgen's JSON result
 }
 # Failed: no answer, or an answer other than 2xx.
 failed='((.errors | add // 0) + ([.status | to_entries[] | select(.key != "2xx") | .value] | add // 0))'
+# shellcheck source=test/verify/added-latency.sh
+. test/verify/added-latency.sh
 
 if ! build=$("${compose[@]}" build --quiet loadgen 2>&1); then printf '%s\n' "$build"; fi
 
@@ -106,52 +108,23 @@ fi
 if [ "$mode" = all ]; then
 	echo "== (c) NFR-03 added latency with local limits"
 
-	# Paired runs at the same rate and length, the same upstream and the same
-	# loadgen: straight to upstream-1, then through gateway-1. The rate and
-	# the length can be changed for a quick look; the exit check uses these.
+	# Alternating paired runs (U4, added-latency.sh). The rate and the
+	# length can be changed for a quick look; the exit check uses these.
 	rate=${VERIFY_M2_RATE:-1000} warmup=${VERIFY_M2_WARMUP:-30s} duration=${VERIFY_M2_DURATION:-60s}
-	run() { # run <check> <loadgen result> [extra] [least]: prints the run's line, sets p50 and p99 in µs
-		# With <least>, the fewest allows any policy gave must cover every request sent.
-		local r
-		r=$(jq -r --arg extra "${3:-}" --argjson least "${4:--1}" "$failed"' as $failed
-			| "\(if $failed == 0 and .valid and ($least < 0 or $least >= .requests.sent) then 0 else 1 end) \(.latency_us.p50) \(.latency_us.p99) \(.status["2xx"] // 0)/\(.requests.sent) answered 2xx, \($failed) failed, \(.achieved_rps | round) of \(.target_rps) rps; p50 \(.latency_us.p50 / 1000) ms, p99 \(.latency_us.p99 / 1000) ms\($extra)"' <<<"$2" 2>/dev/null)
-		if [ -z "$r" ]; then
-			result FAIL "$1" "loadgen gave no result: $(tail -1 "$tmp/loadgen.err")"
-			return 1
-		fi
-		read -r ok p50 p99 line <<<"$r"
-		check "$ok" "$1" "$line"
-		return "$ok"
+	policies="verify-per-ip verify-per-route verify-inflight"
+	counts() { for p in $policies; do echo "$p $(decisions "$p" allow enforce) $(decisions "$p" deny enforce)"; done; }
+	# What each policy decided during a gateway run, warm-up included: it
+	# must allow every measured request and deny none (a deny is a 429 anyway).
+	judge() {
+		paste -d ' ' <(echo "$1") <(echo "$2") | awk -v sent="$3" '
+			{ a = $5 - $2; d = $6 - $3; if (a < sent || d > 0) bad = 1
+				s = s (NR > 1 ? ", " : "") sprintf("%s %d allow %d deny", $1, a, d) }
+			END { print (bad ? 1 : 0), 0, s }'
 	}
-
-	direct=$(loadgen http://upstream-1:8080/bytes/1024 "$rate" "$warmup" "$duration")
-	run "direct to upstream-1" "$direct"
-	ok_direct=$? direct_p50=${p50:-0} direct_p99=${p99:-0}
-
 	if use test/verify/m2-latency.yaml; then
-		policies="verify-per-ip verify-per-route verify-inflight"
-		counts() { for p in $policies; do echo "$p $(decisions "$p" allow enforce) $(decisions "$p" deny enforce)"; done; }
-		before=$(counts)
-		gateway=$(loadgen http://gateway-1:8000/bytes/1024 "$rate" "$warmup" "$duration")
-		# What each policy decided during the run, warm-up included: it must
-		# allow every measured request and deny none (a deny is a 429 anyway).
-		limited=$(paste -d ' ' <(echo "$before") <(counts) |
-			awk '{ printf "%s%s %d allow %d deny", (NR > 1 ? ", " : ""), $1, $5 - $2, $6 - $3 }')
-		least=$(paste -d ' ' <(echo "$before") <(counts) |
-			awk 'NR == 1 || $5 - $2 < m { m = $5 - $2 } END { print m + 0 }')
-		run "through gateway-1, local policies" "$gateway" "; $limited" "$least"
-		ok_gateway=$? gateway_p50=${p50:-0} gateway_p99=${p99:-0}
-		if [ "$ok_direct" -eq 0 ] && [ "$ok_gateway" -eq 0 ]; then
-			added=$((gateway_p99 - direct_p99))
-			check $([ "$added" -le 2000 ]; echo $?) "NFR-03 added p99 <= 2 ms" \
-				"$(awk -v g="$gateway_p99" -v d="$direct_p99" -v gm="$gateway_p50" -v dm="$direct_p50" \
-					'BEGIN { printf "p99 %.3f - %.3f = %.3f ms added; p50 %.3f - %.3f = %.3f ms added", g / 1000, d / 1000, (g - d) / 1000, gm / 1000, dm / 1000, (gm - dm) / 1000 }')"
-		else
-			result FAIL "NFR-03 added p99 <= 2 ms" "no valid pair of runs to compare"
-		fi
+		added_latency "NFR-03 added p99 <= 2 ms" 2000 "local policies" "$rate" "$warmup" "$duration"
 	else
-		result FAIL "through gateway-1, local policies" "gateway-1 did not load test/verify/m2-latency.yaml"
-		result FAIL "NFR-03 added p99 <= 2 ms" "no valid pair of runs to compare"
+		result FAIL "NFR-03 added p99 <= 2 ms" "gateway-1 did not load test/verify/m2-latency.yaml"
 	fi
 fi
 
