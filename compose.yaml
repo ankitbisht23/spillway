@@ -286,6 +286,18 @@ services:
     ulimits:
       nofile: 65536
 
+  # Sender of the killed-primary chaos test (NFR-13, ADR-0021), run by make
+  # chaos-redis-primary against gateway-1; it reads the kill time on stdin
+  # and prints its JSON report.
+  chaos:
+    build: { context: ., target: chaos }
+    image: spillway-chaos:dev
+    profiles: [harness]
+    env_file: *env-local
+    read_only: true
+    ulimits:
+      nofile: 65536
+
 # A fixed subnet, so the gateways' upstream allow-list can be exactly this
 # network (SEC-06, ADR-0010).
 networks:
