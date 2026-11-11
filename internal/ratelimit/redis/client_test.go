@@ -448,8 +448,8 @@ func TestCallLimitCount(t *testing.T) {
 // TestClientBreaker: request calls whose connection breaks open the node's
 // breaker after 3 in a row, and opening it reloads the slot map; script
 // errors and timeouts never open it; the first answered PING closes it and
-// refills the request pool with refillConns connections, and a node that stops answering PINGs is opened
-// by them (RL-22, ADR-0025).
+// refills the request pool with refillConns connections, and a node that
+// stops answering PINGs is opened by them (RL-22, ADR-0025, ADR-0026).
 func TestClientBreaker(t *testing.T) {
 	const (
 		allowed = iota
