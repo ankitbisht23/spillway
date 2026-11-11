@@ -27,7 +27,7 @@ Decisions that shape Spillway and are not obvious from the code or from docs/des
 | [0016](0016-per-architecture-bench-rates-and-cpu-topology.md) | Per-architecture benchmark rates and CPU topology | Accepted | 2026-11-04 |
 | [0017](0017-local-rate-limiting-model.md) | Local rate limiting model | Accepted; scope rule superseded by 0021 | 2026-11-10 |
 | [0018](0018-ratelimit-headers.md) | RateLimit headers | Accepted | 2026-11-10 |
-| [0019](0019-m2-exit-check.md) | The M2 exit check | Accepted | 2026-11-10 |
+| [0019](0019-m2-exit-check.md) | The M2 exit check | Accepted; NFR-03 method superseded by 0021 | 2026-11-10 |
 | [0020](0020-method-case-in-policies.md) | Method case in rate limit policies | Accepted | 2026-11-10 |
 | [0021](0021-distributed-rate-limiting-model.md) | Distributed rate limiting model | Accepted; GCRA emission interval superseded by 0023, start-up loading by 0024, breaker rule by 0025 | 2026-11-10 |
 | [0022](0022-multi-region.md) | Multi-region | Accepted | 2026-11-10 |

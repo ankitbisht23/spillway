@@ -1,6 +1,6 @@
 # 0019. The M2 exit check
 
-- **Status:** Accepted
+- **Status:** Accepted; NFR-03 method superseded by [ADR-0021](0021-distributed-rate-limiting-model.md)
 - **Date:** 2026-11-10
 - **Requirement IDs:** NFR-03, RL-26, RL-01, RL-02
 
