@@ -18,12 +18,13 @@ import (
 	"github.com/ankitbisht23/spillway/internal/testcert"
 )
 
-// TestServeSheds runs the gateway with a cap of 1 request in flight and 2
-// open connections (GW-26, ADR-0030). With a slow request held, a second
-// request on a new connection is shed with 503 by the in-flight cap; with
-// both connections still open, a third, over TLS, is shed by the connection
-// cap with the fixed HTTP/1.1 503; the admin port stays reachable and
-// /metrics counts both.
+// TestServeSheds runs the gateway with a cap of 2 requests in flight and 2
+// open connections (GW-26, ADR-0030, ADR-0033). With a slow request held on
+// a plain connection and another on an HTTP/2 one, a third request on the
+// HTTP/2 connection is shed with 503 by the in-flight cap; with both
+// connections' requests in progress, a third connection is shed by the
+// connection cap with the fixed HTTP/1.1 503; the admin port stays
+// reachable and /metrics counts both.
 func TestServeSheds(t *testing.T) {
 	u := newShutdownUpstream(t)
 	cfg := filepath.Join(t.TempDir(), "config.yaml")
@@ -46,7 +47,7 @@ func TestServeSheds(t *testing.T) {
 		dnsRefresh:     time.Minute,
 		shutdownGrace:  5 * time.Second,
 		maxConnections: 2,
-		maxInFlight:    1,
+		maxInFlight:    2,
 	}
 	logs := &lockedBuffer{}
 	ctx, cancel := context.WithCancel(t.Context())
@@ -57,16 +58,19 @@ func TestServeSheds(t *testing.T) {
 	waitFor(t, "/readyz 200", func() bool { code, _ := get(t, admin+"/readyz"); return code == http.StatusOK })
 
 	slow := slowRequest(t, s, u) // connection 1, request 1
-	// Connection 2, kept open: the in-flight cap sheds its request.
+	// Connection 2, over TLS with HTTP/2: request 2 is held too, and the
+	// in-flight cap sheds request 3 on it.
+	secure := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}, ForceAttemptHTTP2: true}}
+	t.Cleanup(secure.CloseIdleConnections)
+	slow2 := slowRequestWith(t, secure, "https://"+s.tlsAddr+"/slow", u)
+	if code, retryAfter, body := do(t, secure, "https://"+s.tlsAddr+"/x"); code != http.StatusServiceUnavailable || retryAfter != "1" || body != `{"error":"overloaded"}` {
+		t.Errorf("past the in-flight cap: %d, Retry-After %q, %q; want 503, 1, overloaded", code, retryAfter, body)
+	}
+	// Connection 3: both others have a request in progress, so the
+	// connection cap sheds it.
 	plain := &http.Client{Transport: &http.Transport{}}
 	t.Cleanup(plain.CloseIdleConnections)
 	if code, retryAfter, body := do(t, plain, "http://"+s.httpAddr+"/x"); code != http.StatusServiceUnavailable || retryAfter != "1" || body != `{"error":"overloaded"}` {
-		t.Errorf("past the in-flight cap: %d, Retry-After %q, %q; want 503, 1, overloaded", code, retryAfter, body)
-	}
-	// Connection 3, over TLS: the connection cap sheds it.
-	secure := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}, ForceAttemptHTTP2: true}}
-	t.Cleanup(secure.CloseIdleConnections)
-	if code, retryAfter, body := do(t, secure, "https://"+s.tlsAddr+"/x"); code != http.StatusServiceUnavailable || retryAfter != "1" || body != `{"error":"overloaded"}` {
 		t.Errorf("past the connection cap: %d, Retry-After %q, %q; want 503, 1, overloaded", code, retryAfter, body)
 	}
 	// The admin port is exempt.
@@ -82,8 +86,23 @@ func TestServeSheds(t *testing.T) {
 		t.Errorf("no shedding log line in\n%s", logs.String())
 	}
 	u.free()
-	if code := <-slow; code != http.StatusOK {
-		t.Errorf("held request: %d, want 200", code)
+	for _, c := range []<-chan int{slow, slow2} {
+		if code := <-c; code != http.StatusOK {
+			t.Errorf("held request: %d, want 200", code)
+		}
+	}
+	// Both connections now open are idle: a new one takes the place of
+	// the one idle longest instead of being shed (ADR-0033).
+	if code, _, _ := do(t, plain, "http://"+s.httpAddr+"/x"); code != http.StatusOK {
+		t.Errorf("second plain connection: %d, want 200", code)
+	}
+	other := &http.Client{Transport: &http.Transport{}}
+	t.Cleanup(other.CloseIdleConnections)
+	if code, _, _ := do(t, other, "http://"+s.httpAddr+"/x"); code != http.StatusOK {
+		t.Errorf("past the cap with idle connections: %d, want 200", code)
+	}
+	if !strings.Contains(logs.String(), `"msg":"closing waiting connections at the connection cap"`) {
+		t.Errorf("no log line for the closed idle connection in\n%s", logs.String())
 	}
 	cancel()
 	if err := <-done; err != nil {

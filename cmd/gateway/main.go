@@ -185,6 +185,7 @@ func serve(ctx context.Context, s settings, log *slog.Logger, tracer trace.Trace
 	handler := proxy.NewHandler(cfg.Snapshot, identity, s.trusted, pools, limiters, rl, s.devMode, s.maxInFlight, tracer, rec, log)
 	conns := proxy.NewConnLimit(s.maxConnections, rec, log)
 	srv := proxy.NewServer(handler, log)
+	srv.ConnState = conns.ConnState // waiting connections give way to new ones at the cap (ADR-0033)
 	if s.tlsCert != "" {
 		certs, err := proxy.NewCerts(s.tlsCert, s.tlsKey, log)
 		if err != nil {

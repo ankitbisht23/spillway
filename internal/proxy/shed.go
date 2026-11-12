@@ -1,11 +1,13 @@
 package proxy
 
 import (
+	"container/list"
 	"context"
 	"crypto/tls"
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -36,10 +38,14 @@ var shedResponse = "HTTP/1.1 503 Service Unavailable\r\n" +
 
 // ConnLimit caps the open client connections across the traffic listeners it
 // wraps (GW-26, ADR-0030). A connection counts from Accept to Close, upgraded
-// ones included. One accepted past the cap never reaches the server and is
-// never queued: it gets a fixed 503 as soon as its request starts, within
-// shedDeadline, or a reset when maxShedding connections are already being
-// shed.
+// ones included. At the cap, a new connection takes the place of the one
+// that has waited longest without a request in progress, idle between
+// requests or not yet sent its first, which is closed (ADR-0033). When
+// every connection has a request in progress, the new one never reaches
+// the server and is never queued: it gets a fixed 503 as soon as its
+// request starts, within shedDeadline, or a reset when maxShedding
+// connections are already being shed. The server's ConnState must be
+// ConnLimit.ConnState.
 type ConnLimit struct {
 	max      int64
 	open     resilience.Gate
@@ -48,6 +54,11 @@ type ConnLimit struct {
 	log      *slog.Logger
 	shed     atomic.Int64 // connections shed since the last log line
 	logged   atomic.Int64 // when the last log line went out, in Unix nanoseconds
+	closed   atomic.Int64 // waiting connections closed at the cap since the last log line
+	closedAt atomic.Int64 // when the last such log line went out, in Unix nanoseconds
+
+	mu      sync.Mutex
+	waiting list.List // of *clientConn without a request in progress, longest waiting first
 }
 
 // NewConnLimit returns a cap of max open connections that records each shed
@@ -85,11 +96,69 @@ func (ln *limitListener) Accept() (net.Conn, error) {
 		if err != nil {
 			return nil, err
 		}
-		if ln.l.open.TryAcquire(ln.l.max) {
-			return &countedConn{Conn: c, release: sync.OnceFunc(ln.l.open.Release)}, nil
+		if ln.l.acquire() {
+			return &clientConn{countedConn: countedConn{Conn: c, release: sync.OnceFunc(ln.l.open.Release)}}, nil
 		}
 		ln.l.shedConn(c, ln.tls)
 	}
+}
+
+// clientConn is a client connection the cap counts.
+type clientConn struct {
+	countedConn
+	waiting *list.Element // in the ConnLimit's waiting list; guarded by its mu
+}
+
+// acquire takes a place for a new connection, closing waiting connections
+// for it while the cap is reached.
+func (l *ConnLimit) acquire() bool {
+	for !l.open.TryAcquire(l.max) {
+		l.mu.Lock()
+		e := l.waiting.Front()
+		if e == nil {
+			l.mu.Unlock()
+			return false
+		}
+		c := l.waiting.Remove(e).(*clientConn)
+		c.waiting = nil
+		l.mu.Unlock()
+		_ = c.Close() // frees its place
+		l.noteClosed()
+	}
+	return true
+}
+
+// ConnState is the traffic server's http.Server.ConnState: it keeps the
+// list of connections without a request in progress, new or idle, in the
+// order they started waiting (ADR-0033).
+func (l *ConnLimit) ConnState(nc net.Conn, state http.ConnState) {
+	if tc, ok := nc.(*tls.Conn); ok {
+		nc = tc.NetConn()
+	}
+	c, ok := nc.(*clientConn)
+	if !ok {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if c.waiting != nil {
+		l.waiting.Remove(c.waiting)
+		c.waiting = nil
+	}
+	if state == http.StateNew || state == http.StateIdle {
+		c.waiting = l.waiting.PushBack(c)
+	}
+}
+
+// noteClosed counts a waiting connection closed at the cap and logs the
+// count at most once a second.
+func (l *ConnLimit) noteClosed() {
+	l.closed.Add(1)
+	now, last := time.Now().UnixNano(), l.closedAt.Load()
+	if now-last < int64(time.Second) || !l.closedAt.CompareAndSwap(last, now) {
+		return
+	}
+	l.log.Info("closing waiting connections at the connection cap", "connections", l.closed.Swap(0), "max_connections", l.max)
 }
 
 // shedConn answers c, accepted past the cap, on its own goroutine, or resets
