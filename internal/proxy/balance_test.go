@@ -71,6 +71,28 @@ func TestRoundRobinBalancing(t *testing.T) {
 	}
 }
 
+// TestRoundRobinWithRetries: retries turn their own counter, so with one of
+// three endpoints failing every first attempt still gets exactly its third,
+// and the failing endpoint's retries are shared by the other two (GW-07).
+func TestRoundRobinWithRetries(t *testing.T) {
+	p, eps := testPool(config.LBRoundRobin, 3)
+	first, retries := map[*endpoint]int{}, map[*endpoint]int{}
+	for range 3000 {
+		e, _ := p.pick(t0, "", nil)
+		first[e]++
+		if e == eps[1] {
+			r, _ := p.pick(t0, "", []*endpoint{e})
+			retries[r]++
+		}
+	}
+	if first[eps[0]] != 1000 || first[eps[1]] != 1000 || first[eps[2]] != 1000 {
+		t.Errorf("first attempts %v, want 1000 each", counts(first, eps))
+	}
+	if retries[eps[0]] != 500 || retries[eps[1]] != 0 || retries[eps[2]] != 500 {
+		t.Errorf("retries %v, want 500, 0, 500", counts(retries, eps))
+	}
+}
+
 // TestP2CBalancing: p2c draws two distinct candidates and takes the one with
 // fewer attempts in flight, so with distinct loads the least-loaded endpoint
 // wins every pair it is in and the most-loaded never wins; with equal loads

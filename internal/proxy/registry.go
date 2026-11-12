@@ -61,7 +61,8 @@ type pool struct {
 	transport *http.Transport
 	settings  atomic.Pointer[config.Upstream] // the latest snapshot's, changed in place on reload
 	endpoints atomic.Pointer[[]*endpoint]     // one per resolved address, published after each resolve
-	next      atomic.Uint64                   // round robin (GW-07)
+	next      atomic.Uint64                   // round robin of first attempts (GW-07)
+	retryNext atomic.Uint64                   // round robin of retries, apart so that retries do not skew first attempts
 	budget    *resilience.Budget              // retries (GW-13)
 	breaker   *resilience.Breaker             // and its max_concurrent cap (GW-14)
 	pending   resilience.Gate                 // max_pending: attempts waiting for a connection
@@ -507,6 +508,8 @@ func (e *endpoint) selectable(now time.Time) bool {
 // and uses the endpoints that are not ejected, or all of them if every one
 // is. key is the request's filled hash_on template for consistent_hash; ""
 // when it could not be filled, and the request is then balanced with p2c.
+// Round robin turns a counter of its own for retries, so that a failing
+// endpoint's retries do not move the first attempts' turn.
 func (p *pool) pick(now time.Time, key string, tried []*endpoint) (*endpoint, error) {
 	eps := *p.endpoints.Load()
 	if len(eps) == 0 {
@@ -521,6 +524,8 @@ func (p *pool) pick(now time.Time, key string, tried []*endpoint) (*endpoint, er
 		return cands[0], nil
 	}
 	switch lb := p.settings.Load().LB; {
+	case lb == config.LBRoundRobin && len(tried) > 0:
+		return cands[(p.retryNext.Add(1)-1)%uint64(len(cands))], nil
 	case lb == config.LBRoundRobin:
 		return cands[(p.next.Add(1)-1)%uint64(len(cands))], nil
 	case lb == config.LBConsistentHash && key != "":
