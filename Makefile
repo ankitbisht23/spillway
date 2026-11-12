@@ -11,7 +11,7 @@ FUZZTIME ?= 5s
 # Committed dev defaults first, then local overrides if present (ADR-0004).
 COMPOSE := docker compose --env-file .env.example $(if $(wildcard .env.local),--env-file .env.local)
 
-.PHONY: tools hooks certs dev test fuzz test-integration proto lint lint-go lint-web lint-proto bench verify-m0 verify-m0-stack verify-m1 verify-m1-reload verify-m2 verify-m2-shadow verify-m3 accuracy chaos-redis-outage chaos-redis-primary
+.PHONY: tools hooks certs dev test fuzz test-integration proto lint lint-go lint-web lint-proto bench verify-m0 verify-m0-stack verify-m1 verify-m1-reload verify-m2 verify-m2-shadow verify-m3 verify-m4 accuracy chaos-redis-outage chaos-redis-primary
 
 # Host-run processes and tests reach Redis Cluster nodes through this map
 # (ADR-0004). Set only here, never in compose or .env files.
@@ -157,6 +157,15 @@ verify-m2-shadow: dev
 # need a quiet machine.
 verify-m3: dev
 	@test/verify/m3.sh
+
+# M4 exit check (docs/design.md, ADR-0031): one of three endpoints of an
+# upstream fails under 500 rps, first answering 503, then refusing
+# connections; >= 99% of requests succeed within 10 s of the failure,
+# retries stay within budget and Tempo shows each attempt, about 3 minutes.
+# The gateways run at compose's trace ratio of 1. CI runs none of it: it
+# waits on Tempo and needs a quiet machine.
+verify-m4: dev
+	@test/verify/m4.sh
 
 # Accuracy harness v1 (NFR-06, ADR-0021): gateway-1 … gateway-$(REPLICAS)
 # (1 to 5) run test/accuracy/gateway.yaml and cmd/accuracy drives them from
