@@ -128,8 +128,8 @@ func (l *ConnLimit) note() {
 // The answer waits for the request's first byte, and the rest is never
 // parsed: an HTTP/1.1 client may fail a request whose answer arrived before
 // it sent it, as unsolicited (Go's transport did for 0.3% to 1% of shed
-// connections inside the compose network). A client that sends nothing within the
-// deadline gets no answer.
+// connections inside the compose network, ADR-0032). A client that sends
+// nothing within the deadline gets no answer.
 func answerShed(c net.Conn, tlsConfig *tls.Config) {
 	defer func() { _ = c.Close() }()
 	deadline := time.Now().Add(shedDeadline)

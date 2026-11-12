@@ -383,12 +383,22 @@ func TestShedLatencyUnderOverload(t *testing.T) {
 	ok := 0
 	var wg sync.WaitGroup
 	end := time.Now().Add(2 * time.Second)
+	// At most 20 clients open their connection at once: a burst of 200
+	// connects can overflow macOS's listen backlog of 128, and the kernel's
+	// resets would fail the test, not shedding.
+	connecting := make(chan struct{}, 20)
 	for range 200 {
 		wg.Go(func() {
+			connecting <- struct{}{}
+			first := true
 			for time.Now().Before(end) {
 				start := time.Now()
 				req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, g.URL+"/", nil)
 				resp, err := client.Do(req)
+				if first { // this client's connection is open
+					<-connecting
+					first = false
+				}
 				if err != nil {
 					t.Error(err)
 					return
