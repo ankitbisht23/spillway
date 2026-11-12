@@ -76,7 +76,7 @@ type Breaker struct {
 	window   *Window
 	width    time.Duration // the window's duration
 	until    time.Time     // open until
-	gen      uint64        // counts transitions, so that a probe of an earlier half-open counts for nothing
+	gen      atomic.Uint64 // counts transitions, so that an outcome from an earlier state counts for nothing; written under mu
 	admitted int           // probes admitted in this half-open and not given back
 	passed   int           // probes of this half-open that succeeded
 }
@@ -110,7 +110,7 @@ type Pass struct {
 	b        *Breaker
 	s        *config.CircuitBreaker
 	probe    bool
-	gen      uint64 // the half-open a probe belongs to
+	gen      uint64 // the breaker's state when the request was admitted
 	recorded bool   // a probe's outcome was recorded
 	done     bool
 }
@@ -119,7 +119,9 @@ type Pass struct {
 // *OpenError, or with ErrOverloaded when max_concurrent requests are in
 // flight.
 func (b *Breaker) Acquire(now time.Time, s *config.CircuitBreaker) (*Pass, error) {
-	p := &Pass{b: b, s: s}
+	// gen is read before the state: if the breaker moves in between, the
+	// pass belongs to an earlier state and its outcome counts for nothing.
+	p := &Pass{b: b, s: s, gen: b.gen.Load()}
 	if b.State() != Closed {
 		t, err := b.admit(now, p)
 		b.notify(t)
@@ -143,6 +145,7 @@ func (b *Breaker) admit(now time.Time, p *Pass) (*Transition, error) {
 	var t *Transition
 	switch b.State() {
 	case Closed:
+		p.gen = b.gen.Load()
 		return nil, nil
 	case Open:
 		if now.Before(b.until) {
@@ -154,7 +157,7 @@ func (b *Breaker) admit(now time.Time, p *Pass) (*Transition, error) {
 		return t, &OpenError{RetryAfter: time.Second}
 	}
 	b.admitted++
-	p.probe, p.gen = true, b.gen
+	p.probe, p.gen = true, b.gen.Load()
 	return t, nil
 }
 
@@ -162,7 +165,7 @@ func (b *Breaker) admit(now time.Time, p *Pass) (*Transition, error) {
 func (b *Breaker) set(to State, total, failed int64) *Transition {
 	t := &Transition{From: b.State(), To: to, Total: total, Failed: failed}
 	b.state.Store(int32(to))
-	b.gen++
+	b.gen.Add(1)
 	b.admitted, b.passed = 0, 0
 	return t
 }
@@ -177,15 +180,17 @@ func (b *Breaker) notify(t *Transition) {
 // the breaker is closed it counts in the window, and a failure may open the
 // breaker. A probe's outcome decides its half-open: a failure opens the
 // breaker again, and the last of half_open_probes successes closes it.
-// Outcomes of requests admitted while closed that arrive once it is open or
-// half-open count for nothing.
+// Outcomes of requests admitted in an earlier state count for nothing: one
+// admitted while closed whose outcome arrives once the breaker has opened,
+// even if it has closed again since.
 func (p *Pass) Record(now time.Time, failed bool) {
 	b := p.b
 	b.mu.Lock()
 	var t *Transition
 	switch {
+	case p.gen != b.gen.Load():
 	case p.probe:
-		if p.recorded || p.gen != b.gen {
+		if p.recorded {
 			break
 		}
 		p.recorded = true
@@ -237,7 +242,7 @@ func (p *Pass) giveBack() {
 	}
 	b := p.b
 	b.mu.Lock()
-	if p.gen == b.gen {
+	if p.gen == b.gen.Load() {
 		b.admitted--
 	}
 	p.recorded = true // gives back once
