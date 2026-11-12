@@ -41,11 +41,11 @@ type OutlierState struct {
 // endpoint is ejected, from attempts sent before, are ignored, so it comes
 // back with a count of 0.
 func (o *Outlier) Record(now time.Time, failed bool, s *config.OutlierDetection) bool {
-	if o.Ejected(now) {
-		return false
-	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
+	if o.Ejected(now) { // under mu, so no outcome lands between Eject and the ejection's end
+		return false
+	}
 	if !failed {
 		o.failures = 0
 		return false

@@ -148,6 +148,7 @@ func (r *Registry) Apply(s *config.Snapshot) error {
 		if pools[name] == nil {
 			p.transport.CloseIdleConnections()
 			p.mu.Lock()
+			p.probe = false // a DNS refresh still holding the old map must not restart them
 			for _, e := range *p.endpoints.Load() {
 				e.stopProbe()
 			}

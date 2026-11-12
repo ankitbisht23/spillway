@@ -523,12 +523,22 @@ func TestHealthCheckRemoved(t *testing.T) {
 }
 
 // TestRemovedUpstreamStopsProbing: a reload that removes an upstream stops
-// its probers.
+// its probers, and a DNS refresh that still holds the removed pool does not
+// start them again.
 func TestRemovedUpstreamStopsProbing(t *testing.T) {
 	a, b := newUpstream(t, "a"), newUpstream(t, "b")
 	g := newGateway(t, newResolver(a, b), upstreamOf(fastHealth, a))
 	waitFor(t, "a probed", func() bool { return a.probes.Load() > 0 })
+	removed := (*g.reg.pools.Load())["u"]
 	g.apply(t, oneUpstream(b))
+	removed.mu.Lock()
+	g.reg.resolve(removed) // a refresh that loaded the pools before the reload
+	removed.mu.Unlock()
+	for _, e := range *removed.endpoints.Load() {
+		if e.stop != nil {
+			t.Errorf("endpoint %s of the removed upstream has a prober again", e.addr)
+		}
+	}
 	time.Sleep(50 * time.Millisecond)
 	probes := a.probes.Load()
 	time.Sleep(600 * time.Millisecond)
