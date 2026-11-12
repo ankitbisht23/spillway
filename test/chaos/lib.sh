@@ -23,11 +23,14 @@ nodes=(redis-0 redis-1 redis-2 redis-3 redis-4 redis-5)
 dir=deploy/compose/gateway
 tmp=$(mktemp -d)
 cp "$dir/config.yaml" "$tmp/config.yaml"
-swap() { cp "$1" "$dir/.config.yaml.swap" && mv -f "$dir/.config.yaml.swap" "$dir/config.yaml"; }
+swapped=
+swap() { swapped=1; cp "$1" "$dir/.config.yaml.swap" && mv -f "$dir/.config.yaml.swap" "$dir/config.yaml"; }
 
+# Nothing touches the cluster before the config swap, so an exit before it
+# (a failed image build) has nothing to restore.
 restored=
 cleanup() {
-	if [ -z "$restored" ]; then restore; fi
+	if [ -z "$restored" ] && [ -n "$swapped" ]; then restore; fi
 	swap "$tmp/config.yaml"
 	rm -rf "$tmp"
 	"${compose[@]}" --profile replicas stop gateway-2 gateway-3 gateway-4 gateway-5 >/dev/null 2>&1
