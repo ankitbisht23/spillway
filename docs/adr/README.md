@@ -39,3 +39,4 @@ Decisions that shape Spillway and are not obvious from the code or from docs/des
 | [0028](0028-conservative-gcra-refunds.md) | Conservative GCRA refunds | Accepted | 2026-11-12 |
 | [0029](0029-methods-not-in-upper-case.md) | Methods that are not upper case | Accepted | 2026-11-12 |
 | [0030](0030-resilience-model.md) | Resilience model | Accepted | 2026-11-12 |
+| [0031](0031-m4-exit-check.md) | The M4 exit check | Accepted | 2026-11-12 |
