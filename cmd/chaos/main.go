@@ -18,6 +18,10 @@
 // on bad flags.
 //
 //	chaos < kill-time
+//
+// Two subcommands serve make verify-m4 (ADR-0031): "chaos mock", the
+// fault-injecting upstream (mock.go), and "chaos upstream", the sender of
+// its scenarios (upstream.go).
 package main
 
 import (
@@ -57,7 +61,15 @@ const (
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	code := run(ctx, os.Args[1:], os.Stdin, os.Stdout, os.Stderr)
+	var code int
+	switch args := os.Args[1:]; {
+	case len(args) > 0 && args[0] == "mock":
+		code = runMock(ctx, args[1:], os.Stderr)
+	case len(args) > 0 && args[0] == "upstream":
+		code = runUpstream(ctx, args[1:], os.Stdout, os.Stderr)
+	default:
+		code = run(ctx, args, os.Stdin, os.Stdout, os.Stderr)
+	}
 	stop()
 	os.Exit(code)
 }

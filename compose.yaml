@@ -305,6 +305,25 @@ services:
     ulimits:
       nofile: 65536
 
+  # Fault-injecting upstream of make verify-m4 (ADR-0031), the chaos image's
+  # mock: 200 with 1,024 bytes on :8080 until its control port, :8081 in the
+  # compose network only, sets POST /fault?mode=5xx|refused|none. No host
+  # port (docs/ports.md).
+  upstream-fault:
+    build: { context: ., target: chaos }
+    image: spillway-chaos:dev
+    command: ["mock"]
+    profiles: [harness]
+    env_file: *env-local
+    read_only: true
+    ulimits:
+      nofile: 65536
+    healthcheck:
+      test: ["CMD", "/chaos", "mock", "-healthcheck"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
 # A fixed subnet, so the gateways' upstream allow-list can be exactly this
 # network (SEC-06, ADR-0010).
 networks:
