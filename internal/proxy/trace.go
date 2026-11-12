@@ -2,7 +2,9 @@ package proxy
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"strconv"
@@ -216,4 +218,13 @@ func dropRetry(ctx context.Context, why string) {
 	if span := trace.SpanFromContext(ctx); span.IsRecording() {
 		span.SetAttributes(attribute.String("spillway.retry_dropped", why))
 	}
+}
+
+// newTraceID returns a random trace ID for the access log of a request that
+// gets no span (a shed one) and brought none.
+func newTraceID() string {
+	var id trace.TraceID
+	binary.BigEndian.PutUint64(id[:8], rand.Uint64()) //nolint:gosec // G404: an identifier, not a secret
+	binary.BigEndian.PutUint64(id[8:], rand.Uint64()) //nolint:gosec // G404: an identifier, not a secret
+	return id.String()
 }

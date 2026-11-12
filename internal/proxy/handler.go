@@ -102,6 +102,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// its place until its tunnel closes. A shed request gets no span.
 	if !h.inFlight.TryAcquire(h.maxInFlight) {
 		q.TraceID = telemetry.TraceID(r.Header)
+		if q.TraceID == "" && h.tracer != nil {
+			q.TraceID = newTraceID() // with tracing on, every line has one (ADR-0030)
+		}
 		shed(rw, &q)
 		return
 	}
