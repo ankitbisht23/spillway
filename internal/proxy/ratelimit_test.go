@@ -444,6 +444,33 @@ policies: [{name: writes, level: global, match: {routes: ['*'], methods: [POST]}
 	}
 }
 
+// TestRateLimitHead: HEAD on a GET-only route matches that route, not the
+// broader one after it, and so meets its limits; {method} keeps the real
+// method (D1, ADR-0030).
+func TestRateLimitHead(t *testing.T) {
+	u := newUpstream(t, "orders")
+	g := newGateway(t, newResolver(u), fmt.Sprintf(`
+upstreams: [{name: orders, endpoints: [{address: 'orders:%s'}]}]
+routes:
+  - {name: reads, match: {path_prefix: /reads, methods: [GET]}, upstream: orders}
+  - {name: default, match: {path_prefix: /}, upstream: orders}
+policies:
+  - {name: reads, level: route, match: {routes: [reads]}, key_template: '{route}', algorithm: fixed_window, limits: [{rate: 2, period: 1m}], local: true}
+  - {name: per-method, level: global, match: {routes: [reads], methods: [GET]}, key_template: '{method}', algorithm: fixed_window, limits: [{rate: 1, period: 1m}], local: true}
+`, u.port()))
+	for i, want := range []struct {
+		method string
+		status int
+	}{{"HEAD", 200}, {"GET", 200}, {"HEAD", 429}, {"GET", 429}} {
+		if got := g.send(t, want.method, "/reads/1", http.Header{"X-Request-Id": {fmt.Sprint("head-", i)}}); got.status != want.status {
+			t.Errorf("request %d (%s): %d, want %d", i+1, want.method, got.status, want.status)
+		}
+		if line := g.logs.access(t, fmt.Sprint("head-", i)); line["route"] != "reads" {
+			t.Errorf("request %d (%s): route %v, want reads", i+1, want.method, line["route"])
+		}
+	}
+}
+
 // TestRateLimitClientIP: {ip} is the X-Forwarded-For client only when the
 // peer is a trusted proxy; otherwise a spoofed X-Forwarded-For gets no bucket
 // of its own (SEC-05). An IPv6 client's {ip} is its /64. The test client's

@@ -484,6 +484,43 @@ func TestTraceUnsampled(t *testing.T) {
 	}
 }
 
+// TestTraceShed: a shed request gets no span, and its access log line has a
+// trace ID with tracing on: the client's, or a new one (ADR-0030).
+func TestTraceShed(t *testing.T) {
+	sr, tracer := newTracer(t, sdktrace.AlwaysSample())
+	u := newTraceUpstream(t)
+	g, _ := traceGateway(t, tracer, u, traceConfig("", "tu:"+u.port()))
+	g.Close()
+	g.logs = &logBuffer{}
+	rec := telemetry.NewRecorder(prometheus.NewRegistry(), slog.New(slog.NewJSONHandler(g.logs, nil)), 1)
+	g.h = NewHandler(g.current.Load, g.identity.Load, nil, g.reg, g.limiters, nil, false, 0, tracer, rec, slog.New(slog.DiscardHandler))
+	g.Server = httptest.NewServer(g.h)
+	t.Cleanup(g.Close)
+
+	for _, tt := range []struct{ id, traceparent string }{
+		{"shed-new", ""},
+		{"shed-client", "00-" + clientTrace + "-" + clientSpan + "-01"},
+	} {
+		h := http.Header{"X-Request-Id": {tt.id}}
+		if tt.traceparent != "" {
+			h.Set("Traceparent", tt.traceparent)
+		}
+		if r := g.do(t, http.MethodGet, "/", nil, h); r.status != http.StatusServiceUnavailable {
+			t.Fatalf("%s: status %d, want 503", tt.id, r.status)
+		}
+		traceID := fmt.Sprint(g.logs.access(t, tt.id)["trace_id"])
+		if tid, err := trace.TraceIDFromHex(traceID); err != nil || !tid.IsValid() {
+			t.Errorf("%s: access log trace_id %q, want a trace ID", tt.id, traceID)
+		}
+		if tt.traceparent != "" && traceID != clientTrace {
+			t.Errorf("%s: trace ID %s, want the client's %s", tt.id, traceID, clientTrace)
+		}
+	}
+	if n := len(sr.Ended()); n != 0 {
+		t.Errorf("%d spans recorded, want none", n)
+	}
+}
+
 // TestFailureType: an attempt's failure as spans name it (ADR-0030,
 // "Attempt outcomes").
 func TestFailureType(t *testing.T) {

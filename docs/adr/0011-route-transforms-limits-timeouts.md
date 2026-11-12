@@ -1,6 +1,6 @@
 # 0011. Route transforms, size limits and timeouts
 
-- **Status:** Accepted
+- **Status:** Accepted; stalled request bodies superseded by 0033
 - **Date:** 2026-11-04
 - **Requirement IDs:** GW-02, GW-03, GW-11, GW-28, SEC-07
 

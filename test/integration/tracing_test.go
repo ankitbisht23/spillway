@@ -135,7 +135,7 @@ func TestTraceInTempo(t *testing.T) {
 	})
 	for i, a := range attempts {
 		if a.ParentSpanID != server.SpanID || a.attr("spillway.attempt") != strconv.Itoa(i+1) || a.attr("http.response.status_code") != "503" ||
-			a.Status.Code != "STATUS_CODE_ERROR" || a.Kind != "SPAN_KIND_CLIENT" || a.attr("spillway.upstream") != "httpbin" {
+			a.Status.Code != "STATUS_CODE_ERROR" || a.Kind != "SPAN_KIND_CLIENT" || a.attr("spillway.upstream") != "httpbin-retry" {
 			t.Errorf("attempt span %d: %+v", i+1, a)
 		}
 		if reason := a.attr("spillway.retry_reason"); i > 0 && reason != "503" {

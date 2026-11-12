@@ -181,3 +181,32 @@ func TestApplyHookCanRejectSnapshot(t *testing.T) {
 		t.Errorf("hook saw versions %v, want [1 2 3]", applied)
 	}
 }
+
+// TestWarnClientChosenKeys: a Redis policy keyed by a client-chosen header
+// is logged once per snapshot load; local, off and header-free policies are
+// not (D2, ADR-0030).
+func TestWarnClientChosenKeys(t *testing.T) {
+	const cfg = `
+policies:
+  - {name: redis-header, level: global, match: {routes: ['*']}, key_template: '{ip}:{header:X-Cart}', algorithm: gcra, limits: [{rate: 10, period: 1s}]}
+  - {name: local-header, level: global, match: {routes: ['*']}, key_template: '{header:X-Cart}', algorithm: gcra, limits: [{rate: 10, period: 1s}], local: true}
+  - {name: off-header, level: global, match: {routes: ['*']}, key_template: '{header:X-Cart}', algorithm: gcra, limits: [{rate: 10, period: 1s}], mode: off}
+  - {name: redis-ip, level: global, match: {routes: ['*']}, key_template: '{ip}', algorithm: gcra, limits: [{rate: 10, period: 1s}]}
+`
+	_, path, logs := newTestWatcher(t, configYAML(1, "/a")+cfg)
+	const warning = "policy keys come from a client-chosen header"
+	if n := strings.Count(logs.String(), warning); n != 1 || !strings.Contains(logs.String(), "policy=redis-header") {
+		t.Errorf("want one warning, for redis-header, got\n%s", logs)
+	}
+	w, err := NewWatcher(path, slog.New(slog.NewTextHandler(logs, nil)), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, path, configYAML(2, "/b")+cfg)
+	if err := w.reload(); err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(logs.String(), warning); n != 3 {
+		t.Errorf("want one warning per load, 3 in all, got %d\n%s", n, logs)
+	}
+}

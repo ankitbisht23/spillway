@@ -28,6 +28,7 @@ type fakeRedis struct {
 	slow        map[string]time.Duration // hash tags whose calls answer this late, or time out at their deadline
 	failRefunds bool                     // every Refund fails as conn
 	deadlines   []time.Time              // of each Call's context
+	arrivals    []time.Time              // when each Call arrived
 	now         int64
 }
 
@@ -66,6 +67,7 @@ func (f *fakeRedis) Call(ctx context.Context, cost int64, limits []rlredis.Limit
 	f.calls = append(f.calls, line)
 	deadline, _ := ctx.Deadline()
 	f.deadlines = append(f.deadlines, deadline)
+	f.arrivals = append(f.arrivals, time.Now())
 	delay, _ := tagged(f.slow, limits[0].Key)
 	f.mu.Unlock()
 	if delay > 0 {

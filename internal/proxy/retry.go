@@ -235,8 +235,8 @@ func (a *attempts) RoundTrip(out *http.Request) (*http.Response, error) {
 			}
 			endAttemptSpan(span, resp, reason)
 		}
-		var ok bool
-		wait, ok = a.next(ctx, n, total, now, retryable(resp, err, failed, counted))
+		tried = append(tried, ep)
+		next, w, ok := a.next(ctx, n, total, now, retryable(resp, err, failed, counted), tried)
 		if !ok {
 			a.release, a.cancel = release, cancel
 			if err != nil {
@@ -256,7 +256,7 @@ func (a *attempts) RoundTrip(out *http.Request) (*http.Response, error) {
 		}
 		release()
 		cancel()
-		if wait > 0 {
+		if wait = w; wait > 0 {
 			t := time.NewTimer(wait)
 			select {
 			case <-ctx.Done():
@@ -265,34 +265,39 @@ func (a *attempts) RoundTrip(out *http.Request) (*http.Response, error) {
 			case <-t.C:
 			}
 		}
-		tried = append(tried, ep)
-		if ep, err = a.p.pick(a.h.pools.clock.Now(), a.key, tried); err != nil {
-			return nil, err
-		}
+		ep = next
 	}
 }
 
 // next decides at now whether attempt n, whose outcome was retryable or
-// not, is followed by another, and returns the backoff to wait first
-// (ADR-0030, in order): attempts are left, the request may retry and is
-// live, and no 1xx went to the client; the backoff and minAttemptTime fit
-// before the total deadline; the breaker is closed and the request is not
-// a half-open probe; the upstream's budget grants it, which
+// not, is followed by another, and returns its endpoint and the backoff to
+// wait first (ADR-0030, ADR-0033, in order): attempts are left, the request
+// may retry and is live, and no 1xx went to the client; the backoff and
+// minAttemptTime fit before the total deadline; the breaker is closed and
+// the request is not a half-open probe; the upstream has an endpoint for
+// it, preferring one not in tried; the upstream's budget grants it, which
 // gw_retries_total counts either way. A retry not sent is dropped, never
 // queued: the client gets attempt n's answer. The request's span notes why
 // (OB-02).
-func (a *attempts) next(ctx context.Context, n int, total, now time.Time, retryable bool) (time.Duration, bool) {
+func (a *attempts) next(ctx context.Context, n int, total, now time.Time, retryable bool, tried []*endpoint) (*endpoint, time.Duration, bool) {
 	if !retryable || !a.retry || n >= a.route.Retry.Attempts || ctx.Err() != nil || a.interim.Load() {
-		return 0, false
+		return nil, 0, false
 	}
 	wait := backoff(n, a.h.jitter)
 	if !time.Now().Add(wait + minAttemptTime).Before(total) {
 		dropRetry(ctx, "deadline")
-		return 0, false
+		return nil, 0, false
 	}
 	if !a.pass.MayRetry() {
 		dropRetry(ctx, "breaker")
-		return 0, false
+		return nil, 0, false
+	}
+	// Before the budget, so that a retry with nowhere to go is neither
+	// counted nor charged (a DNS refresh left the upstream no address).
+	ep, err := a.p.pick(now, a.key, tried)
+	if err != nil {
+		dropRetry(ctx, "no_address")
+		return nil, 0, false
 	}
 	b := &a.p.settings.Load().RetryBudget
 	sent := a.p.budget.TryRetry(now, b.Ratio, b.MinPerSec)
@@ -300,5 +305,5 @@ func (a *attempts) next(ctx context.Context, n int, total, now time.Time, retrya
 	if !sent {
 		dropRetry(ctx, "budget_exhausted")
 	}
-	return wait, sent
+	return ep, wait, sent
 }

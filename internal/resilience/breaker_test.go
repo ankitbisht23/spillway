@@ -239,6 +239,33 @@ func TestBreakerCloses(t *testing.T) {
 	bt.want(Closed)
 }
 
+// TestBreakerStaleOutcome: a request admitted while closed whose attempt
+// ends after the breaker opened, went half-open and closed again counts for
+// nothing in the fresh window (ADR-0030).
+func TestBreakerStaleOutcome(t *testing.T) {
+	bt := newBreakerTest(t)
+	stale, err := bt.Acquire(bt.clock.Now(), bt.s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bt.halfOpen()
+	for _, p := range bt.probes(5) {
+		p.Record(bt.clock.Now(), false)
+		p.Done()
+	}
+	bt.want(Closed)
+	stale.Record(bt.clock.Now(), true)
+	stale.Done()
+	if st := bt.Status(bt.clock.Now()); st.Total != 0 || st.Failed != 0 || st.Concurrent != 0 {
+		t.Errorf("after a stale outcome: %+v, want an empty window and nothing in flight", st)
+	}
+	// A request admitted in the new closed state counts.
+	bt.request(true)
+	if st := bt.Status(bt.clock.Now()); st.Total != 1 || st.Failed != 1 {
+		t.Errorf("after a fresh outcome: %+v, want 1 of 1 failed", st)
+	}
+}
+
 // TestBreakerReopens: any failed probe opens the breaker again for another
 // open_for; the other probes' outcomes then count for nothing.
 func TestBreakerReopens(t *testing.T) {

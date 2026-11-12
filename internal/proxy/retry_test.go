@@ -388,14 +388,17 @@ func TestBackoff(t *testing.T) {
 // the last attempt's answer (GW-12, ADR-0030).
 func TestRetryDeadline(t *testing.T) {
 	f := newFlaky(t, "f")
-	g := retryGateway(t, retryConfig("", "retry: {attempts: 5}, timeouts: {total: 390ms}", f.endpoint()), []*flaky{f})
-	g.h.jitter = func(d time.Duration) time.Duration { return d - 1 } // 25, 50, 100, then 200 ms
+	// Backoffs ten times the real ones, so that the margins are far wider
+	// than a host stall (ADR-0027): 249, 499, 999, then 1999 ms.
+	g := retryGateway(t, retryConfig("", "retry: {attempts: 5}, timeouts: {total: 3500ms}", f.endpoint()), []*flaky{f})
+	g.h.jitter = func(d time.Duration) time.Duration { return 10*d - time.Millisecond }
 	start := time.Now()
 	r := g.do(t, http.MethodGet, "/503/9", nil, nil)
-	// Attempt 4 ends after at least 175 ms of backoff, and 200 + 25 ms
-	// more would pass 390 ms.
-	if elapsed := time.Since(start); r.status != http.StatusServiceUnavailable || r.attempts != "4" || elapsed < 175*time.Millisecond || elapsed >= 390*time.Millisecond {
-		t.Errorf("%d after %s attempts in %v; want 503 after 4, in 175 to 390 ms", r.status, r.attempts, elapsed)
+	// Attempt 4 ends after at least 1747 ms of backoff, and 1999 + 25 ms
+	// more would pass 3500 ms; attempt 3 ended after 747 ms, leaving 1.7 s
+	// to spare for attempt 4.
+	if elapsed := time.Since(start); r.status != http.StatusServiceUnavailable || r.attempts != "4" || elapsed < 1747*time.Millisecond || elapsed >= 3500*time.Millisecond {
+		t.Errorf("%d after %s attempts in %v; want 503 after 4, in 1747 to 3500 ms", r.status, r.attempts, elapsed)
 	}
 	hasMetrics(t, g, `gw_retries_total{outcome="sent",upstream="u"} 3`)
 	if v := g.metric(t, `gw_retries_total{outcome="budget_exhausted",upstream="u"}`); v != 0 {
@@ -557,5 +560,26 @@ func TestRetryAttemptState(t *testing.T) {
 	}
 	if calls := bad.calls.Load(); calls != 2 {
 		t.Errorf("bad got %d attempts, want 2", calls)
+	}
+}
+
+// TestRetryNoAddress: when a DNS refresh leaves the upstream no address
+// between attempts, the retry is dropped before the budget: the client gets
+// the attempt's answer, and no retry is counted (GW-12, GW-13, ADR-0033).
+func TestRetryNoAddress(t *testing.T) {
+	u := newUpstream(t, "e")
+	var g *gateway
+	u.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		(*g.reg.pools.Load())["u"].endpoints.Store(&[]*endpoint{})
+		w.WriteHeader(http.StatusServiceUnavailable)
+	})
+	g = retryGateway(t, retryConfig("", "retry: {attempts: 3}", "e:"+u.port()), nil, u)
+	if r := g.do(t, http.MethodGet, "/", nil, nil); r.status != http.StatusServiceUnavailable || r.attempts != "1" {
+		t.Errorf("%d after %s attempts, want the upstream's 503 after 1", r.status, r.attempts)
+	}
+	for _, outcome := range []string{"sent", "budget_exhausted"} {
+		if v := g.metric(t, `gw_retries_total{outcome="`+outcome+`",upstream="u"}`); v != 0 {
+			t.Errorf("gw_retries_total{outcome=%q} = %v, want 0", outcome, v)
+		}
 	}
 }

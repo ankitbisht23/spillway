@@ -11,6 +11,14 @@ upstreams:
       - address: upstream-1:8080
       - address: upstream-2:8080
       - address: upstream-3:8080
+  # The same endpoints for the retry route alone, so that its demo failures
+  # open only this upstream's breaker and eject only from it (ADR-0030):
+  # about seven GET /retry/status/503 within 10 s open it for 10 s.
+  - name: httpbin-retry
+    endpoints:
+      - address: upstream-1:8080
+      - address: upstream-2:8080
+      - address: upstream-3:8080
 routes:
   - name: delay
     match: { path_prefix: /delay }
@@ -29,7 +37,7 @@ routes:
   - name: retry
     match: { path_prefix: /retry }
     strip_prefix: /retry
-    upstream: httpbin
+    upstream: httpbin-retry
     retry: { attempts: 3 }
   - name: default
     match: { path_prefix: / }
@@ -71,7 +79,8 @@ policies:
   # consumer has a tenant (alice's), shared-tenant runs in the tenant-slot
   # call; shared-global is called after it, and when it denies (the 4th
   # request within 10 s for one X-Shared-Key), the tenant-slot deduction is
-  # refunded (RL-14). Without X-Shared-Key neither applies.
+  # refunded (RL-14). Without X-Shared-Key neither applies. Keyed by a
+  # header the client picks, they log a warning on each load (D2, ADR-0030).
   - name: shared-tenant
     level: tenant
     match: { routes: [shared] }

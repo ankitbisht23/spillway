@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -127,12 +128,30 @@ func TestInFlightCapHTTP2(t *testing.T) {
 
 // connCapServer serves h on a plain or TLS listener with a cap of max
 // connections, and returns the cap, the address, the metrics, and the log.
+// A request for /hold gets 200 and its headers at once, and its body only
+// when its client goes away or the test ends.
 func connCapServer(t *testing.T, max int64, tlsConfig *tls.Config, h http.Handler) (*ConnLimit, string, *prometheus.Registry, *logBuffer) {
 	t.Helper()
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	inner := h
+	h = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/hold" {
+			inner.ServeHTTP(w, r)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_ = http.NewResponseController(w).Flush()
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	})
 	metrics, logs := prometheus.NewRegistry(), &logBuffer{}
 	rec := telemetry.NewRecorder(metrics, slog.New(slog.DiscardHandler), 1)
 	l := NewConnLimit(max, rec, slog.New(slog.NewJSONHandler(logs, nil)))
 	srv := NewServer(h, slog.New(slog.DiscardHandler))
+	srv.ConnState = l.ConnState
 	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -162,6 +181,20 @@ func keepOpen(t *testing.T, addr string) net.Conn {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("first connection: %d, want 200", resp.StatusCode)
 	}
+	return c
+}
+
+// holdOpen sends a request for /hold on a new connection, which then has a
+// request in progress until it is closed; it returns the connection.
+func holdOpen(t *testing.T, addr string) net.Conn {
+	t.Helper()
+	c := dial(t, addr)
+	_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_, _ = io.WriteString(c, "GET /hold HTTP/1.1\r\nHost: x\r\n\r\n")
+	if line, err := bufio.NewReader(c).ReadString('\n'); err != nil || !strings.HasPrefix(line, "HTTP/1.1 200") {
+		t.Fatalf("held connection: %q, %v", line, err)
+	}
+	_ = c.SetReadDeadline(time.Time{})
 	return c
 }
 
@@ -200,12 +233,12 @@ func metricOf(t *testing.T, g prometheus.Gatherer, series string) string {
 	return ""
 }
 
-// TestConnectionCap: past the cap, a connection gets the fixed 503 as soon
-// as its request starts, without the gateway reading the rest, and is
-// closed; one that sends nothing gets nothing within the shed deadline. Each
-// is counted as a shed request, and shedding is logged once a second.
-// Closing a counted connection, hijacked ones included, frees its place
-// (GW-26, ADR-0030).
+// TestConnectionCap: past the cap, with every connection's request in
+// progress, a connection gets the fixed 503 as soon as its request starts,
+// without the gateway reading the rest, and is closed; one that sends
+// nothing gets nothing within the shed deadline. Each is counted as a shed
+// request, and shedding is logged once a second. Closing a counted
+// connection, hijacked ones included, frees its place (GW-26, ADR-0030).
 func TestConnectionCap(t *testing.T) {
 	hijacked := make(chan struct{})
 	l, addr, metrics, logs := connCapServer(t, 1, nil, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -220,7 +253,7 @@ func TestConnectionCap(t *testing.T) {
 		close(hijacked)
 		_, _ = brw.ReadString('\n') // until the client closes
 	}))
-	open := keepOpen(t, addr)
+	open := holdOpen(t, addr)
 	if n := l.Open(); n != 1 {
 		t.Fatalf("%d open, want 1", n)
 	}
@@ -280,6 +313,64 @@ func TestConnectionCap(t *testing.T) {
 	_ = keepOpen(t, addr)
 }
 
+// TestConnectionCapWaiting: at the cap, a new connection takes the place of
+// the one that has waited longest without a request in progress, idle
+// after a response or silent since it connected, which is closed; a
+// connection with a request in progress is never closed for it (GW-26,
+// GW-28, ADR-0033).
+func TestConnectionCapWaiting(t *testing.T) {
+	l, addr, metrics, logs := connCapServer(t, 3, nil, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests) // a refusal keeps the connection open
+	}))
+	held := holdOpen(t, addr)
+	idle := keepOpenStatus(t, addr, http.StatusTooManyRequests)
+	silent := dial(t, addr)
+	waitFor(t, "3 open", func() bool { return l.Open() == 3 })
+	closed := func(c net.Conn) bool {
+		_ = c.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+		_, err := c.Read(make([]byte, 1))
+		return err != nil && !errors.Is(err, os.ErrDeadlineExceeded)
+	}
+
+	// The idle connection has waited longest: it gives way.
+	next := keepOpenStatus(t, addr, http.StatusTooManyRequests)
+	if !closed(idle) || closed(silent) || closed(held) {
+		t.Errorf("after a fourth connection: idle closed %v, silent %v, held %v; want only the idle one", closed(idle), closed(silent), closed(held))
+	}
+	// Then the silent one, which waited before next went idle.
+	_ = keepOpenStatus(t, addr, http.StatusTooManyRequests)
+	if !closed(silent) || closed(next) || closed(held) {
+		t.Errorf("after a fifth connection: silent closed %v, next %v, held %v; want only the silent one", closed(silent), closed(next), closed(held))
+	}
+	if n := l.Open(); n != 3 {
+		t.Errorf("%d open, want 3", n)
+	}
+	if v := metricOf(t, metrics, shedSeries); v != "" {
+		t.Errorf("%s = %q, want none shed", shedSeries, v)
+	}
+	if !strings.Contains(logs.String(), `"msg":"closing waiting connections at the connection cap","connections":1,"max_connections":3`) {
+		t.Errorf("no log line for the closed connection in\n%s", logs.String())
+	}
+}
+
+// keepOpenStatus sends one request on a new connection, checks its status,
+// and leaves the connection open and idle; it returns the connection.
+func keepOpenStatus(t *testing.T, addr string, status int) net.Conn {
+	t.Helper()
+	c := dial(t, addr)
+	_, _ = io.WriteString(c, "GET / HTTP/1.1\r\nHost: x\r\n\r\n")
+	resp, err := http.ReadResponse(bufio.NewReader(c), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != status {
+		t.Fatalf("status %d, want %d", resp.StatusCode, status)
+	}
+	return c
+}
+
 // TestConnectionCapTLS: on the TLS listener a shed connection gets a
 // handshake whose ALPN offers only HTTP/1.1, then the same 503, even for a
 // client that prefers HTTP/2 (ADR-0030).
@@ -291,9 +382,15 @@ func TestConnectionCapTLS(t *testing.T) {
 		t.Cleanup(cl.CloseIdleConnections)
 		return cl
 	}
-	if f := fetch(t, client(), "https://"+addr+"/"); f.proto != "HTTP/2.0" { // stays open, idle
-		t.Errorf("first connection: %s, want HTTP/2", f.proto)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://"+addr+"/hold", nil)
+	if err != nil {
+		t.Fatal(err)
 	}
+	resp, err := client().Do(req) // its stream stays open
+	if err != nil || resp.Proto != "HTTP/2.0" {
+		t.Fatalf("first connection: %v, %v; want HTTP/2", resp, err)
+	}
+	t.Cleanup(func() { _ = resp.Body.Close() })
 	if n := l.Open(); n != 1 {
 		t.Fatalf("%d open, want 1", n)
 	}
@@ -316,7 +413,7 @@ func TestConnectionCapTLS(t *testing.T) {
 // (ADR-0030).
 func TestShedPathFull(t *testing.T) {
 	_, addr, metrics, _ := connCapServer(t, 1, nil, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
-	keepOpen(t, addr)
+	holdOpen(t, addr)
 	start := time.Now()
 	for i := range maxShedding {
 		c := dial(t, addr)
@@ -333,7 +430,8 @@ func TestShedPathFull(t *testing.T) {
 	if d := time.Since(start); d > shedDeadline/2 {
 		t.Skipf("opening %d connections took %v", maxShedding, d)
 	}
-	if got, err := firstLine(t, addr); got != "" || !errors.Is(err, syscall.ECONNRESET) {
+	// A write after the reset arrived fails with EPIPE instead.
+	if got, err := firstLine(t, addr); got != "" || !errors.Is(err, syscall.ECONNRESET) && !errors.Is(err, syscall.EPIPE) {
 		t.Errorf("past the shed path: got %q, %v; want a reset", got, err)
 	}
 	if v := metricOf(t, metrics, shedSeries); v != "257" {

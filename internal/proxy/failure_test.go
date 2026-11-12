@@ -299,8 +299,10 @@ policies:
 		}
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		if len(f.deadlines) != 2 || !f.deadlines[0].Equal(f.deadlines[1]) || f.deadlines[0].Sub(start) < budget || f.deadlines[0].Sub(start) > budget+10*time.Millisecond {
-			t.Errorf("deadlines %v, want both one %v budget after the first call, just after %v", f.deadlines, budget, start)
+		// The budget starts before the first call arrives, and after the
+		// request was sent: bounds that no host stall can move.
+		if len(f.deadlines) != 2 || !f.deadlines[0].Equal(f.deadlines[1]) || f.deadlines[0].Sub(start) < budget || f.deadlines[0].Sub(f.arrivals[0]) > budget {
+			t.Errorf("deadlines %v, want both one %v budget after the first call (sent after %v, arrived %v)", f.deadlines, budget, start, f.arrivals)
 		}
 	})
 }

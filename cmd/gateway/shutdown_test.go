@@ -109,10 +109,15 @@ func shutdownGateway(t *testing.T, u *shutdownUpstream, drain, grace time.Durati
 // failed.
 func slowRequest(t *testing.T, s settings, u *shutdownUpstream) <-chan int {
 	t.Helper()
-	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
+	return slowRequestWith(t, &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}, "http://"+s.httpAddr+"/slow", u)
+}
+
+// slowRequestWith is slowRequest with client to url.
+func slowRequestWith(t *testing.T, client *http.Client, url string, u *shutdownUpstream) <-chan int {
+	t.Helper()
 	code := make(chan int, 1)
 	go func() {
-		req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+s.httpAddr+"/slow", nil)
+		req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, url, nil)
 		resp, err := client.Do(req)
 		if err != nil {
 			code <- 0

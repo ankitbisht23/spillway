@@ -1,6 +1,6 @@
 # 0032. Answering shed connections
 
-- **Status:** Accepted
+- **Status:** Accepted; which connections are shed at the cap superseded by 0033
 - **Date:** 2026-11-12
 - **Requirement IDs:** GW-26
 

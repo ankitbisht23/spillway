@@ -287,3 +287,32 @@ func FuzzLoad(f *testing.F) {
 		}
 	})
 }
+
+// TestHeadMatchesGet: a route that lists GET and not HEAD matches HEAD too,
+// so a HEAD request cannot skip it for a broader route; a route on the same
+// host and path that lists HEAD itself keeps HEAD (D1, ADR-0030, ADR-0033).
+func TestHeadMatchesGet(t *testing.T) {
+	s, err := parse([]byte(upstream + `routes:
+  - {name: reads, upstream: u, match: {path_prefix: /reads, methods: [GET]}}
+  - {name: writes, upstream: u, match: {path_prefix: /writes, methods: [POST]}}
+  - {name: page, upstream: u, match: {path: /page, methods: [GET]}}
+  - {name: page-head, upstream: u, match: {path: /page, methods: [HEAD]}}
+  - {name: all, upstream: u, match: {path_prefix: /}}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct{ method, path, want string }{
+		{"GET", "/reads/1", "reads"},
+		{"HEAD", "/reads/1", "reads"},
+		{"OPTIONS", "/reads/1", "all"},
+		{"HEAD", "/writes", "all"},
+		{"GET", "/page", "page"},
+		{"HEAD", "/page", "page-head"},
+	} {
+		r, _, ok := s.Match("x", tt.method, tt.path, http.Header{})
+		if !ok || r.Name != tt.want {
+			t.Errorf("%s %s: route %v, want %s", tt.method, tt.path, r, tt.want)
+		}
+	}
+}
