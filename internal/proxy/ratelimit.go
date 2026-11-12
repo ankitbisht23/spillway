@@ -93,9 +93,20 @@ func newLimits(s *config.Snapshot, route *config.Route, registry *local.Registry
 		values: config.KeyValues{Route: route.Name, Method: strings.ToUpper(r.Method), Header: r.Header},
 	}
 	if ip.IsValid() && len(s.Policies) > 0 {
-		l.values.IP = ip.String() // invalid only if the peer address did not parse: {ip} stays unfilled
+		l.values.IP = ipKey(ip) // invalid only if the peer address did not parse: {ip} stays unfilled
 	}
 	return l
+}
+
+// ipKey is {ip} for a client IP: an IPv4 address in full, an IPv6 one as its
+// /64, the smallest block one subscriber is normally given, so a client
+// cannot get a fresh bucket per address (ADR-0021, U2). ClientIP has already
+// made an IPv4-mapped address IPv4.
+func ipKey(ip netip.Addr) string {
+	if ip.Is4() {
+		return ip.String()
+	}
+	return netip.PrefixFrom(ip, 64).Masked().String()
 }
 
 // identify fills the identity placeholders for phase 2 from the request's

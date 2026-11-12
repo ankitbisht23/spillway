@@ -446,7 +446,8 @@ policies: [{name: writes, level: global, match: {routes: ['*'], methods: [POST]}
 
 // TestRateLimitClientIP: {ip} is the X-Forwarded-For client only when the
 // peer is a trusted proxy; otherwise a spoofed X-Forwarded-For gets no bucket
-// of its own (SEC-05). The test client's peer is 127.0.0.1.
+// of its own (SEC-05). An IPv6 client's {ip} is its /64. The test client's
+// peer is 127.0.0.1.
 func TestRateLimitClientIP(t *testing.T) {
 	policy := `
 policies: [{name: per-ip, level: global, match: {routes: ['*']}, key_template: '{ip}', algorithm: fixed_window, limits: [{rate: 1, period: 1m}], local: true}]
@@ -475,6 +476,11 @@ policies: [{name: per-ip, level: global, match: {routes: ['*']}, key_template: '
 			{"203.0.113.4", 429},
 			{"", 200},          // no header: the peer
 			{"not-an-ip", 429}, // malformed: the peer
+			{"::ffff:203.0.113.9", 200},
+			{"203.0.113.9", 429}, // IPv4-mapped is IPv4
+			{"2001:db8:1:2::1", 200},
+			{"2001:db8:1:2:ffff::7", 429}, // IPv6 is limited per /64 (ADR-0021, U2)
+			{"2001:db8:1:3::1", 200},
 		}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
