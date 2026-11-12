@@ -465,7 +465,7 @@ func TestClientBreaker(t *testing.T) {
 		case drop:
 			return ""
 		case slow:
-			time.Sleep(20 * time.Millisecond)
+			time.Sleep(200 * time.Millisecond)
 		}
 		return allowedReply
 	})
@@ -473,8 +473,11 @@ func TestClientBreaker(t *testing.T) {
 	c := NewClient([]string{f.addr}, nil, clock, slog.New(slog.DiscardHandler))
 	defer func() { _ = c.Close() }()
 	c.stop() // the test runs the health check rounds itself
+	// The budget leaves room for a call to dial and set up a connection
+	// under a loaded -race run, since each timeout discards its connection;
+	// slow answers come well after it.
 	budget := func() (Result, error) {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 		defer cancel()
 		return c.Call(ctx, 1, oneLimit)
 	}
@@ -502,6 +505,14 @@ func TestClientBreaker(t *testing.T) {
 				t.Fatalf("%s: %d request connections opened on closing, want %d", step, f.count("ping")-pings-1, refillConns)
 			}
 		}
+		// The fake counts a PING before the client has its answer, and the
+		// refill hands its connections back to the pool only once every
+		// PING is answered: wait for them on the client's side.
+		for deadline := time.Now().Add(5 * time.Second); idleConns(c) < refillConns; time.Sleep(time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatalf("%s: %d idle request connections after the refill, want %d", step, idleConns(c), refillConns)
+			}
+		}
 		// As many concurrent calls find them open: none dials (HELLO).
 		dials := f.count("hello")
 		var wg sync.WaitGroup
@@ -524,20 +535,31 @@ func TestClientBreaker(t *testing.T) {
 			t.Fatalf("script error %d: %v", i+1, err)
 		}
 	}
+	if n := f.count("evalsha"); n != 10 {
+		t.Errorf("script sent %d times, want 10", n)
+	}
 	mode.Store(slow)
+	sent := f.count("evalsha")
 	for i := range 10 {
 		if _, err := budget(); !isKind(err, KindTimeout) {
 			t.Fatalf("timeout %d: %v", i+1, err)
 		}
 	}
+	// A call may time out while it still dials; most reach the node.
+	if n := f.count("evalsha") - sent; n < 1 {
+		t.Errorf("slow: script sent %d times, want at least 1", n)
+	}
 	mode.Store(drop)
+	sent = f.count("evalsha")
 	for i := range 3 {
 		if _, err := callFake(t, c); !isKind(err, KindConn) || errors.Is(err, errBreakerOpen) {
 			t.Fatalf("broken connection %d: %v, want a conn error from the node", i+1, err)
 		}
 	}
-	if n := f.count("evalsha"); n != 23 {
-		t.Errorf("script sent %d times, want 23: script errors and timeouts never open the breaker", n)
+	// Script errors and timeouts never opened the breaker: each broken
+	// connection's call still reached the node.
+	if n := f.count("evalsha") - sent; n != 3 {
+		t.Errorf("drop: script sent %d times, want 3", n)
 	}
 	slotLoads := f.count("cluster")
 	mustOpen("after 3 broken connections")
@@ -563,6 +585,16 @@ func TestClientBreaker(t *testing.T) {
 	mustOpen("after 3 missed PINGs")
 	f.paused.Store(false)
 	mustClose("after the node is back")
+}
+
+// idleConns is the number of idle connections in c's request pools.
+func idleConns(c *Client) uint32 {
+	var n atomic.Uint32
+	_ = c.rdb.ForEachShard(context.Background(), func(_ context.Context, node *goredis.Client) error {
+		n.Add(node.PoolStats().IdleConns)
+		return nil
+	})
+	return n.Load()
 }
 
 // TestPingerOptions: the health checks' clients have maintenance
