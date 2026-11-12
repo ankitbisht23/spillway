@@ -30,7 +30,7 @@ import (
 // Upstreams are balanced round robin, so that half of the requests start
 // on the failing endpoint and each retry has one candidate left, and
 // outlier ejection is held off, so that the failing endpoint stays in
-// rotation.
+// rotation; so is the breaker of the upstream whose only endpoint fails.
 func TestGatewayRetries(t *testing.T) {
 	fault, tight := newFaultProxy(t, "127.0.0.1:9103"), newFaultProxy(t, "127.0.0.1:9103")
 	refused := freeAddr(t) // nothing listens there
@@ -48,6 +48,7 @@ upstreams:
   - name: tight
     endpoints: [{address: '%s'}]
     retry_budget: {ratio: 0.1, min_per_sec: 0.1}
+    circuit: {min_requests: 1000}
 routes:
   - {name: faulty, upstream: faulty, match: {path_prefix: /faulty}, strip_prefix: /faulty, retry: {attempts: 3}, timeouts: {per_try: 1s}}
   - {name: refused, upstream: refused, match: {path_prefix: /refused}, strip_prefix: /refused, retry: {attempts: 3}, timeouts: {connect: 1s}}
