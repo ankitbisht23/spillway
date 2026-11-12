@@ -171,7 +171,10 @@ func TestProbe(t *testing.T) {
 	}
 }
 
-const fastHealth = "health_check: {path: /health, interval: 100ms, timeout: 100ms, unhealthy: 2, healthy: 2}"
+// fastHealth probes every 250 ms. A healthy endpoint is marked unhealthy
+// only after 3 probes in a row take over 250 ms, which a stall of the test
+// machine (ADR-0027 saw up to 370 ms) cannot do alone.
+const fastHealth = "health_check: {path: /health, interval: 250ms, timeout: 250ms, unhealthy: 3, healthy: 2}"
 
 // TestHealthChecks: an endpoint whose probes fail is taken out of rotation,
 // and put back once they succeed again; the gauge follows (GW-08).
@@ -395,8 +398,8 @@ func TestReloadKeepsEndpointState(t *testing.T) {
 	b.status.Store(http.StatusServiceUnavailable)      // ejected
 	cfg := func(n int, us ...*upstream) string {
 		return fmt.Sprintf("version: %d\n", n) + upstreamOf(fmt.Sprintf(
-			"health_check: {path: /health, interval: %dms, timeout: 100ms, unhealthy: 2, healthy: 2}, outlier_detection: {consecutive_failures: %d, base_ejection: 1h}",
-			100+n, 3+n%2), us...)
+			"health_check: {path: /health, interval: %dms, timeout: 250ms, unhealthy: 3, healthy: 2}, outlier_detection: {consecutive_failures: %d, base_ejection: 1h}",
+			250+n, 3+n%2), us...)
 	}
 	g := newGateway(t, newResolver(a, b, c, d), cfg(0, a, b, c))
 	waitFor(t, "a unhealthy", func() bool { return !g.endpoint(t, a.addr()).healthy.Load() })
@@ -477,7 +480,7 @@ func TestReloadKeepsEndpointState(t *testing.T) {
 	}
 	waitFor(t, "d probed", func() bool { return d.probes.Load() > 0 })
 	probes := a.probes.Load()
-	time.Sleep(400 * time.Millisecond)
+	time.Sleep(600 * time.Millisecond)
 	if n := a.probes.Load() - probes; n > 1 {
 		t.Errorf("removed endpoint a was probed %d more times", n)
 	}
@@ -499,7 +502,7 @@ func TestHealthCheckRemoved(t *testing.T) {
 		t.Error("without a health check, a is not the same endpoint, healthy")
 	}
 	probes := a.probes.Load()
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(600 * time.Millisecond)
 	if n := a.probes.Load() - probes; n > 1 {
 		t.Errorf("a was probed %d times after the health check was removed", n)
 	}
@@ -513,7 +516,7 @@ func TestHealthCheckRemoved(t *testing.T) {
 	g.reg.Close()
 	time.Sleep(50 * time.Millisecond)
 	probes = a.probes.Load() + b.probes.Load()
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(600 * time.Millisecond)
 	if n := a.probes.Load() + b.probes.Load() - probes; n != 0 {
 		t.Errorf("%d probes after Close", n)
 	}
@@ -528,7 +531,7 @@ func TestRemovedUpstreamStopsProbing(t *testing.T) {
 	g.apply(t, oneUpstream(b))
 	time.Sleep(50 * time.Millisecond)
 	probes := a.probes.Load()
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(600 * time.Millisecond)
 	if n := a.probes.Load() - probes; n != 0 {
 		t.Errorf("a was probed %d times after its upstream was removed", n)
 	}
