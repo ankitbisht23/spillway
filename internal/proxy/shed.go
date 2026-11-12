@@ -24,7 +24,8 @@ const (
 // overloaded is the body of every shed answer (D5).
 const overloaded = `{"error":"overloaded"}`
 
-// shedResponse is written on a shed connection without reading its request.
+// shedResponse is written on a shed connection once its request starts,
+// without reading the rest.
 var shedResponse = "HTTP/1.1 503 Service Unavailable\r\n" +
 	"Retry-After: 1\r\n" +
 	"Connection: close\r\n" +
@@ -36,8 +37,9 @@ var shedResponse = "HTTP/1.1 503 Service Unavailable\r\n" +
 // ConnLimit caps the open client connections across the traffic listeners it
 // wraps (GW-26, ADR-0030). A connection counts from Accept to Close, upgraded
 // ones included. One accepted past the cap never reaches the server and is
-// never queued: it gets a fixed 503 within shedDeadline, or a reset when
-// maxShedding connections are already being shed.
+// never queued: it gets a fixed 503 as soon as its request starts, within
+// shedDeadline, or a reset when maxShedding connections are already being
+// shed.
 type ConnLimit struct {
 	max      int64
 	open     resilience.Gate
@@ -122,11 +124,17 @@ func (l *ConnLimit) note() {
 // is set, then half-closes it and reads until the client closes, so that
 // unread request bytes don't turn the close into a reset that could discard
 // the answer. Everything ends within shedDeadline.
+//
+// The answer waits for the request's first byte, and the rest is never
+// parsed: an HTTP/1.1 client may fail a request whose answer arrived before
+// it sent it, as unsolicited (Go's transport did for 0.3% to 1% of shed
+// connections inside the compose network). A client that sends nothing within the
+// deadline gets no answer.
 func answerShed(c net.Conn, tlsConfig *tls.Config) {
 	defer func() { _ = c.Close() }()
 	deadline := time.Now().Add(shedDeadline)
 	_ = c.SetDeadline(deadline)
-	var w io.Writer = c
+	var rw io.ReadWriter = c
 	if tlsConfig != nil {
 		ctx, cancel := context.WithDeadline(context.Background(), deadline)
 		defer cancel()
@@ -134,12 +142,15 @@ func answerShed(c net.Conn, tlsConfig *tls.Config) {
 		if tc.HandshakeContext(ctx) != nil {
 			return
 		}
-		w = tc
+		rw = tc
 	}
-	if _, err := io.WriteString(w, shedResponse); err != nil {
+	if _, err := rw.Read(make([]byte, 1)); err != nil {
 		return
 	}
-	if tc, ok := w.(*tls.Conn); ok {
+	if _, err := io.WriteString(rw, shedResponse); err != nil {
+		return
+	}
+	if tc, ok := rw.(*tls.Conn); ok {
 		_ = tc.CloseWrite() // close_notify
 	}
 	if tc, ok := c.(*net.TCPConn); ok {

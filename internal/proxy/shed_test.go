@@ -200,10 +200,12 @@ func metricOf(t *testing.T, g prometheus.Gatherer, series string) string {
 	return ""
 }
 
-// TestConnectionCap: past the cap, a connection gets the fixed 503 at once,
-// without the gateway reading its request, and is closed; it is counted as
-// a shed request and logged once a second. Closing a counted connection,
-// hijacked ones included, frees its place (GW-26, ADR-0030).
+// TestConnectionCap: past the cap, a connection gets the fixed 503 as soon
+// as its request starts, without the gateway reading the rest, and is
+// closed; one that sends nothing gets nothing within the shed deadline. Each
+// is counted as a shed request, and shedding is logged once a second.
+// Closing a counted connection, hijacked ones included, frees its place
+// (GW-26, ADR-0030).
 func TestConnectionCap(t *testing.T) {
 	hijacked := make(chan struct{})
 	l, addr, metrics, logs := connCapServer(t, 1, nil, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -223,10 +225,11 @@ func TestConnectionCap(t *testing.T) {
 		t.Fatalf("%d open, want 1", n)
 	}
 
-	// A raw connection that sends nothing gets the answer.
+	// A raw connection gets the answer after its request's first bytes.
 	start := time.Now()
 	raw := dial(t, addr)
 	_ = raw.SetDeadline(time.Now().Add(5 * time.Second))
+	_, _ = io.WriteString(raw, "GET / HT")
 	got, err := io.ReadAll(raw)
 	if d := time.Since(start); d > time.Second {
 		t.Errorf("shed connection answered in %v, want at once", d)
@@ -249,6 +252,17 @@ func TestConnectionCap(t *testing.T) {
 	}
 	if n := l.Open(); n != 1 {
 		t.Errorf("%d open after shedding, want 1", n)
+	}
+
+	// A connection that sends nothing is closed at the shed deadline,
+	// unanswered.
+	silent := dial(t, addr)
+	_ = silent.SetDeadline(time.Now().Add(5 * time.Second))
+	if got, err := io.ReadAll(silent); len(got) != 0 || err != nil {
+		t.Errorf("silent connection got %q, %v; want nothing, then EOF", got, err)
+	}
+	if v := metricOf(t, metrics, shedSeries); v != "3" {
+		t.Errorf("%s = %q, want 3", shedSeries, v)
 	}
 
 	// Closing the open connection frees its place; a hijacked connection
@@ -307,6 +321,7 @@ func TestShedPathFull(t *testing.T) {
 	for i := range maxShedding {
 		c := dial(t, addr)
 		_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
+		_, _ = io.WriteString(c, "GET / HTTP/1.1\r\n")
 		line, err := bufio.NewReader(c).ReadString('\n')
 		if err != nil || !strings.HasPrefix(line, "HTTP/1.1 503") {
 			t.Fatalf("shed connection %d: %q, %v", i+1, line, err)
@@ -330,15 +345,19 @@ func TestShedPathFull(t *testing.T) {
 	})
 }
 
-// firstLine opens a connection to addr and returns the first line it reads.
-// A reset can come while connecting or while reading.
+// firstLine opens a connection to addr, starts a request, and returns the
+// first line it reads. A reset can come while connecting, writing or
+// reading.
 func firstLine(t *testing.T, addr string) (string, error) {
 	c, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", addr)
 	if err != nil {
 		return "", err
 	}
 	defer func() { _ = c.Close() }()
-	_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_ = c.SetDeadline(time.Now().Add(5 * time.Second))
+	if _, err := io.WriteString(c, "GET / HTTP/1.1\r\n"); err != nil {
+		return "", err
+	}
 	return bufio.NewReader(c).ReadString('\n')
 }
 
