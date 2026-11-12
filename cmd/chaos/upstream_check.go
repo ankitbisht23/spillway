@@ -107,11 +107,12 @@ type traceRule struct {
 	Retried int  `json:"retried_requests"` // sent at or after t_f with Spillway-Attempts >= 2
 	// Retried requests sent before t_f (in flight when the fault began):
 	// not checked, shown for information.
-	RetriedBefore int           `json:"retried_before_fault"`
-	Checked       int           `json:"checked"`
-	Matched       int           `json:"matched"`
-	AttemptSpans  int           `json:"attempt_spans"`
-	Results       []traceResult `json:"results"`
+	RetriedBefore   int           `json:"retried_before_fault"`
+	RetriedBeforeMS []float64     `json:"retried_before_fault_sent_ms,omitempty"` // from t_f
+	Checked         int           `json:"checked"`
+	Matched         int           `json:"matched"`
+	AttemptSpans    int           `json:"attempt_spans"`
+	Results         []traceResult `json:"results"`
 }
 
 type traceResult struct {
@@ -206,6 +207,7 @@ func analyzeUpstream(o upstreamOptions, faultAddr string, r scenarioRun, traces 
 	for _, q := range r.out {
 		if q.sent && q.attempts >= 2 && q.sentAt.Before(tf) {
 			c.RetriedBefore++
+			c.RetriedBeforeMS = append(c.RetriedBeforeMS, float64(q.sentAt.Sub(tf).Microseconds())/1000)
 		}
 	}
 	c.Results, c.Checked = traces, len(traces)

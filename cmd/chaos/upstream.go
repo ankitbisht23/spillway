@@ -19,7 +19,11 @@ import (
 	"github.com/ankitbisht23/spillway/internal/hardware"
 )
 
-const attemptsHeader = "Spillway-Attempts" // dev mode only (ADR-0030)
+const (
+	attemptsHeader = "Spillway-Attempts" // dev mode only (ADR-0030)
+	// faultGap: no request is handed out within this before t_f (drive).
+	faultGap = 1500 * time.Microsecond
+)
 
 // upstreamOptions are "chaos upstream"'s flags.
 type upstreamOptions struct {
@@ -282,23 +286,29 @@ func (s *upstreamSender) drive(ctx context.Context) scenarioRun {
 	var scrapes sync.WaitGroup
 	scrapes.Go(func() { r.scrapes = s.scrapeLoop(ctx, r.start.Add(-time.Second), stopAfter) })
 
-	// The fault starts a quarter of a request interval before the request
-	// due at -fault-after (0.5 ms at 500 rps), not at the same instant: a
-	// request sent just before t_f is then at least 1.5 ms ahead of the
-	// fault request, so it reaches the mock before the fault does, and every
-	// request the fault can hit was sent at or after t_f (rule c's set).
-	var faultDone sync.WaitGroup
-	faultDone.Add(1)
-	timer := time.AfterFunc(time.Until(r.start.Add(s.faultAfter-interval/4)), func() {
-		defer faultDone.Done()
-		r.faultAt = time.Now()
-		r.faultErr = setFault(ctx, s.control, s.upstreamOptions.control, s.fault)
-	})
-
+	// The drive loop itself starts the fault, between two requests: at
+	// -fault-after, or later, at least faultGap after it handed out the
+	// last request before it. A request sent just before t_f would race
+	// the fault request to the mock (it goes through the gateway, the fault
+	// request does not) and could be one of the failures that eject the
+	// endpoint while it is not in rule (c)'s set. When the sender runs
+	// late, that is up to faultGap after -fault-after; no request waits.
+	faultAt := r.start.Add(s.faultAfter)
+	gap := min(faultGap, interval*3/4)
+	var lastSent time.Time
+	var fault sync.WaitGroup
 	inFlight := make(chan struct{}, maxInFlight)
 	var wg sync.WaitGroup
 	for i := range r.out {
 		q := &r.out[i]
+		if r.faultAt.IsZero() && !q.due.Before(faultAt) {
+			sleepUntil(ctx, later(faultAt, lastSent.Add(gap)))
+			if ctx.Err() != nil {
+				break
+			}
+			r.faultAt = time.Now()
+			fault.Go(func() { r.faultErr = setFault(ctx, s.control, s.upstreamOptions.control, s.fault) })
+		}
 		sleepUntil(ctx, q.due)
 		if ctx.Err() != nil {
 			break
@@ -308,16 +318,15 @@ func (s *upstreamSender) drive(ctx context.Context) scenarioRun {
 		default:
 			continue // dropped
 		}
-		q.sent = true
+		q.sent, lastSent = true, time.Now()
 		wg.Go(func() {
 			defer func() { <-inFlight }()
 			s.send(ctx, i, q)
 		})
 	}
 	wg.Wait()
-	if !timer.Stop() {
-		faultDone.Wait()
-	} else {
+	fault.Wait()
+	if r.faultAt.IsZero() {
 		r.faultErr = errors.New("the run ended before the fault")
 	}
 	for _, q := range r.out {
@@ -328,6 +337,13 @@ func (s *upstreamSender) drive(ctx context.Context) scenarioRun {
 	stopAfter <- r.lastAnswer.Add(2 * time.Second)
 	scrapes.Wait()
 	return r
+}
+
+func later(a, b time.Time) time.Time {
+	if a.After(b) {
+		return a
+	}
+	return b
 }
 
 func randomHex(n int) string {
