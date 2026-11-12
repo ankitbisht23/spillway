@@ -254,6 +254,7 @@ func startGateway(t *testing.T, addrMap, config string) *hostGateway {
 		"SPILLWAY_GATEWAY_ALLOWED_NETWORKS=127.0.0.0/8",
 		"SPILLWAY_GATEWAY_REDIS_ADDRS=redis-0:6379,redis-1:6379,redis-2:6379,redis-3:6379,redis-4:6379,redis-5:6379",
 		"SPILLWAY_REDIS_ADDR_MAP=" + addrMap,
+		"SPILLWAY_GATEWAY_DRAIN=0s", // tests stop it at once (GW-23)
 	}
 	cmd.Stdout, cmd.Stderr = g.out, g.out
 	if err := cmd.Start(); err != nil {

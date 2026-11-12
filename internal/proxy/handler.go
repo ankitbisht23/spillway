@@ -18,6 +18,7 @@ import (
 
 	"github.com/ankitbisht23/spillway/internal/config"
 	"github.com/ankitbisht23/spillway/internal/ratelimit/local"
+	"github.com/ankitbisht23/spillway/internal/resilience"
 	"github.com/ankitbisht23/spillway/internal/router"
 	"github.com/ankitbisht23/spillway/internal/telemetry"
 )
@@ -177,7 +178,16 @@ func (h *Handler) serve(w *responseRecorder, r *http.Request, body *countingBody
 	}
 	p := h.pools.pool(route.Upstream)
 	q.Upstream = p.name
-	key := hashKey(p.settings.Load(), lim, ip)
+	up := p.settings.Load()
+	// The circuit breaker and max_concurrent (GW-14), before an endpoint
+	// is chosen.
+	pass, err := p.breaker.Acquire(h.pools.clock.Now(), &up.Circuit)
+	if err != nil {
+		circuitError(w, err, q)
+		return
+	}
+	defer pass.Done()
+	key := hashKey(up, lim, ip)
 	ep, err := p.pick(h.pools.clock.Now(), key, nil)
 	if err != nil {
 		q.Reason = telemetry.ReasonUpstream
@@ -202,7 +212,7 @@ func (h *Handler) serve(w *responseRecorder, r *http.Request, body *countingBody
 
 	// Retries (GW-12): a body is buffered for them only when the route
 	// and method could retry, and only up to maxRetryBody (ADR-0030).
-	a := &attempts{h: h, p: p, route: route, q: q, body: body, key: key, first: ep, retry: mayRetry(&route.Retry, r.Method)}
+	a := &attempts{h: h, p: p, route: route, q: q, body: body, pass: pass, key: key, first: ep, retry: mayRetry(&route.Retry, r.Method)}
 	if a.retry && r.ContentLength != 0 {
 		a.buf, r.Body, a.buffered = bufferBody(r.Body, r.ContentLength)
 		a.retry = a.buffered
@@ -289,6 +299,19 @@ func hashKey(up *config.Upstream, lim *limits, ip netip.Addr) string {
 	return key
 }
 
+// circuitError answers a request the upstream's circuit breaker or one of
+// its caps refused: 503 at once, with Retry-After the whole seconds until
+// the breaker lets probes through, at least 1 (GW-14, ADR-0030).
+func circuitError(w http.ResponseWriter, err error, q *telemetry.Request) {
+	q.Reason = telemetry.ReasonCircuitOpen
+	retryAfter, msg := time.Second, "upstream overloaded"
+	if oe, ok := errors.AsType[*resilience.OpenError](err); ok {
+		retryAfter, msg = oe.RetryAfter, "upstream circuit open"
+	}
+	w.Header().Set("Retry-After", strconv.FormatInt(max(1, int64((retryAfter+time.Second-1)/time.Second)), 10))
+	jsonError(w, http.StatusServiceUnavailable, msg)
+}
+
 // releaseBody is a response body that calls release when it is closed.
 type releaseBody struct {
 	io.ReadCloser
@@ -355,17 +378,17 @@ func headerBytes(r *http.Request) int {
 }
 
 // attemptOutcome classifies an upstream attempt that ended with resp or err
-// for outlier ejection (ADR-0030, "Attempt outcomes"). A 5xx, a connect
-// error, a reset or EOF before the response headers, and the attempt's own
-// deadline are failures; any other response is a success. Outcomes that are
-// the client's doing (it went away, its body failed or was over the route's
-// limit, the idle timeout) or the gateway's (the dial-time allow-list) are
-// not counted.
+// for outlier ejection and the breaker (ADR-0030, "Attempt outcomes"). A
+// 5xx, a connect error, a reset or EOF before the response headers, and the
+// attempt's own deadline are failures; any other response is a success.
+// Outcomes that are the client's doing (it went away, its body failed or was
+// over the route's limit, the idle timeout) or the gateway's (the dial-time
+// allow-list, max_connections, max_pending) are not counted.
 func attemptOutcome(ctx context.Context, resp *http.Response, err error, body *countingBody) (failed, counted bool) {
 	if err == nil {
 		return resp.StatusCode >= 500, true
 	}
-	if body.broken.Load() || errors.Is(err, ErrNotAllowed) {
+	if body.broken.Load() || errors.Is(err, ErrNotAllowed) || errors.Is(err, errConnLimit) || errors.Is(err, errPendingLimit) {
 		return false, false
 	}
 	if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
@@ -388,6 +411,10 @@ func (h *Handler) proxyError(w http.ResponseWriter, r *http.Request, err error, 
 	}
 	if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
 		http.Error(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
+		return
+	}
+	if errors.Is(err, errConnLimit) || errors.Is(err, errPendingLimit) {
+		circuitError(w, err, q)
 		return
 	}
 	q.Reason = telemetry.ReasonUpstream

@@ -51,6 +51,7 @@ type Upstream struct {
 	HashOn      *KeyTemplate // LBConsistentHash's key; nil for the others
 	HealthCheck *HealthCheck // nil means no active checks (GW-08)
 	Outlier     OutlierDetection
+	Circuit     CircuitBreaker
 	RetryBudget RetryBudget
 }
 
@@ -166,6 +167,9 @@ func compileUpstream(u *configpb.Upstream) (*Upstream, error) {
 	}
 	if up.Outlier, err = compileOutlier(u.GetOutlierDetection()); err != nil {
 		return nil, fmt.Errorf("outlier_detection.%w", err)
+	}
+	if up.Circuit, err = compileCircuit(u.GetCircuit()); err != nil {
+		return nil, fmt.Errorf("circuit.%w", err)
 	}
 	if up.RetryBudget, err = compileRetryBudget(u.GetRetryBudget()); err != nil {
 		return nil, fmt.Errorf("retry_budget.%w", err)

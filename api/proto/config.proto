@@ -37,6 +37,9 @@ message Upstream {
   HealthCheck health_check = 5;
   // Passive outlier ejection (GW-09); unset means the defaults (ADR-0030).
   OutlierDetection outlier_detection = 6;
+  // Circuit breaker and concurrency caps (GW-14); unset means the defaults
+  // (ADR-0030).
+  CircuitBreaker circuit = 7;
   // Limits the upstream's retries (GW-13); unset means the defaults
   // (ADR-0030).
   RetryBudget retry_budget = 8;
@@ -89,6 +92,37 @@ message OutlierDetection {
   // At most this share of an upstream's endpoints, rounded down, is ejected
   // at once: 1 to 100. Unset means 50.
   int32 max_ejected_percent = 4;
+}
+
+// CircuitBreaker protects an upstream (GW-14, ADR-0030): caps that answer
+// 503 at once when full, and a state machine over its attempts' outcomes
+// that opens when too many fail, answering 503 without sending anything, then
+// lets a few probe requests through before closing again.
+message CircuitBreaker {
+  // Open connections to the upstream's endpoints: 1 to 1000000. Unset means
+  // 1024.
+  int32 max_connections = 1;
+  // Attempts waiting for a connection: 1 to 1000000. Unset means 1024.
+  int32 max_pending = 2;
+  // Requests sent to the upstream and not finished, retries included: 1 to
+  // 1000000. Unset means 1024.
+  int32 max_concurrent = 3;
+  // The share of failed attempts in the window that opens the breaker: more
+  // than 0 and at most 1. Unset means 0.5.
+  double error_rate = 4;
+  // The rolling window of attempts: a Go duration from 1s to 10m. Unset
+  // means 10s.
+  string window = 5;
+  // Attempts the window must hold before the breaker can open: 1 to
+  // 1000000. Unset means 20.
+  int32 min_requests = 6;
+  // How long the breaker stays open before letting probes through: a Go
+  // duration from 100ms to 10m. Unset means 10s.
+  string open_for = 7;
+  // Requests let through while half-open, each with one attempt; all
+  // succeeding closes the breaker, any failing opens it again: 1 to 1000.
+  // Unset means 5.
+  int32 half_open_probes = 8;
 }
 
 // Endpoint is one address of an upstream.

@@ -33,10 +33,11 @@ type Resolver interface {
 
 // Registry holds each upstream's runtime state, keyed by upstream name and
 // kept outside any snapshot: its connection pool, resolved addresses,
-// settings and retry budget, and each endpoint's health and outlier state,
-// keyed by the endpoint's resolved ip:port. A reload keeps the state of the
-// upstreams and endpoints it still has (GW-29, ADR-0030). The registry is a
-// Prometheus collector of gw_upstream_endpoint_healthy.
+// settings, retry budget, circuit breaker and caps, and each endpoint's
+// health and outlier state, keyed by the endpoint's resolved ip:port. A
+// reload keeps the state of the upstreams and endpoints it still has (GW-29,
+// ADR-0030). The registry is a Prometheus collector of
+// gw_upstream_endpoint_healthy and gw_circuit_state.
 type Registry struct {
 	allow    Allowlist
 	resolver Resolver
@@ -45,6 +46,7 @@ type Registry struct {
 	clock    resilience.Clock
 	probes   *http.Transport // health checks', apart from the request pools (ADR-0030)
 	healthy  *prometheus.Desc
+	circuit  *prometheus.Desc
 	ctx      context.Context // probers run until it ends (Close)
 	cancel   context.CancelFunc
 
@@ -61,6 +63,9 @@ type pool struct {
 	endpoints atomic.Pointer[[]*endpoint]     // one per resolved address, published after each resolve
 	next      atomic.Uint64                   // round robin (GW-07)
 	budget    *resilience.Budget              // retries (GW-13)
+	breaker   *resilience.Breaker             // and its max_concurrent cap (GW-14)
+	pending   resilience.Gate                 // max_pending: attempts waiting for a connection
+	conns     resilience.Gate                 // max_connections: open connections of transport
 	panicking atomic.Bool                     // no endpoint was selectable at the last pick
 	ejectMu   sync.Mutex                      // one ejection decision at a time, so the cap holds
 	probe     bool                            // runs probers: false for a pool rebuilt for an older snapshot; guarded by mu
@@ -100,6 +105,8 @@ func NewRegistry(allow Allowlist, resolver Resolver, log *slog.Logger) *Registry
 		clock:    ratelimit.SystemClock,
 		healthy: prometheus.NewDesc("gw_upstream_endpoint_healthy",
 			"1 while the endpoint takes traffic (healthy and not ejected), else 0.", []string{"upstream", "endpoint"}, nil),
+		circuit: prometheus.NewDesc("gw_circuit_state",
+			"The upstream's circuit breaker: 0 closed, 1 open, 2 half-open.", []string{"upstream"}, nil),
 	}
 	r.probes = &http.Transport{
 		Proxy:                  nil,
@@ -143,7 +150,7 @@ func (r *Registry) Apply(s *config.Snapshot) error {
 	for name, up := range s.Upstreams {
 		p := old[name]
 		if p == nil {
-			p = r.newPool(name)
+			p = r.newPool(up)
 		}
 		r.setUpstream(p, up, true)
 		pools[name] = p
@@ -172,7 +179,7 @@ func (r *Registry) pool(up *config.Upstream) *pool {
 	if p := (*r.pools.Load())[up.Name]; p != nil {
 		return p
 	}
-	p := r.newPool(up.Name)
+	p := r.newPool(up)
 	r.setUpstream(p, up, false)
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -209,18 +216,67 @@ func (r *Registry) refresh() {
 	}
 }
 
-func (r *Registry) newPool(name string) *pool {
-	p := &pool{name: name, log: r.log, budget: resilience.NewBudget(), transport: &http.Transport{
-		Proxy:                  nil, // never HTTP_PROXY from the environment
-		DialContext:            r.dial,
+// newPool returns fresh state for up; setUpstream stores its settings.
+func (r *Registry) newPool(up *config.Upstream) *pool {
+	p := &pool{name: up.Name, log: r.log, budget: resilience.NewBudget()}
+	p.breaker = resilience.NewBreaker(up.Circuit.Window, p.logCircuit)
+	p.transport = &http.Transport{
+		Proxy: nil, // never HTTP_PROXY from the environment
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return r.dialCapped(ctx, p, network, addr)
+		},
 		MaxIdleConnsPerHost:    512,
 		IdleConnTimeout:        90 * time.Second,
 		ExpectContinueTimeout:  time.Second,
 		DisableCompression:     true, // pass Content-Encoding through untouched
 		MaxResponseHeaderBytes: 64 << 10,
-	}}
+	}
 	p.endpoints.Store(&[]*endpoint{})
 	return p
+}
+
+// Refusals by an upstream's caps (GW-14, ADR-0030): the gateway's own doing,
+// answered 503 and never counted as the upstream's failures.
+var (
+	errConnLimit    = errors.New("upstream max_connections reached")
+	errPendingLimit = errors.New("upstream max_pending reached")
+)
+
+// dialCapped opens a connection of p's pool unless p has max_connections
+// open, and counts it until it is closed.
+func (r *Registry) dialCapped(ctx context.Context, p *pool, network, address string) (net.Conn, error) {
+	if !p.conns.TryAcquire(int64(p.settings.Load().Circuit.MaxConnections)) {
+		return nil, errConnLimit
+	}
+	c, err := r.dial(ctx, network, address)
+	if err != nil {
+		p.conns.Release()
+		return nil, err
+	}
+	return &countedConn{Conn: c, release: sync.OnceFunc(p.conns.Release)}, nil
+}
+
+// countedConn releases its place in a gate when it is first closed.
+type countedConn struct {
+	net.Conn
+	release func()
+}
+
+func (c *countedConn) Close() error {
+	c.release()
+	return c.Conn.Close()
+}
+
+// logCircuit logs a transition of p's breaker (ADR-0030).
+func (p *pool) logCircuit(t resilience.Transition) {
+	switch t.To {
+	case resilience.Open:
+		p.log.Warn("upstream circuit open", "upstream", p.name, "from", t.From.String(), "error_rate", float64(t.Failed)/float64(t.Total), "requests", t.Total)
+	case resilience.HalfOpen:
+		p.log.Info("upstream circuit half-open", "upstream", p.name)
+	case resilience.Closed:
+		p.log.Info("upstream circuit closed", "upstream", p.name)
+	}
 }
 
 // dial opens an upstream connection within the connect timeout of the route
@@ -241,6 +297,7 @@ func (r *Registry) setUpstream(p *pool, up *config.Upstream, probe bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.settings.Store(up)
+	p.breaker.SetWindow(up.Circuit.Window)
 	p.probe = probe
 	if p.resolved == nil || !slices.Equal(p.configured, up.Endpoints) {
 		p.configured = up.Endpoints
@@ -569,12 +626,17 @@ func (p *pool) record(e *endpoint, now time.Time, failed bool) {
 func (e *endpoint) ejected(now time.Time) bool { return e.outlier.Ejected(now) }
 
 // Describe and Collect make the registry a Prometheus collector of
-// gw_upstream_endpoint_healthy, one series per endpoint while it exists.
-func (r *Registry) Describe(ch chan<- *prometheus.Desc) { ch <- r.healthy }
+// gw_upstream_endpoint_healthy, one series per endpoint while it exists, and
+// gw_circuit_state, one per upstream.
+func (r *Registry) Describe(ch chan<- *prometheus.Desc) {
+	ch <- r.healthy
+	ch <- r.circuit
+}
 
 func (r *Registry) Collect(ch chan<- prometheus.Metric) {
 	now := r.clock.Now()
 	for _, p := range *r.pools.Load() {
+		ch <- prometheus.MustNewConstMetric(r.circuit, prometheus.GaugeValue, float64(p.breaker.State()), p.name)
 		for _, e := range *p.endpoints.Load() {
 			v := 0.0
 			if e.selectable(now) {

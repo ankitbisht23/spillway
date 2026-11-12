@@ -211,3 +211,56 @@ func TestRetryBudgetRejects(t *testing.T) {
 		})
 	}
 }
+
+// TestCircuitSettings: an upstream without circuit has ADR-0030's breaker
+// and caps; set fields replace the defaults one by one (GW-14).
+func TestCircuitSettings(t *testing.T) {
+	def := CircuitBreaker{MaxConnections: 1024, MaxPending: 1024, MaxConcurrent: 1024, ErrorRate: 0.5,
+		Window: 10 * time.Second, MinRequests: 20, OpenFor: 10 * time.Second, HalfOpenProbes: 5}
+	set := CircuitBreaker{MaxConnections: 1, MaxPending: 2, MaxConcurrent: 1_000_000, ErrorRate: 1,
+		Window: 10 * time.Minute, MinRequests: 1, OpenFor: 100 * time.Millisecond, HalfOpenProbes: 1000}
+	tests := []struct {
+		fields string
+		want   CircuitBreaker
+	}{
+		{"", def},
+		{"circuit: {}", def},
+		{"circuit: {max_connections: 1, max_pending: 2, max_concurrent: 1000000, error_rate: 1, window: 10m, min_requests: 1, open_for: 100ms, half_open_probes: 1000}", set},
+	}
+	for _, tt := range tests {
+		s, err := parse([]byte(withUpstream(tt.fields)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := s.Upstreams["u"].Circuit; got != tt.want {
+			t.Errorf("%q: circuit %+v, want %+v", tt.fields, got, tt.want)
+		}
+	}
+}
+
+func TestCircuitRejects(t *testing.T) {
+	tests := []struct{ fields, want string }{
+		{"circuit: {max_connections: -1}", `upstream "u": circuit.max_connections: want 1 to 1000000`},
+		{"circuit: {max_pending: 1000001}", "circuit.max_pending: want 1 to 1000000"},
+		{"circuit: {max_concurrent: -5}", "circuit.max_concurrent: want 1 to 1000000"},
+		{"circuit: {min_requests: 1000001}", "circuit.min_requests: want 1 to 1000000"},
+		{"circuit: {half_open_probes: 1001}", "circuit.half_open_probes: want 1 to 1000"},
+		{"circuit: {error_rate: -0.5}", "circuit.error_rate: want more than 0 and at most 1"},
+		{"circuit: {error_rate: 1.5}", "circuit.error_rate: want more than 0 and at most 1"},
+		{"circuit: {error_rate: NaN}", "circuit.error_rate: want more than 0 and at most 1"},
+		{"circuit: {window: 999ms}", `circuit.window: "999ms" is not a duration from 1s to 10m0s`},
+		{"circuit: {window: 11m}", `circuit.window: "11m" is not a duration from 1s to 10m0s`},
+		{"circuit: {window: ten}", `circuit.window: "ten" is not a duration`},
+		{"circuit: {open_for: 99ms}", `circuit.open_for: "99ms" is not a duration from 100ms to 10m0s`},
+		{"circuit: {open_for: 1h}", `circuit.open_for: "1h" is not a duration`},
+		{"circuit: {max_requests: 5}", `unknown field "max_requests"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.fields, func(t *testing.T) {
+			_, err := parse([]byte(withUpstream(tt.fields)))
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}

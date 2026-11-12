@@ -190,7 +190,9 @@ func (g *gateway) metric(t *testing.T, series string) float64 {
 // one's answer (GW-12, ADR-0030).
 func TestRetryConditions(t *testing.T) {
 	f := newFlaky(t, "f")
-	g := retryGateway(t, retryConfig("", "retry: {attempts: 2}, timeouts: {per_try: 200ms, total: 5s}", f.endpoint()), []*flaky{f})
+	// The breaker is held off: the cases fail more than min_requests
+	// attempts.
+	g := retryGateway(t, retryConfig("circuit: {min_requests: 1000}", "retry: {attempts: 2}, timeouts: {per_try: 200ms, total: 5s}", f.endpoint()), []*flaky{f})
 	tests := []struct {
 		path   string
 		status int
@@ -407,7 +409,8 @@ func TestRetryDeadline(t *testing.T) {
 // gw_retries_total counts both outcomes (GW-13, ADR-0030).
 func TestRetryBudget(t *testing.T) {
 	f := newFlaky(t, "f")
-	g := retryGateway(t, retryConfig("retry_budget: {ratio: 0.1, min_per_sec: 0.1}", "retry: {attempts: 2}", f.endpoint()), []*flaky{f})
+	// The breaker is held off: the 23 attempts all fail.
+	g := retryGateway(t, retryConfig("retry_budget: {ratio: 0.1, min_per_sec: 0.1}, circuit: {min_requests: 1000}", "retry: {attempts: 2}", f.endpoint()), []*flaky{f})
 	clock := ratelimit.NewFakeClock(t0)
 	g.reg.clock = clock
 	g.h.jitter = func(time.Duration) time.Duration { return 0 }
@@ -487,8 +490,10 @@ func TestRetryPrefersUntried(t *testing.T) {
 	for _, lb := range []string{"round_robin", "p2c", "consistent_hash, hash_on: '{header:X-Key}'"} {
 		a, b := newFlaky(t, "a"), newFlaky(t, "b")
 		c := newUpstream(t, "c") // answers every path
-		// Up to 2 retries per request: more than the default budget.
-		g := retryGateway(t, retryConfig("lb: "+lb+", outlier_detection: {consecutive_failures: 1000}, retry_budget: {ratio: 1, min_per_sec: 100}",
+		// Up to 2 retries per request: more than the default budget. Two
+		// of three attempts can fail: more than the breaker's default
+		// error rate.
+		g := retryGateway(t, retryConfig("lb: "+lb+", outlier_detection: {consecutive_failures: 1000}, retry_budget: {ratio: 1, min_per_sec: 100}, circuit: {min_requests: 1000}",
 			"retry: {attempts: 3}", a.endpoint(), b.endpoint(), "c:"+c.port()), []*flaky{a, b}, c)
 		for i := range 30 {
 			if r := g.do(t, http.MethodGet, "/503/9", nil, http.Header{"X-Key": {strconv.Itoa(i)}}); r.status != http.StatusOK {

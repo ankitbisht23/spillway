@@ -3,6 +3,7 @@ package proxy
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptrace"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ankitbisht23/spillway/internal/config"
+	"github.com/ankitbisht23/spillway/internal/resilience"
 	"github.com/ankitbisht23/spillway/internal/telemetry"
 )
 
@@ -72,6 +74,38 @@ type readCloser struct {
 	io.Closer
 }
 
+// pending counts one attempt in its upstream's max_pending gate while it
+// waits for a connection, from httptrace's GetConn to GotConn (GW-14,
+// ADR-0030). An attempt past the cap is cancelled at once with cause
+// errPendingLimit. The hooks run on the attempt's goroutine.
+type pending struct {
+	gate   *resilience.Gate
+	limit  int64
+	cancel context.CancelCauseFunc
+	held   bool
+}
+
+func (p *pending) getConn(string) {
+	if p.held {
+		return
+	}
+	if !p.gate.TryAcquire(p.limit) {
+		p.cancel(errPendingLimit)
+		return
+	}
+	p.held = true
+}
+
+func (p *pending) gotConn(httptrace.GotConnInfo) { p.end() }
+
+// end frees the attempt's place, if it holds one.
+func (p *pending) end() {
+	if p.held {
+		p.held = false
+		p.gate.Release()
+	}
+}
+
 // backoff is the full-jitter wait before attempt n + 1: uniform in
 // [0, min(backoffCap, backoffBase × 2^(n−1))), drawn by jitter.
 func backoff(n int, jitter func(time.Duration) time.Duration) time.Duration {
@@ -111,10 +145,11 @@ type attempts struct {
 	route    *config.Route
 	q        *telemetry.Request
 	body     *countingBody
-	key      string    // the request's consistent-hash key
-	first    *endpoint // the first attempt's endpoint
-	retry    bool      // the route, method and body allow retries
-	buffered bool      // the body is buf, sent again on each attempt
+	pass     *resilience.Pass // the request's place in the upstream's breaker
+	key      string           // the request's consistent-hash key
+	first    *endpoint        // the first attempt's endpoint
+	retry    bool             // the route, method and body allow retries
+	buffered bool             // the body is buf, sent again on each attempt
 	buf      []byte
 	interim  atomic.Bool // a 1xx went to the client: no more retries
 
@@ -152,7 +187,11 @@ func (a *attempts) RoundTrip(out *http.Request) (*http.Response, error) {
 		if total.Before(deadline) {
 			deadline = total
 		}
-		actx, cancel := context.WithDeadline(ctx, deadline)
+		dctx, cancelDeadline := context.WithDeadline(ctx, deadline)
+		actx, cancelCause := context.WithCancelCause(dctx)
+		cancel := func() { cancelCause(nil); cancelDeadline() }
+		pend := &pending{gate: &a.p.pending, limit: int64(a.p.settings.Load().Circuit.MaxPending), cancel: cancelCause}
+		actx = httptrace.WithClientTrace(actx, &httptrace.ClientTrace{GetConn: pend.getConn, GotConn: pend.gotConn})
 		var req *http.Request
 		if n == 1 {
 			req = out.WithContext(actx)
@@ -167,6 +206,10 @@ func (a *attempts) RoundTrip(out *http.Request) (*http.Response, error) {
 		release := ep.begin()
 		start := time.Now()
 		resp, err := a.p.transport.RoundTrip(req)
+		pend.end()
+		if err != nil && errors.Is(context.Cause(actx), errPendingLimit) {
+			err = errPendingLimit
+		}
 		a.h.rec.UpstreamAttempt(a.p.name, n, time.Since(start))
 		now := a.h.pools.clock.Now()
 		if n == 1 {
@@ -175,6 +218,7 @@ func (a *attempts) RoundTrip(out *http.Request) (*http.Response, error) {
 		failed, counted := attemptOutcome(actx, resp, err, a.body)
 		if counted {
 			a.p.record(ep, now, failed) // GW-09
+			a.pass.Record(now, failed)  // GW-14
 		}
 		wait, ok := a.next(ctx, n, total, now, retryable(resp, err, failed, counted))
 		if !ok {
@@ -216,7 +260,8 @@ func (a *attempts) RoundTrip(out *http.Request) (*http.Response, error) {
 // not, is followed by another, and returns the backoff to wait first
 // (ADR-0030, in order): attempts are left, the request may retry and is
 // live, and no 1xx went to the client; the backoff and minAttemptTime fit
-// before the total deadline; the upstream's budget grants it, which
+// before the total deadline; the breaker is closed and the request is not
+// a half-open probe; the upstream's budget grants it, which
 // gw_retries_total counts either way. A retry not sent is dropped, never
 // queued: the client gets attempt n's answer.
 func (a *attempts) next(ctx context.Context, n int, total, now time.Time, retryable bool) (time.Duration, bool) {
@@ -225,6 +270,9 @@ func (a *attempts) next(ctx context.Context, n int, total, now time.Time, retrya
 	}
 	wait := backoff(n, a.h.jitter)
 	if !time.Now().Add(wait + minAttemptTime).Before(total) {
+		return 0, false
+	}
+	if !a.pass.MayRetry() {
 		return 0, false
 	}
 	b := &a.p.settings.Load().RetryBudget
