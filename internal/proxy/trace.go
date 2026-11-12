@@ -211,7 +211,7 @@ func failureType(ctx context.Context, resp *http.Response, err error) string {
 }
 
 // dropRetry notes on the request's server span why a retry it wanted was
-// not sent: budget_exhausted, deadline or breaker.
+// not sent: budget_exhausted, deadline, breaker or no_address.
 func dropRetry(ctx context.Context, why string) {
 	if span := trace.SpanFromContext(ctx); span.IsRecording() {
 		span.SetAttributes(attribute.String("spillway.retry_dropped", why))
