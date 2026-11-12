@@ -487,7 +487,8 @@ func TestRetryPrefersUntried(t *testing.T) {
 	for _, lb := range []string{"round_robin", "p2c", "consistent_hash, hash_on: '{header:X-Key}'"} {
 		a, b := newFlaky(t, "a"), newFlaky(t, "b")
 		c := newUpstream(t, "c") // answers every path
-		g := retryGateway(t, retryConfig("lb: "+lb+", outlier_detection: {consecutive_failures: 1000}",
+		// Up to 2 retries per request: more than the default budget.
+		g := retryGateway(t, retryConfig("lb: "+lb+", outlier_detection: {consecutive_failures: 1000}, retry_budget: {ratio: 1, min_per_sec: 100}",
 			"retry: {attempts: 3}", a.endpoint(), b.endpoint(), "c:"+c.port()), []*flaky{a, b}, c)
 		for i := range 30 {
 			if r := g.do(t, http.MethodGet, "/503/9", nil, http.Header{"X-Key": {strconv.Itoa(i)}}); r.status != http.StatusOK {

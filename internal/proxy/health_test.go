@@ -479,11 +479,14 @@ func TestReloadKeepsEndpointState(t *testing.T) {
 		t.Fatal("a reload replaced the upstream's state")
 	}
 	// Every first attempt and retry since the gateway started is still in
-	// the budget's window.
-	q, r := budget.Counts(g.clock.Now())
-	if first, sent := g.metric(t, `gw_upstream_duration_seconds_count{attempt="1",upstream="u"}`), g.metric(t, `gw_retries_total{outcome="sent",upstream="u"}`); float64(q) != first || float64(r) != sent {
-		t.Errorf("budget holds %d first attempts and %d retries after the reloads, want all %v and %v", q, r, first, sent)
-	}
+	// the budget's window. A handler the load's client left may still make
+	// an attempt, so the counts and the metrics are compared until they
+	// settle; after a reset they never would.
+	waitFor(t, "the budget to hold every first attempt and retry", func() bool {
+		first, sent := g.metric(t, `gw_upstream_duration_seconds_count{attempt="1",upstream="u"}`), g.metric(t, `gw_retries_total{outcome="sent",upstream="u"}`)
+		q, r := budget.Counts(g.clock.Now())
+		return float64(q) == first && float64(r) == sent
+	})
 	for _, u := range []*upstream{a, b, c} {
 		e := g.endpoint(t, u.addr())
 		if e != eps[u.name] {
