@@ -5,10 +5,10 @@
 # upstream 3), and drives the gateway's plain-HTTP listener at a constant
 # rate: 30 s warm-up and 3 min measured, 5 times. The gateway traces a fixed
 # 1% of requests and exports them, with its 1% of access logs, to an OTel
-# Collector that drops them, pinned with the upstream (OB-02, D6, ADR-0030). Prints one JSON result for
-# the run set on stdout: the median and spread of each number, every run's
-# loadgen result, the commit and the hardware, CPU topology included
-# (ADR-0016). Progress goes to stderr.
+# Collector that drops them, pinned with the upstream (OB-02, D6, ADR-0030).
+# Prints one JSON result for the run set on stdout: the median and spread of
+# each number, every run's loadgen result, the commit and the hardware, CPU
+# topology included (ADR-0016). Progress goes to stderr.
 # bench.yml runs it on GitHub Actions; on a laptop it needs Docker with at
 # least 4 CPUs:
 #   test/load/bench.sh > result.json
