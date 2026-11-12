@@ -143,6 +143,70 @@ func compileOutlier(o *configpb.OutlierDetection) (OutlierDetection, error) {
 	return out, nil
 }
 
+// CircuitBreaker is an upstream's compiled circuit breaker and concurrency
+// caps (GW-14, ADR-0030).
+type CircuitBreaker struct {
+	MaxConnections int           // open connections to the upstream's endpoints
+	MaxPending     int           // attempts waiting for a connection
+	MaxConcurrent  int           // requests sent and not finished, retries included
+	ErrorRate      float64       // failed ÷ total attempts in the window that opens the breaker
+	Window         time.Duration // the rolling window of attempts
+	MinRequests    int           // attempts the window holds before the breaker can open
+	OpenFor        time.Duration // open, before half-open
+	HalfOpenProbes int           // requests let through while half-open
+}
+
+// compileCircuit fills in the defaults: every upstream has a breaker
+// (ADR-0030).
+func compileCircuit(c *configpb.CircuitBreaker) (CircuitBreaker, error) {
+	out := CircuitBreaker{MaxConnections: 1024, MaxPending: 1024, MaxConcurrent: 1024, ErrorRate: 0.5,
+		Window: 10 * time.Second, MinRequests: 20, OpenFor: 10 * time.Second, HalfOpenProbes: 5}
+	for _, f := range []struct {
+		name string
+		v    int32
+		max  int32
+		to   *int
+	}{
+		{"max_connections", c.GetMaxConnections(), 1_000_000, &out.MaxConnections},
+		{"max_pending", c.GetMaxPending(), 1_000_000, &out.MaxPending},
+		{"max_concurrent", c.GetMaxConcurrent(), 1_000_000, &out.MaxConcurrent},
+		{"min_requests", c.GetMinRequests(), 1_000_000, &out.MinRequests},
+		{"half_open_probes", c.GetHalfOpenProbes(), 1000, &out.HalfOpenProbes},
+	} {
+		if f.v < 0 || f.v > f.max {
+			return out, fmt.Errorf("%s: want 1 to %d", f.name, f.max)
+		}
+		if f.v > 0 {
+			*f.to = int(f.v)
+		}
+	}
+	if v := c.GetErrorRate(); v != 0 {
+		if !(v > 0 && v <= 1) { // NaN too
+			return out, errors.New("error_rate: want more than 0 and at most 1")
+		}
+		out.ErrorRate = v
+	}
+	for _, f := range []struct {
+		name     string
+		v        string
+		min, max time.Duration
+		to       *time.Duration
+	}{
+		{"window", c.GetWindow(), time.Second, 10 * time.Minute, &out.Window},
+		{"open_for", c.GetOpenFor(), 100 * time.Millisecond, 10 * time.Minute, &out.OpenFor},
+	} {
+		if f.v == "" {
+			continue
+		}
+		d, err := time.ParseDuration(f.v)
+		if err != nil || d < f.min || d > f.max {
+			return out, fmt.Errorf("%s: %q is not a duration from %v to %v", f.name, f.v, f.min, f.max)
+		}
+		*f.to = d
+	}
+	return out, nil
+}
+
 // RetryBudget is an upstream's compiled retry budget (GW-13, ADR-0030): a
 // retry is granted while the retries granted over the last 10 s, it
 // included, are at most Ratio × the first attempts over that time plus

@@ -27,6 +27,9 @@ const (
 	// ReasonFailClosed: the gateway answered 503 because Redis failed for
 	// an enforce-mode fail_closed policy (RL-23).
 	ReasonFailClosed = "fail_closed"
+	// ReasonCircuitOpen: the gateway answered 503 because the upstream's
+	// circuit breaker is open or one of its caps is full (GW-14).
+	ReasonCircuitOpen = "circuit_open"
 
 	BackendLocal = "local" // rate limit checks in the gateway's memory
 	BackendRedis = "redis" // rate limit checks on Redis Cluster (ADR-0021)
@@ -57,7 +60,7 @@ type Request struct {
 	Method   string
 	Status   int
 	Origin   string // OriginGateway or OriginUpstream
-	Reason   string // why the gateway answered itself: ReasonNone or ReasonUpstream
+	Reason   string // why the gateway answered itself: one of the Reason constants
 	Tenant   string // NoTenant until tenants exist (M5)
 	Upstream string // "" if no upstream was chosen
 	Attempts int    // upstream attempts made, 0 if none (GW-12)

@@ -36,6 +36,9 @@ func endpointGauge(t *testing.T, r *Registry) map[string]float64 {
 	}
 	out := map[string]float64{}
 	for _, mf := range mfs {
+		if mf.GetName() != "gw_upstream_endpoint_healthy" {
+			continue
+		}
 		for _, m := range mf.GetMetric() {
 			l := map[string]string{}
 			for _, p := range m.GetLabel() {
@@ -394,11 +397,12 @@ func stateOf(e *endpoint) endpointState {
 }
 
 // TestReloadKeepsEndpointState (GW-29): under steady load, reloads that
-// change settings, the algorithm and retry budget included, but keep the
-// upstream and its endpoints keep every endpoint object with its health,
-// outlier state and in-flight count, and the upstream's retry budget with
-// every first attempt and retry it counted; a reload that replaces one
-// endpoint drops only that one and stops its prober.
+// change settings, the algorithm, retry budget and breaker included, but
+// keep the upstream and its endpoints keep every endpoint object with its
+// health, outlier state and in-flight count, the upstream's retry budget
+// with every first attempt and retry it counted, its breaker with its state,
+// window and requests in flight, and its caps' counts; a reload that
+// replaces one endpoint drops only that one and stops its prober.
 func TestReloadKeepsEndpointState(t *testing.T) {
 	a, b, c, d := newUpstream(t, "a"), newUpstream(t, "b"), newUpstream(t, "c"), newUpstream(t, "d")
 	a.probeStatus.Store(http.StatusServiceUnavailable) // unhealthy
@@ -406,8 +410,8 @@ func TestReloadKeepsEndpointState(t *testing.T) {
 	cfg := func(n int, us ...*upstream) string {
 		return strings.Replace(fmt.Sprintf("version: %d\n", n)+upstreamOf(fmt.Sprintf(
 			"health_check: {path: /health, interval: %dms, timeout: 250ms, unhealthy: 3, healthy: 2}, outlier_detection: {consecutive_failures: %d, base_ejection: 1h}, "+
-				"retry_budget: {ratio: 0.%d}, lb: %s",
-			250+n, 3+n%2, 1+n%9, []string{"round_robin", "p2c", "consistent_hash, hash_on: '{ip}'"}[n%3]), us...),
+				"retry_budget: {ratio: 0.%d}, lb: %s, circuit: {min_requests: %d, error_rate: 0.%d, open_for: %ds, half_open_probes: %d, max_pending: %d}",
+			250+n, 3+n%2, 1+n%9, []string{"round_robin", "p2c", "consistent_hash, hash_on: '{ip}'"}[n%3], 1000+n, 1+n%9, 1+n, 1+n, 100+n), us...),
 			"match: {path_prefix: /}", "match: {path_prefix: /}, retry: {attempts: 2}", 1)
 	}
 	g := newGateway(t, newResolver(a, b, c, d), cfg(0, a, b, c))
@@ -420,9 +424,25 @@ func TestReloadKeepsEndpointState(t *testing.T) {
 		g.get(t, "/", nil)
 	}
 	pool := (*g.reg.pools.Load())["u"]
-	budget := pool.budget
+	budget, breaker := pool.budget, pool.breaker
 	if q, r := budget.Counts(g.clock.Now()); q == 0 || r == 0 {
 		t.Fatalf("budget counted %d first attempts and %d retries before the reloads, want some of each", q, r)
+	}
+	// Requests and places held across the reloads.
+	for range 2 {
+		pass, err := breaker.Acquire(g.clock.Now(), &pool.settings.Load().Circuit)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer pass.Done()
+	}
+	pool.pending.TryAcquire(10)
+	defer pool.pending.Release()
+	pool.conns.TryAcquire(1 << 20)
+	defer pool.conns.Release()
+	breakerBefore := breaker.Status(g.clock.Now())
+	if breakerBefore.Failed == 0 || breakerBefore.Concurrent != 2 {
+		t.Fatalf("breaker before the reloads: %+v, want failures counted and 2 requests in flight", breakerBefore)
 	}
 	eps := map[string]*endpoint{}
 	before := map[string]endpointState{}
@@ -468,6 +488,9 @@ func TestReloadKeepsEndpointState(t *testing.T) {
 	// A client can read a whole response just before the gateway closes the
 	// upstream body and ends the attempt.
 	waitFor(t, "the load's attempts to end", func() bool {
+		if breaker.Status(g.clock.Now()).Concurrent != breakerBefore.Concurrent || pool.pending.InUse() != 1 {
+			return false
+		}
 		for _, u := range []*upstream{a, b, c} {
 			if e := g.endpoint(t, u.addr()); e != nil && e.inFlight.Load() != before[u.name].inFlight {
 				return false
@@ -475,8 +498,22 @@ func TestReloadKeepsEndpointState(t *testing.T) {
 		}
 		return true
 	})
-	if (*g.reg.pools.Load())["u"] != pool || pool.budget != budget {
+	if (*g.reg.pools.Load())["u"] != pool || pool.budget != budget || pool.breaker != breaker {
 		t.Fatal("a reload replaced the upstream's state")
+	}
+	// The load only added successes to the breaker's window.
+	after := breaker.Status(g.clock.Now())
+	if after.State != breakerBefore.State || after.Failed != breakerBefore.Failed || after.Total < breakerBefore.Total || after.Until != breakerBefore.Until {
+		t.Errorf("breaker %+v after the reloads, want %+v with only successes added", after, breakerBefore)
+	}
+	// Every connection the pool opened, before the reloads or since, is
+	// counted once: closing them all leaves the place held above.
+	pool.transport.CloseIdleConnections()
+	waitFor(t, "max_connections to count only the held place", func() bool { return pool.conns.InUse() == 1 })
+	// Without load, a reload keeps the breaker exactly.
+	g.apply(t, cfg(22, a, b, c))
+	if got := breaker.Status(g.clock.Now()); got != after {
+		t.Errorf("breaker %+v after a reload without load, want %+v", got, after)
 	}
 	// Every first attempt and retry since the gateway started is still in
 	// the budget's window. A handler the load's client left may still make

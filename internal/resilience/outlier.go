@@ -1,6 +1,6 @@
 // Package resilience holds the gateway's upstream state machines (ADR-0030):
-// outlier ejection and the retry budget, and from later M4 tasks the breaker
-// and the caps. They read time from an injected Clock and know nothing of
+// outlier ejection, the retry budget, the circuit breaker and the caps'
+// gates. They read time from an injected Clock and know nothing of
 // HTTP.
 package resilience
 
