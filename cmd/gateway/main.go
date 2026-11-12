@@ -14,12 +14,14 @@ import (
 	"os/signal"
 	"runtime"
 	"runtime/debug"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/ankitbisht23/spillway/internal/config"
 	"github.com/ankitbisht23/spillway/internal/proxy"
@@ -64,21 +66,21 @@ func run(log *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	flush := func(context.Context) {}
+	var tracer trace.Tracer // nil: tracing off, traceparent passed through (OB-02)
 	if s.otlpEndpoint != "" {
-		// Logs go to stdout and to the OTel Collector (OB-03). Export errors
-		// go to stdout only, never back into the export queue.
+		// Export errors go to stdout only, never back into the export
+		// queue.
 		stdout := log
 		otel.SetErrorHandler(otel.ErrorHandlerFunc(func(err error) { stdout.Warn("OTLP export failed", "err", err) }))
-		h, shutdown, err := telemetry.NewOTLPLogHandler(ctx, s.otlpEndpoint, "spillway-gateway", version)
+		h, t, flushOTLP, err := otlpExport(ctx, s, stdout)
 		if err != nil {
 			return err
 		}
+		tracer = t
 		flushed := false
 		flush = func(ctx context.Context) {
 			flushed = true
-			if err := shutdown(ctx); err != nil {
-				stdout.Warn("OTLP log flush failed", "err", err)
-			}
+			flushOTLP(ctx)
 		}
 		defer func() { // serve returned early, with an error
 			if !flushed {
@@ -89,7 +91,36 @@ func run(log *slog.Logger) error {
 		}()
 		log = slog.New(slog.NewMultiHandler(log.Handler(), h))
 	}
-	return serve(ctx, s, log, flush)
+	return serve(ctx, s, log, tracer, flush)
+}
+
+// otlpExport sets up export to the OTel Collector at s.otlpEndpoint: logs
+// through the returned handler (OB-03) and traces from the returned tracer
+// (OB-02). flush sends what is queued of both at once, within its
+// context, and stops them; failures are logged to stdout.
+func otlpExport(ctx context.Context, s settings, stdout *slog.Logger) (h slog.Handler, tracer trace.Tracer, flush func(context.Context), err error) {
+	h, shutdownLogs, err := telemetry.NewOTLPLogHandler(ctx, s.otlpEndpoint, "spillway-gateway", version)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	tp, shutdownTraces, err := telemetry.NewTracerProvider(ctx, s.otlpEndpoint, "spillway-gateway", version, s.traceSampleRatio)
+	if err != nil {
+		_ = shutdownLogs(ctx)
+		return nil, nil, nil, err
+	}
+	flush = func(ctx context.Context) {
+		// Traces and logs together, within the one timeout (ADR-0030).
+		var wg sync.WaitGroup
+		for signal, shutdown := range map[string]func(context.Context) error{"traces": shutdownTraces, "logs": shutdownLogs} {
+			wg.Go(func() {
+				if err := shutdown(ctx); err != nil {
+					stdout.Warn("OTLP flush failed", "signal", signal, "err", err)
+				}
+			})
+		}
+		wg.Wait()
+	}
+	return h, tp.Tracer(proxy.TracerName, trace.WithInstrumentationVersion(version)), flush, nil
 }
 
 // flushTimeout bounds the flush of queued telemetry at shutdown (ADR-0030).
@@ -101,7 +132,8 @@ const flushTimeout = 5 * time.Second
 // response; the listeners close and in-flight requests get the shutdown
 // grace, after which the rest are cut; the health probers, DNS refresh and
 // watchers stop; flush sends the queued telemetry; the admin server closes.
-func serve(ctx context.Context, s settings, log *slog.Logger, flush func(context.Context)) error {
+// With a tracer, requests are traced (OB-02).
+func serve(ctx context.Context, s settings, log *slog.Logger, tracer trace.Tracer, flush func(context.Context)) error {
 	// Background work runs until step 4 of the shutdown, past ctx, so
 	// that health checks and reloads go on while the gateway drains.
 	bg, stopBG := context.WithCancel(context.Background())
@@ -150,7 +182,7 @@ func serve(ctx context.Context, s settings, log *slog.Logger, flush func(context
 	rec := telemetry.NewRecorder(reg, log, s.accessLogSampleRate)
 	// The handler sheds requests past the in-flight cap and the listeners
 	// connections past the connection cap; the admin port is exempt (GW-26).
-	handler := proxy.NewHandler(cfg.Snapshot, identity, s.trusted, pools, limiters, rl, s.devMode, s.maxInFlight, rec, log)
+	handler := proxy.NewHandler(cfg.Snapshot, identity, s.trusted, pools, limiters, rl, s.devMode, s.maxInFlight, tracer, rec, log)
 	conns := proxy.NewConnLimit(s.maxConnections, rec, log)
 	srv := proxy.NewServer(handler, log)
 	if s.tlsCert != "" {
@@ -247,7 +279,7 @@ func serve(ctx context.Context, s settings, log *slog.Logger, flush func(context
 	// 4. Background work: health probers, DNS refresh, watchers.
 	stopBG()
 	pools.Close()
-	// 5. Queued telemetry.
+	// 5. Queued telemetry: traces and logs.
 	flushCtx, cancelFlush := context.WithTimeout(context.Background(), flushTimeout)
 	defer cancelFlush()
 	flush(flushCtx)

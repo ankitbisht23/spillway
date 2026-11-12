@@ -52,7 +52,7 @@ func TestServeSheds(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- serve(ctx, s, slog.New(slog.NewJSONHandler(logs, nil)), noFlush) }()
+	go func() { done <- serve(ctx, s, slog.New(slog.NewJSONHandler(logs, nil)), nil, noFlush) }()
 	admin := "http://" + s.adminAddr
 	waitFor(t, "/readyz 200", func() bool { code, _ := get(t, admin+"/readyz"); return code == http.StatusOK })
 

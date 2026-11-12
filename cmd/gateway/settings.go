@@ -44,9 +44,10 @@ type settings struct {
 	redisAddrMap map[string]string // SPILLWAY_REDIS_ADDR_MAP: dev and tests only (ADR-0004)
 	devMode      bool              // SPILLWAY_GATEWAY_DEV_MODE: dev-only behaviour, the Spillway-Decision-Time header (ADR-0021), default false
 
-	// Logs (OB-03)
+	// Logs and traces (OB-03, OB-02)
 	accessLogSampleRate float64 // SPILLWAY_GATEWAY_ACCESS_LOG_SAMPLE_RATE: share of 1xx-3xx and upstream 4xx requests access-logged, 0 to 1, default 1
-	otlpEndpoint        string  // SPILLWAY_GATEWAY_OTLP_ENDPOINT: OTel Collector URL for logs over OTLP/gRPC, off when empty
+	otlpEndpoint        string  // SPILLWAY_GATEWAY_OTLP_ENDPOINT: OTel Collector URL for logs and traces over OTLP/gRPC, off when empty
+	traceSampleRatio    float64 // SPILLWAY_GATEWAY_TRACE_SAMPLE_RATIO: head-sampling ratio of traces without a parent decision, 0 to 1, default 1 (ADR-0030)
 }
 
 // defaultAdminAddr keeps the admin port on loopback unless an internal
@@ -78,6 +79,7 @@ func loadSettings(getenv func(string) string) (settings, error) {
 		maxInFlight:    defaultMaxInFlight,
 
 		accessLogSampleRate: 1,
+		traceSampleRatio:    1,
 		otlpEndpoint:        getenv("SPILLWAY_GATEWAY_OTLP_ENDPOINT"),
 	}
 	if s.configPath == "" {
@@ -141,6 +143,11 @@ func loadSettings(getenv func(string) string) (settings, error) {
 	if v := getenv("SPILLWAY_GATEWAY_ACCESS_LOG_SAMPLE_RATE"); v != "" {
 		if s.accessLogSampleRate, err = strconv.ParseFloat(v, 64); err != nil || !(s.accessLogSampleRate >= 0 && s.accessLogSampleRate <= 1) {
 			return s, fmt.Errorf("SPILLWAY_GATEWAY_ACCESS_LOG_SAMPLE_RATE: %q is not a number from 0 to 1", v)
+		}
+	}
+	if v := getenv("SPILLWAY_GATEWAY_TRACE_SAMPLE_RATIO"); v != "" {
+		if s.traceSampleRatio, err = strconv.ParseFloat(v, 64); err != nil || !(s.traceSampleRatio >= 0 && s.traceSampleRatio <= 1) {
+			return s, fmt.Errorf("SPILLWAY_GATEWAY_TRACE_SAMPLE_RATIO: %q is not a number from 0 to 1", v)
 		}
 	}
 	if v := s.otlpEndpoint; v != "" {

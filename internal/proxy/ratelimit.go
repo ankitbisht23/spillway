@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/ankitbisht23/spillway/internal/config"
 	"github.com/ankitbisht23/spillway/internal/ratelimit"
 	"github.com/ankitbisht23/spillway/internal/ratelimit/local"
@@ -36,6 +38,7 @@ type limits struct {
 	redis    Redis         // nil without Redis: the gateway then has no Redis policies
 	budget   time.Duration // one Redis time budget for all of the request's calls (RL-22)
 	replicas int64         // degraded limiters' divisor (RL-31)
+	tracer   trace.Tracer  // nil when tracing is off (OB-02)
 	rec      *telemetry.Recorder
 	log      *slog.Logger
 	r        *http.Request
@@ -70,6 +73,7 @@ type redisCall struct {
 	conf     []config.Limit   // of each limit
 	checks   []int            // index in limits.checks of each limit, once answered
 	nowUS    int64            // the call's Redis TIME, which its refund names
+	slot     string           // the hash slot's kind, for its span: "tenant", "key" or "global"
 }
 
 // errBudgetSpent fails a Redis call that the request's budget left no time
@@ -84,10 +88,10 @@ type refunder interface {
 }
 
 // newLimits prepares the checks of a request for route on snapshot s, sent
-// by the client at ip.
-func newLimits(s *config.Snapshot, route *config.Route, registry *local.Registry, redis Redis, rec *telemetry.Recorder, log *slog.Logger, r *http.Request, q *telemetry.Request, ip netip.Addr) *limits {
+// by the client at ip; tracer, if not nil, traces them under r's span.
+func newLimits(s *config.Snapshot, route *config.Route, registry *local.Registry, redis Redis, tracer trace.Tracer, rec *telemetry.Recorder, log *slog.Logger, r *http.Request, q *telemetry.Request, ip netip.Addr) *limits {
 	l := &limits{
-		policies: s.Policies, registry: registry, redis: redis, budget: s.RedisBudget, replicas: s.Replicas, rec: rec, log: log, r: r, q: q, cost: route.Cost,
+		policies: s.Policies, registry: registry, redis: redis, budget: s.RedisBudget, replicas: s.Replicas, tracer: tracer, rec: rec, log: log, r: r, q: q, cost: route.Cost,
 		// Upper-cased: many upstreams take "post" for POST, so it must not
 		// skip POST policies or get a {method} bucket of its own (ADR-0020).
 		values: config.KeyValues{Route: route.Name, Method: strings.ToUpper(r.Method), Header: r.Header},
@@ -132,6 +136,7 @@ func (l *limits) check(identity bool) bool {
 	start := time.Now()
 	at := l.registry.Now()
 	n := len(l.checks)
+	policies := 0 // that applied
 	for i := range l.policies {
 		p := &l.policies[i]
 		if !p.Local || p.Mode == config.Off || p.Key.UsesIdentity != identity || !p.Matches(l.values.Route, l.values.Method) {
@@ -162,6 +167,7 @@ func (l *limits) check(identity bool) bool {
 			}
 		}
 		if applied {
+			policies++
 			l.q.Decisions = append(l.q.Decisions, telemetry.Decision{Policy: p.Name, Decision: decision, Mode: p.Mode})
 		}
 	}
@@ -170,6 +176,7 @@ func (l *limits) check(identity bool) bool {
 	}
 	if len(l.checks) > n {
 		l.rec.RateLimitCheck(telemetry.BackendLocal, time.Since(start))
+		l.traceLocal(identity, start, policies)
 	}
 	return !l.denied
 }
@@ -202,7 +209,9 @@ func (l *limits) checkRedis() bool {
 		var res rlredis.Result
 		err := error(&rlredis.Error{Kind: rlredis.KindTimeout, Err: errBudgetSpent})
 		if time.Now().Before(deadline) {
+			span := l.startRedisSpan(ctx, c.slot, false)
 			res, err = l.redis.Call(ctx, l.cost, c.limits)
+			endRedisSpan(span, res.Allowed, err)
 		}
 		if err != nil {
 			if !l.failed(c, err) {
@@ -361,18 +370,18 @@ func (l *limits) redisCalls() []*redisCall {
 		var key func(period time.Duration) string
 		switch {
 		case p.Level == "global":
-			c = &redisCall{}
+			c = &redisCall{slot: "global"}
 			global = append(global, c)
 			key = func(period time.Duration) string { return rlredis.GlobalKey(p.Name, period, digest) }
 		case l.values.Tenant != "":
 			if len(slot) == 0 {
-				slot = append(slot, &redisCall{})
+				slot = append(slot, &redisCall{slot: "tenant"})
 			}
 			c = slot[0]
 			key = func(period time.Duration) string { return rlredis.TenantKey(l.values.Tenant, p.Name, period, digest) }
 		default:
 			if c = byDigest[digest]; c == nil {
-				c = &redisCall{}
+				c = &redisCall{slot: "key"}
 				if byDigest == nil {
 					byDigest = map[string]*redisCall{}
 				}
@@ -420,18 +429,23 @@ func (l *limits) refund() {
 			}
 		}
 		if len(written) > 0 {
-			go l.refundRedis(call.nowUS, written)
+			// The span starts here, while the request's span is still
+			// recording (OB-02).
+			span := l.startRedisSpan(l.r.Context(), call.slot, true)
+			go l.refundRedis(call.nowUS, span, written)
 		}
 	}
 }
 
 // refundRedis reverses a Redis call's deduction on the limits it wrote. It
 // is never retried; a failure leaves at most cost units held until the state
-// decays (ADR-0021).
-func (l *limits) refundRedis(admittedUS int64, written []rlredis.Limit) {
+// decays (ADR-0021). It ends span, the refund's, if not nil.
+func (l *limits) refundRedis(admittedUS int64, span trace.Span, written []rlredis.Limit) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(l.r.Context()), l.budget)
 	defer cancel()
-	if _, err := l.redis.Refund(ctx, l.cost, admittedUS, written); err != nil {
+	_, err := l.redis.Refund(ctx, l.cost, admittedUS, written)
+	endRedisSpan(span, true, err) // a refund that went through is "allow"
+	if err != nil {
 		kind, node := errorKind(err)
 		l.rec.RedisError(kind)
 		l.rec.RefundFailure()

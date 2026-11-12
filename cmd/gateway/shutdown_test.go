@@ -98,7 +98,7 @@ func shutdownGateway(t *testing.T, u *shutdownUpstream, drain, grace time.Durati
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 	errc := make(chan error, 1)
-	go func() { errc <- serve(ctx, s, slog.New(slog.NewJSONHandler(logs, nil)), flush) }()
+	go func() { errc <- serve(ctx, s, slog.New(slog.NewJSONHandler(logs, nil)), nil, flush) }()
 	waitFor(t, "/readyz 200", func() bool { code, _ := get(t, "http://"+s.adminAddr+"/readyz"); return code == http.StatusOK })
 	waitFor(t, "a health check probe", func() bool { return u.probes.Load() > 0 })
 	return s, logs, cancel, errc
