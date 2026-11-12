@@ -18,7 +18,8 @@ esac
 compose=(docker compose --env-file .env.example)
 if [ -f .env.local ]; then compose+=(--env-file .env.local); fi
 
-# gateway-2 … gateway-N, started here and stopped on exit.
+# gateway-2 … gateway-N, started here and removed on exit, so that make
+# verify-m0 finds no stopped container.
 replicas=()
 for ((i = 2; i <= n; i++)); do replicas+=("gateway-$i"); done # not seq: BSD seq 2 1 counts down
 
@@ -29,7 +30,7 @@ swap() { cp "$1" "$dir/.config.yaml.swap" && mv -f "$dir/.config.yaml.swap" "$di
 restore() {
 	swap "$tmp/config.yaml"
 	rm -rf "$tmp"
-	if [ ${#replicas[@]} -gt 0 ]; then "${compose[@]}" --profile replicas stop "${replicas[@]}" >/dev/null 2>&1; fi
+	if [ ${#replicas[@]} -gt 0 ]; then "${compose[@]}" --profile replicas rm -fsv "${replicas[@]}" >/dev/null 2>&1; fi
 }
 trap restore EXIT
 trap 'exit 1' INT TERM

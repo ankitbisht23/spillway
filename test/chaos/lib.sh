@@ -1,7 +1,7 @@
 # Shared by the Redis chaos scripts (NFR-13, ADR-0021), sourced from the
 # repository root. They swap their config into the gateways' mounted
 # config.yaml as the verify scripts do (ADR-0019) and, on every exit, bring
-# the cluster back, put the committed config back and stop gateway-2 …
+# the cluster back, put the committed config back and remove gateway-2 …
 # gateway-5. Each script sets probe, the curl arguments of a request that
 # gateway-1 decides in Redis under its config.
 # shellcheck shell=bash
@@ -33,7 +33,7 @@ cleanup() {
 	if [ -z "$restored" ] && [ -n "$swapped" ]; then restore; fi
 	swap "$tmp/config.yaml"
 	rm -rf "$tmp"
-	"${compose[@]}" --profile replicas stop gateway-2 gateway-3 gateway-4 gateway-5 >/dev/null 2>&1
+	"${compose[@]}" --profile replicas rm -fsv gateway-2 gateway-3 gateway-4 gateway-5 >/dev/null 2>&1
 }
 trap cleanup EXIT
 trap 'exit 1' INT TERM
