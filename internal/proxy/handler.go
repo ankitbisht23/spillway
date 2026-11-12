@@ -90,6 +90,20 @@ func (h *Handler) serve(w *responseRecorder, r *http.Request, q *telemetry.Reque
 		http.Error(w, "invalid request target", http.StatusBadRequest)
 		return
 	}
+	// Many upstreams serve "post" as POST, but routes match methods exactly,
+	// so it would skip a POST route and its rate limits for a broader one
+	// (ADR-0029).
+	if r.Method != strings.ToUpper(r.Method) {
+		http.Error(w, "invalid request method", http.StatusBadRequest)
+		return
+	}
+	// Servlet containers read "..;" as ".." and some stacks read "\" as "/",
+	// so such a path could reach an upstream path other than the one routed
+	// and limited (ADR-0021, U3).
+	if ambiguousPath(r.URL.Path) {
+		http.Error(w, "invalid request path", http.StatusBadRequest)
+		return
+	}
 	// Route on the cleaned path and forward that same path, changed only by
 	// the route's own prefix rewrite (GW-02), so the upstream never sees a
 	// path that would have matched another route (ADR-0007).
@@ -242,6 +256,21 @@ func (h *Handler) serve(w *responseRecorder, r *http.Request, q *telemetry.Reque
 		ErrorLog:     h.errLog,
 	}
 	rp.ServeHTTP(w, r)
+}
+
+// ambiguousPath reports whether p, the path percent-decoded once, has a
+// backslash or a segment whose text before its first ";" is "." or ".."
+// (ADR-0021, U3).
+func ambiguousPath(p string) bool {
+	if strings.Contains(p, `\`) {
+		return true
+	}
+	for seg := range strings.SplitSeq(p, "/") {
+		if before, _, ok := strings.Cut(seg, ";"); ok && (before == "." || before == "..") {
+			return true
+		}
+	}
+	return false
 }
 
 // authenticate resolves a request's API key (GW-17, SEC-03), sent in

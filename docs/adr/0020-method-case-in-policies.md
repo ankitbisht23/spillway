@@ -1,6 +1,6 @@
 # 0020. Method case in rate limit policies
 
-- **Status:** Accepted
+- **Status:** Accepted; forwarding of methods that are not upper case superseded by [ADR-0029](0029-methods-not-in-upper-case.md)
 - **Date:** 2026-11-10
 - **Requirement IDs:** RL-03, RL-04
 

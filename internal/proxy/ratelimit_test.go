@@ -426,9 +426,9 @@ policies: [{name: ip, level: global, match: {routes: ['*']}, key_template: '{ip}
 	}
 }
 
-// TestRateLimitMethodCase: policies see the method upper-cased, so a
-// lower-case POST on a route that takes any method meets the POST limits and
-// shares the {method} bucket (ADR-0020).
+// TestRateLimitMethodCase: a method that is not all upper case is answered
+// 400 before any policy (ADR-0029, which leaves ADR-0020's upper-casing
+// nothing to do), so it neither skips nor spends the POST limits.
 func TestRateLimitMethodCase(t *testing.T) {
 	u := newUpstream(t, "orders")
 	g := newGateway(t, newResolver(u), oneUpstream(u)+`
@@ -437,7 +437,7 @@ policies: [{name: writes, level: global, match: {routes: ['*'], methods: [POST]}
 	for i, want := range []struct {
 		method string
 		status int
-	}{{"POST", 200}, {"post", 429}, {"Post", 429}, {"pOST", 429}, {"GET", 200}} {
+	}{{"POST", 200}, {"post", 400}, {"Post", 400}, {"pOST", 400}, {"POST", 429}, {"GET", 200}} {
 		if got := g.send(t, want.method, "/", nil); got.status != want.status {
 			t.Errorf("request %d (%s): %d, want %d", i+1, want.method, got.status, want.status)
 		}

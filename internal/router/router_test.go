@@ -251,6 +251,7 @@ func TestNewRejects(t *testing.T) {
 		{Route{Path: "/", Host: "api.example.com:443"}, "without a port"},
 		{Route{Path: "/", Host: "."}, "without a port"},
 		{Route{Path: "/", Methods: []string{"GE T"}}, "not a valid HTTP method"},
+		{Route{Path: "/", Methods: []string{"post"}}, `method "post" is not upper case`},
 		{Route{Path: "/", Headers: []HeaderMatch{{Name: "", Exact: "1"}}}, "not valid"},
 		{Route{Path: "/", Headers: []HeaderMatch{{Name: "host", Exact: "a"}}}, "route's host"},
 		{Route{Path: "/", Headers: []HeaderMatch{{Name: "x"}}}, "exactly one"},

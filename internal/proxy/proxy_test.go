@@ -388,6 +388,63 @@ routes:
 	}
 }
 
+// TestAmbiguousPaths: a path with a backslash or a "." or ".." segment
+// followed by ";", literal or percent-encoded in either case, is answered 400
+// before routing; nothing is decoded twice (ADR-0021, U3).
+func TestAmbiguousPaths(t *testing.T) {
+	u := newUpstream(t, "orders")
+	g := newGateway(t, newResolver(u), oneUpstream(u))
+	for _, tt := range []struct {
+		target string
+		want   int
+	}{
+		{"/public/..;/admin", 400},
+		{"/public/.;/admin", 400},
+		{"/public/..;jsessionid=x/admin", 400},
+		{"/..;", 400},
+		{"/public/%2e%2e;/admin", 400},
+		{"/public/%2E%2E%3B/admin", 400},
+		{"/public/.%3b/admin", 400},
+		{`/public\admin`, 400},
+		{"/public%5cadmin", 400},
+		{"/public%5Cadmin", 400},
+		{"/public/%252e%252e;/admin", 200}, // the literal %2e%2e;
+		{"/public/...;/admin", 200},
+		{"/public/a..;/admin", 200},
+		{"/public/x;/admin", 200},
+		{"/public/../admin", 200}, // cleaned (ADR-0007)
+	} {
+		if got := rawStatus(t, g, "GET "+tt.target+" HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"); got != tt.want {
+			t.Errorf("GET %s = %d, want %d", tt.target, got, tt.want)
+		}
+	}
+	if n := u.requests.Load(); n != 5 {
+		t.Errorf("upstream got %d requests, want the 5 allowed ones", n)
+	}
+}
+
+// TestMethodCase: a method that is not all upper case is answered 400 before
+// routing, so "post" cannot skip a POST route and its limits for a catch-all
+// route (ADR-0029).
+func TestMethodCase(t *testing.T) {
+	u := newUpstream(t, "orders")
+	g := newGateway(t, newResolver(u), fmt.Sprintf(`
+upstreams: [{name: orders, endpoints: [{address: 'orders:%s'}]}]
+routes:
+  - {name: login, upstream: orders, match: {path: /login, methods: [POST]}}
+  - {name: default, upstream: orders, match: {path_prefix: /}}
+policies: [{name: login-once, level: route, match: {routes: [login]}, key_template: '{route}', algorithm: gcra, limits: [{rate: 1, period: 1m, burst: 1}], local: true}]
+`, u.port()))
+	for i, want := range []struct {
+		method string
+		status int
+	}{{"POST", 200}, {"POST", 429}, {"post", 400}, {"Post", 400}, {"pOST", 400}, {"GET", 200}} {
+		if got := g.send(t, want.method, "/login", nil); got.status != want.status {
+			t.Errorf("request %d (%s /login): %d, want %d", i+1, want.method, got.status, want.status)
+		}
+	}
+}
+
 func TestProxyErrorStatus(t *testing.T) {
 	h := NewHandler(nil, nil, nil, nil, nil, nil, false, nil, slog.New(slog.DiscardHandler))
 	for _, tt := range []struct {
