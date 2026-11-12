@@ -123,7 +123,8 @@ func (h *Handler) serve(w *responseRecorder, r *http.Request, body *countingBody
 	// limits, so oversized requests count too. A request denied in the first
 	// phase is not authenticated.
 	peer, _ := netip.ParseAddrPort(r.RemoteAddr)
-	lim := newLimits(s, route, h.limiters, h.redis, h.rec, h.log, r, q, h.trusted.ClientIP(peer.Addr(), r.Header.Values("X-Forwarded-For")))
+	ip := h.trusted.ClientIP(peer.Addr(), r.Header.Values("X-Forwarded-For"))
+	lim := newLimits(s, route, h.limiters, h.redis, h.rec, h.log, r, q, ip)
 	defer lim.release()
 	allowed := lim.check(false)
 	if allowed {
@@ -173,7 +174,7 @@ func (h *Handler) serve(w *responseRecorder, r *http.Request, body *countingBody
 	}
 	p := h.pools.pool(route.Upstream)
 	q.Upstream = p.name
-	ep, err := p.pick(h.pools.clock.Now())
+	ep, err := p.pick(h.pools.clock.Now(), hashKey(p.settings.Load(), lim, ip), nil)
 	if err != nil {
 		q.Reason = telemetry.ReasonUpstream
 		h.log.Warn("no upstream address", "route", route.Name, "upstream", p.name, "request_id", q.ID)
@@ -194,15 +195,26 @@ func (h *Handler) serve(w *responseRecorder, r *http.Request, body *countingBody
 		r.Body = idleBody{r.Body, idle}
 	}
 	r = r.WithContext(ctx)
+	// The attempt is in flight on ep (p2c) until its response body is
+	// closed or it fails; this defer covers every other way out, a panic
+	// or a 101's tunnel included.
+	release := func() {}
+	defer func() { release() }()
 
 	upstreamPath := route.UpstreamPath(path)
 	rp := &httputil.ReverseProxy{
 		Transport: roundTripFunc(func(out *http.Request) (*http.Response, error) {
+			release = ep.begin()
 			start := time.Now()
 			resp, err := p.transport.RoundTrip(out)
 			h.rec.UpstreamAttempt(p.name, 1, time.Since(start)) // one attempt until retries (GW-12, M4)
 			if failed, counted := attemptOutcome(out.Context(), resp, err, body); counted {
 				p.record(ep, h.pools.clock.Now(), failed) // GW-09
+			}
+			if err != nil {
+				release()
+			} else if resp.StatusCode != http.StatusSwitchingProtocols { // a 101's body must stay an io.ReadWriteCloser
+				resp.Body = releaseBody{resp.Body, release}
 			}
 			return resp, err
 		}),
@@ -260,6 +272,33 @@ func (h *Handler) serve(w *responseRecorder, r *http.Request, body *countingBody
 		ErrorLog:     h.errLog,
 	}
 	rp.ServeHTTP(w, r)
+}
+
+// hashKey is the request's key for an upstream balanced by consistent hash:
+// its hash_on template filled with the values the rate limits use, {ip}
+// included (GW-07, ADR-0030). It is "" for the other algorithms, and when the
+// template cannot be filled, so that the request falls back to p2c.
+func hashKey(up *config.Upstream, lim *limits, ip netip.Addr) string {
+	if up.HashOn == nil {
+		return ""
+	}
+	if lim.values.IP == "" && ip.IsValid() {
+		lim.values.IP = ipKey(ip) // newLimits fills it only for policies
+	}
+	key, _ := up.HashOn.Fill(&lim.values)
+	return key
+}
+
+// releaseBody is a response body that calls release when it is closed.
+type releaseBody struct {
+	io.ReadCloser
+	release func()
+}
+
+func (b releaseBody) Close() error {
+	err := b.ReadCloser.Close()
+	b.release()
+	return err
 }
 
 // ambiguousPath reports whether p, the path percent-decoded once, has a

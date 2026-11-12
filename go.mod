@@ -6,6 +6,7 @@ toolchain go1.27.4
 
 require (
 	github.com/HdrHistogram/hdrhistogram-go v1.4.0
+	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/prometheus/client_golang v1.25.0
 	github.com/redis/go-redis/v9 v9.23.0
 	go.opentelemetry.io/contrib/bridges/otelslog v0.21.0
@@ -25,7 +26,6 @@ require (
 require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
-	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -93,4 +94,56 @@ func withUpstream(fields string) string {
 		fields = ", " + fields
 	}
 	return "upstreams: [{name: u, endpoints: [{address: 'u:80'}]" + fields + "}]\n"
+}
+
+// TestLB: an upstream without lb uses p2c; consistent_hash takes its key
+// template from hash_on, which the other algorithms reject (GW-07, ADR-0030).
+func TestLB(t *testing.T) {
+	tests := []struct{ fields, lb, key string }{
+		{"", LBP2C, ""},
+		{"lb: p2c", LBP2C, ""},
+		{"lb: round_robin", LBRoundRobin, ""},
+		{"lb: consistent_hash, hash_on: '{header:x-cart-id}'", LBConsistentHash, "cart-7"},
+		{"lb: consistent_hash, hash_on: 'cart:{header:X-Cart-Id}:{route}'", LBConsistentHash, "cart:cart-7:r"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.fields, func(t *testing.T) {
+			s, err := parse([]byte(withUpstream(tt.fields)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			u := s.Upstreams["u"]
+			if u.LB != tt.lb {
+				t.Errorf("lb = %q, want %q", u.LB, tt.lb)
+			}
+			if (u.HashOn != nil) != (tt.key != "") {
+				t.Fatalf("hash_on = %v, want one only for consistent_hash", u.HashOn)
+			}
+			if u.HashOn != nil {
+				if key, _ := u.HashOn.Fill(&KeyValues{Route: "r", Header: http.Header{"X-Cart-Id": {"cart-7"}}}); key != tt.key {
+					t.Errorf("hash key = %q, want %q", key, tt.key)
+				}
+			}
+		})
+	}
+}
+
+func TestLBRejects(t *testing.T) {
+	tests := []struct{ fields, want string }{
+		{"lb: random", `upstream "u": lb "random": want round_robin, p2c or consistent_hash`},
+		{"lb: P2C", `lb "P2C": want round_robin, p2c or consistent_hash`},
+		{"lb: consistent_hash", `upstream "u": hash_on is required with lb consistent_hash`},
+		{"hash_on: '{ip}'", "hash_on is only for lb consistent_hash"},
+		{"lb: round_robin, hash_on: '{ip}'", "hash_on is only for lb consistent_hash"},
+		{"lb: consistent_hash, hash_on: '{cart}'", `hash_on: key_template "{cart}": unknown placeholder {cart}`},
+		{"lb: consistent_hash, hash_on: '{header:}'", `hash_on: key_template "{header:}": header name "" is not valid`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.fields, func(t *testing.T) {
+			_, err := parse([]byte(withUpstream(tt.fields)))
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("error = %v, want %q", err, tt.want)
+			}
+		})
+	}
 }

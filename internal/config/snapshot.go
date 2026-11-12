@@ -46,6 +46,8 @@ type Route struct {
 type Upstream struct {
 	Name        string
 	Endpoints   []string     // host:port
+	LB          string       // LBRoundRobin, LBP2C or LBConsistentHash (GW-07)
+	HashOn      *KeyTemplate // LBConsistentHash's key; nil for the others
 	HealthCheck *HealthCheck // nil means no active checks (GW-08)
 	Outlier     OutlierDetection
 }
@@ -154,6 +156,9 @@ func compileUpstream(u *configpb.Upstream) (*Upstream, error) {
 		up.Endpoints = append(up.Endpoints, addr)
 	}
 	var err error
+	if up.LB, up.HashOn, err = compileLB(u.GetLb(), u.GetHashOn()); err != nil {
+		return nil, err
+	}
 	if up.HealthCheck, err = compileHealthCheck(u.GetHealthCheck()); err != nil {
 		return nil, fmt.Errorf("health_check.%w", err)
 	}

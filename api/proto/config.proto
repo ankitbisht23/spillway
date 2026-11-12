@@ -25,7 +25,13 @@ message Upstream {
   // (GW-29).
   string name = 1;
   repeated Endpoint endpoints = 2;
-  // Fields 3 (lb) and 4 (hash_on) are for load balancing (GW-07, ADR-0030).
+  // Load balancing (GW-07, ADR-0030): "round_robin", "p2c" (least request
+  // with the power of two choices) or "consistent_hash". Unset means p2c.
+  string lb = 3;
+  // consistent_hash only, and required with it: a key template, as a rate
+  // limit policy's (ADR-0017), such as "{header:X-Cart-Id}". A request whose
+  // template cannot be filled is balanced with p2c.
+  string hash_on = 4;
 
   // Active health checks (GW-08); unset means none.
   HealthCheck health_check = 5;

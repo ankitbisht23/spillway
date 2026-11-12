@@ -617,7 +617,7 @@ func TestRemovedUpstreamStillServesOldSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	route, _, _ := old.Match("", "GET", "/", nil)
-	ep, err := g.reg.pool(route.Upstream).pick(time.Now())
+	ep, err := g.reg.pool(route.Upstream).pick(time.Now(), "", nil)
 	if err != nil || !strings.HasSuffix(ep.addr, ":"+a.port()) {
 		t.Errorf("pick = %v, %v; want upstream a's address", ep, err)
 	}
@@ -644,7 +644,7 @@ func TestRebuiltPoolDoesNotHoldUpReload(t *testing.T) {
 
 	picked := make(chan error, 1)
 	go func() {
-		_, err := reg.pool(old.Upstreams["gone"]).pick(time.Now())
+		_, err := reg.pool(old.Upstreams["gone"]).pick(time.Now(), "", nil)
 		picked <- err
 	}()
 	<-res.looking
@@ -667,7 +667,7 @@ func TestRebuiltPoolDoesNotHoldUpReload(t *testing.T) {
 func TestRoundRobin(t *testing.T) {
 	a, b := newUpstream(t, "a"), newUpstream(t, "b")
 	g := newGateway(t, newResolver(a, b), fmt.Sprintf(`
-upstreams: [{name: u, endpoints: [{address: 'a:%s'}, {address: '127.0.0.1:%s'}]}]
+upstreams: [{name: u, lb: round_robin, endpoints: [{address: 'a:%s'}, {address: '127.0.0.1:%s'}]}]
 routes: [{name: r, upstream: u, match: {path_prefix: /}}]
 `, a.port(), b.port()))
 	var got []string

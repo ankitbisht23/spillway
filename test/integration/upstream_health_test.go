@@ -30,17 +30,20 @@ import (
 //     ejection.
 //
 // The fault lives in this test's proxy, so the compose stack is never
-// changed and nothing needs restoring.
+// changed and nothing needs restoring. Both upstreams are balanced round
+// robin, so that the test can count the requests that reach upstream-3.
 func TestGatewayUpstreamHealth(t *testing.T) {
 	fault := newFaultProxy(t, "127.0.0.1:9103")
 	g := startGateway(t, os.Getenv(redis.AddrMapEnv), fmt.Sprintf(`
 version: 1
 upstreams:
   - name: active
+    lb: round_robin
     endpoints: [{address: '127.0.0.1:9101'}, {address: '127.0.0.1:9102'}, {address: '%[1]s'}]
     health_check: {path: /status/200, interval: 500ms, timeout: 500ms, unhealthy: 2, healthy: 2}
     outlier_detection: {consecutive_failures: 1000}
   - name: passive
+    lb: round_robin
     endpoints: [{address: '127.0.0.1:9101'}, {address: '127.0.0.1:9102'}, {address: '%[1]s'}]
     outlier_detection: {consecutive_failures: 2, base_ejection: 3s}
 routes:
