@@ -78,7 +78,7 @@ func TestAccessLog(t *testing.T) {
 	rec, _, buf := newTestRecorder(1)
 	rec.Request(t.Context(), &Request{
 		ID: "req-1", TraceID: "4bf92f3577b34da6a3ce929d0e0e4736", Route: "orders", Method: "POST", Status: 201,
-		Origin: OriginUpstream, Reason: ReasonNone, Tenant: NoTenant, Upstream: "orders-svc",
+		Origin: OriginUpstream, Reason: ReasonNone, Tenant: NoTenant, Upstream: "orders-svc", Attempts: 2,
 		Latency: 1500 * time.Microsecond, BytesIn: 5, BytesOut: 42, KeyHash: "64571644321b",
 		Decisions: []Decision{{"per-ip", "allow", "enforce"}, {"per-agent", "deny", "shadow"}},
 	})
@@ -92,7 +92,7 @@ func TestAccessLog(t *testing.T) {
 	want := map[string]any{
 		"level": "INFO", "msg": "access", "request_id": "req-1", "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
 		"route": "orders", "method": "POST", "status": 201.0, "latency_ms": 1.5, "bytes_in": 5.0, "bytes_out": 42.0,
-		"upstream": "orders-svc", "key_hash": "64571644321b",
+		"upstream": "orders-svc", "attempts": 2.0, "key_hash": "64571644321b",
 		"decisions": []any{
 			map[string]any{"policy": "per-ip", "decision": "allow", "mode": "enforce"},
 			map[string]any{"policy": "per-agent", "decision": "deny", "mode": "shadow"},
@@ -201,6 +201,10 @@ func TestMetricLabels(t *testing.T) {
 		rec.Request(t.Context(), &q)
 	}
 	rec.UpstreamAttempt("orders", 1, 2*time.Millisecond)
+	rec.UpstreamAttempt("orders", 2, 2*time.Millisecond)
+	rec.Retry("orders", true)
+	rec.Retry("orders", false)
+	rec.Retry("orders", false)
 	rec.RateLimitCheck(BackendLocal, 20*time.Microsecond)
 	rec.RateLimitCheck(BackendRedis, 6*time.Millisecond)
 	rec.RedisError("timeout")
@@ -235,6 +239,9 @@ func TestMetricLabels(t *testing.T) {
 		`gw_request_duration_seconds_bucket{route="none",tenant="none",le="0.0025"} 0`,
 		`gw_request_duration_seconds_bucket{route="none",tenant="none",le="0.005"} 1`,
 		`gw_upstream_duration_seconds_count{attempt="1",upstream="orders"} 1`,
+		`gw_upstream_duration_seconds_count{attempt="2",upstream="orders"} 1`,
+		`gw_retries_total{outcome="sent",upstream="orders"} 1`,
+		`gw_retries_total{outcome="budget_exhausted",upstream="orders"} 2`,
 	} {
 		if !strings.Contains(m, "\n"+s+"\n") {
 			t.Errorf("/metrics has no %s", s)

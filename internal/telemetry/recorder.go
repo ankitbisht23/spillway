@@ -60,6 +60,7 @@ type Request struct {
 	Reason   string // why the gateway answered itself: ReasonNone or ReasonUpstream
 	Tenant   string // NoTenant until tenants exist (M5)
 	Upstream string // "" if no upstream was chosen
+	Attempts int    // upstream attempts made, 0 if none (GW-12)
 	KeyHash  string // config.KeyHash of the API key presented, "" if none (SEC-03)
 	// Decisions has one entry per rate limit policy that applied to the
 	// request, in evaluation order (RL-27).
@@ -83,6 +84,7 @@ type Recorder struct {
 	requests   *prometheus.CounterVec
 	duration   *prometheus.HistogramVec
 	upstream   *prometheus.HistogramVec
+	retries    *prometheus.CounterVec
 	decisions  *prometheus.CounterVec
 	checks     *prometheus.HistogramVec
 	redis      *prometheus.CounterVec
@@ -113,6 +115,10 @@ func NewRecorder(reg prometheus.Registerer, log *slog.Logger, sampleRate float64
 			Help:    "Time from sending an upstream attempt to its response headers or its failure.",
 			Buckets: durationBuckets,
 		}, []string{"upstream", "attempt"}),
+		retries: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "gw_retries_total",
+			Help: "Retries an upstream's retry budget granted (sent) or refused (budget_exhausted).",
+		}, []string{"upstream", "outcome"}),
 		decisions: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "gw_ratelimit_decisions_total",
 			Help: "Rate limit decisions, one per applying policy per request; a shadow would-deny is decision deny, mode shadow.",
@@ -139,7 +145,7 @@ func NewRecorder(reg prometheus.Registerer, log *slog.Logger, sampleRate float64
 	for _, k := range redisErrorKinds {
 		rec.redis.WithLabelValues(k) // every kind is exported from the start, at 0
 	}
-	reg.MustRegister(rec.requests, rec.duration, rec.upstream, rec.decisions, rec.checks, rec.redis, rec.refunds, rec.keyCap)
+	reg.MustRegister(rec.requests, rec.duration, rec.upstream, rec.retries, rec.decisions, rec.checks, rec.redis, rec.refunds, rec.keyCap)
 	return rec
 }
 
@@ -165,6 +171,7 @@ func (rec *Recorder) Request(ctx context.Context, q *Request) {
 		slog.Int64("bytes_in", q.BytesIn),
 		slog.Int64("bytes_out", q.BytesOut),
 		slog.String("upstream", q.Upstream),
+		slog.Int("attempts", q.Attempts),
 		slog.Any("decisions", decisions),
 		slog.String("key_hash", q.KeyHash),
 	)
@@ -209,6 +216,16 @@ func (rec *Recorder) KeyCapSkip(policy string) {
 // UpstreamAttempt records how long one attempt at an upstream took.
 func (rec *Recorder) UpstreamAttempt(upstream string, attempt int, d time.Duration) {
 	rec.upstream.WithLabelValues(upstream, strconv.Itoa(attempt)).Observe(d.Seconds())
+}
+
+// Retry records a retry the upstream's budget granted (sent) or refused
+// (GW-13).
+func (rec *Recorder) Retry(upstream string, sent bool) {
+	outcome := "budget_exhausted"
+	if sent {
+		outcome = "sent"
+	}
+	rec.retries.WithLabelValues(upstream, outcome).Inc()
 }
 
 // Run ranks the tenants every interval until ctx ends, and deletes the series
