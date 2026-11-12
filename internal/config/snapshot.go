@@ -44,8 +44,10 @@ type Route struct {
 
 // Upstream is a compiled upstream.
 type Upstream struct {
-	Name      string
-	Endpoints []string // host:port
+	Name        string
+	Endpoints   []string     // host:port
+	HealthCheck *HealthCheck // nil means no active checks (GW-08)
+	Outlier     OutlierDetection
 }
 
 // Match returns the route for a request; path must be clean
@@ -150,6 +152,13 @@ func compileUpstream(u *configpb.Upstream) (*Upstream, error) {
 		}
 		seen[addr] = true
 		up.Endpoints = append(up.Endpoints, addr)
+	}
+	var err error
+	if up.HealthCheck, err = compileHealthCheck(u.GetHealthCheck()); err != nil {
+		return nil, fmt.Errorf("health_check.%w", err)
+	}
+	if up.Outlier, err = compileOutlier(u.GetOutlierDetection()); err != nil {
+		return nil, fmt.Errorf("outlier_detection.%w", err)
 	}
 	return up, nil
 }

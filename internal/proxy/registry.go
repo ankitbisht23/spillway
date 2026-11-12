@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"maps"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/netip"
@@ -14,7 +16,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/ankitbisht23/spillway/internal/config"
+	"github.com/ankitbisht23/spillway/internal/ratelimit"
+	"github.com/ankitbisht23/spillway/internal/resilience"
 )
 
 const lookupTimeout = 5 * time.Second
@@ -24,29 +30,58 @@ type Resolver interface {
 	LookupNetIP(ctx context.Context, network, host string) ([]netip.Addr, error)
 }
 
-// Registry holds each upstream's runtime state, its connection pool and
-// resolved addresses, keyed by upstream name and kept outside any snapshot. A
-// reload keeps the pools of the upstreams it still has (GW-29).
+// Registry holds each upstream's runtime state, keyed by upstream name and
+// kept outside any snapshot: its connection pool, resolved addresses and
+// settings, and each endpoint's health and outlier state, keyed by the
+// endpoint's resolved ip:port. A reload keeps the state of the upstreams and
+// endpoints it still has (GW-29, ADR-0030). The registry is a Prometheus
+// collector of gw_upstream_endpoint_healthy.
 type Registry struct {
 	allow    Allowlist
 	resolver Resolver
 	dialer   *net.Dialer
 	log      *slog.Logger
+	clock    resilience.Clock
+	probes   *http.Transport // health checks', apart from the request pools (ADR-0030)
+	healthy  *prometheus.Desc
+	ctx      context.Context // probers run until it ends (Close)
+	cancel   context.CancelFunc
 
 	mu    sync.Mutex                       // serializes changes to pools
 	pools atomic.Pointer[map[string]*pool] // read without locking on every request
 }
 
-// pool is one upstream's connection pool and resolved addresses.
+// pool is one upstream's runtime state.
 type pool struct {
 	name      string
+	log       *slog.Logger
 	transport *http.Transport
-	addrs     atomic.Pointer[[]string] // ip:port of every endpoint, for round robin
-	next      atomic.Uint64
+	settings  atomic.Pointer[config.Upstream] // the latest snapshot's, changed in place on reload
+	endpoints atomic.Pointer[[]*endpoint]     // one per resolved address, published after each resolve
+	next      atomic.Uint64                   // round robin
+	panicking atomic.Bool                     // no endpoint was selectable at the last pick
+	ejectMu   sync.Mutex                      // one ejection decision at a time, so the cap holds
+	probe     bool                            // runs probers: false for a pool rebuilt for an older snapshot; guarded by mu
 
-	mu        sync.Mutex // guards endpoints and resolved
-	endpoints []string
-	resolved  map[string][]string // per endpoint; kept when a lookup fails
+	mu         sync.Mutex // guards configured, resolved and the endpoints' probers
+	configured []string
+	resolved   map[string][]string // per configured endpoint; kept when a lookup fails
+}
+
+// endpoint is one resolved address of an upstream, with its health and
+// outlier state (GW-08, GW-09).
+type endpoint struct {
+	addr    string      // resolved ip:port: the endpoint's identity
+	host    string      // the configured address it came from, e.g. upstream-1:8080
+	healthy atomic.Bool // active health; true without health checks
+	outlier resilience.Outlier
+
+	mu        sync.Mutex // guards the probe counts
+	successes int        // probes in a row
+	failures  int
+	lastErr   string // the last failed probe's reason
+
+	stop context.CancelFunc // its prober, nil if none; guarded by the pool's mu
 }
 
 // NewRegistry returns an empty registry. Every connection it opens is checked
@@ -57,16 +92,35 @@ func NewRegistry(allow Allowlist, resolver Resolver, log *slog.Logger) *Registry
 		resolver: resolver,
 		dialer:   &net.Dialer{KeepAlive: 30 * time.Second, Control: allow.control},
 		log:      log,
+		clock:    ratelimit.SystemClock,
+		healthy: prometheus.NewDesc("gw_upstream_endpoint_healthy",
+			"1 while the endpoint takes traffic (healthy and not ejected), else 0.", []string{"upstream", "endpoint"}, nil),
 	}
+	r.probes = &http.Transport{
+		Proxy:                  nil,
+		DialContext:            r.dialer.DialContext,
+		MaxIdleConnsPerHost:    1,
+		IdleConnTimeout:        90 * time.Second,
+		DisableCompression:     true,
+		MaxResponseHeaderBytes: 64 << 10,
+	}
+	r.ctx, r.cancel = context.WithCancel(context.Background())
 	r.pools.Store(&map[string]*pool{})
 	return r
 }
 
+// Close stops every health prober.
+func (r *Registry) Close() {
+	r.cancel()
+	r.probes.CloseIdleConnections()
+}
+
 // Apply reconciles the registry with a new snapshot before it is swapped in
 // (config.Watcher's apply hook). It rejects endpoint IP addresses outside the
-// allow-list (SEC-06), keeps the pools of upstreams that remain, re-resolves
-// those whose endpoints changed, adds new ones and closes the idle connections
-// of removed ones.
+// allow-list (SEC-06), keeps the state of upstreams that remain and stores
+// their new settings, re-resolves those whose endpoints changed, starts or
+// stops their probers as health checks come and go, adds new upstreams, and
+// for removed ones closes the idle connections and stops the probers.
 func (r *Registry) Apply(s *config.Snapshot) error {
 	for _, up := range s.Upstreams {
 		for _, ep := range up.Endpoints {
@@ -86,13 +140,19 @@ func (r *Registry) Apply(s *config.Snapshot) error {
 		if p == nil {
 			p = r.newPool(name)
 		}
-		r.setEndpoints(p, up.Endpoints)
+		r.setUpstream(p, up, true)
 		pools[name] = p
 	}
 	r.pools.Store(&pools)
 	for name, p := range old {
 		if pools[name] == nil {
 			p.transport.CloseIdleConnections()
+			p.mu.Lock()
+			p.probe = false // a DNS refresh still holding the old map must not restart them
+			for _, e := range *p.endpoints.Load() {
+				e.stopProbe()
+			}
+			p.mu.Unlock()
 		}
 	}
 	return nil
@@ -100,14 +160,15 @@ func (r *Registry) Apply(s *config.Snapshot) error {
 
 // pool returns the upstream's pool. A request still on an older snapshot may
 // name an upstream that a reload has since removed; it gets a pool built from
-// its snapshot, which the next Apply drops. That pool's names are resolved
-// before taking r.mu, so the lookups never hold up a reload.
+// its snapshot, without health checks, which the next Apply drops. That
+// pool's names are resolved before taking r.mu, so the lookups never hold up
+// a reload.
 func (r *Registry) pool(up *config.Upstream) *pool {
 	if p := (*r.pools.Load())[up.Name]; p != nil {
 		return p
 	}
 	p := r.newPool(up.Name)
-	r.setEndpoints(p, up.Endpoints)
+	r.setUpstream(p, up, false)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	pools := *r.pools.Load()
@@ -144,7 +205,7 @@ func (r *Registry) refresh() {
 }
 
 func (r *Registry) newPool(name string) *pool {
-	p := &pool{name: name, transport: &http.Transport{
+	p := &pool{name: name, log: r.log, transport: &http.Transport{
 		Proxy:                  nil, // never HTTP_PROXY from the environment
 		DialContext:            r.dial,
 		MaxIdleConnsPerHost:    512,
@@ -153,7 +214,7 @@ func (r *Registry) newPool(name string) *pool {
 		DisableCompression:     true, // pass Content-Encoding through untouched
 		MaxResponseHeaderBytes: 64 << 10,
 	}}
-	p.addrs.Store(&[]string{})
+	p.endpoints.Store(&[]*endpoint{})
 	return p
 }
 
@@ -168,34 +229,173 @@ func (r *Registry) dial(ctx context.Context, network, address string) (net.Conn,
 	return r.dialer.DialContext(ctx, network, address)
 }
 
-func (r *Registry) setEndpoints(p *pool, endpoints []string) {
+// setUpstream stores up as p's settings, re-resolves p if its endpoints
+// changed, and starts or stops probers to match its health check; probe is
+// false for a pool rebuilt for an older snapshot.
+func (r *Registry) setUpstream(p *pool, up *config.Upstream, probe bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.resolved != nil && slices.Equal(p.endpoints, endpoints) {
+	p.settings.Store(up)
+	p.probe = probe
+	if p.resolved == nil || !slices.Equal(p.configured, up.Endpoints) {
+		p.configured = up.Endpoints
+		r.resolve(p)
 		return
 	}
-	p.endpoints = endpoints
-	r.resolve(p)
+	r.syncProbes(p)
 }
 
-// resolve looks up every endpoint of p and publishes the allowed addresses. A
-// failed lookup keeps that endpoint's previous addresses. p.mu must be held.
+// resolve looks up every configured endpoint of p and publishes one endpoint
+// per allowed address. An address p already had keeps its endpoint and so
+// its state; a new one starts healthy and not ejected; a removed one's prober
+// stops (GW-29). A failed lookup keeps that endpoint's previous addresses.
+// p.mu must be held.
 func (r *Registry) resolve(p *pool) {
 	ctx, cancel := context.WithTimeout(context.Background(), lookupTimeout)
 	defer cancel()
-	resolved := make(map[string][]string, len(p.endpoints))
-	var all []string
-	for _, ep := range p.endpoints {
+	old := map[string]*endpoint{}
+	for _, e := range *p.endpoints.Load() {
+		old[e.addr] = e
+	}
+	resolved := make(map[string][]string, len(p.configured))
+	var eps []*endpoint
+	seen := map[string]bool{}
+	for _, ep := range p.configured {
 		addrs, err := r.lookup(ctx, p.name, ep)
 		if err != nil {
 			r.log.Warn("upstream DNS lookup failed; keeping the previous addresses", "upstream", p.name, "endpoint", ep, "err", err)
 			addrs = p.resolved[ep]
 		}
 		resolved[ep] = addrs
-		all = append(all, addrs...)
+		for _, addr := range addrs {
+			if seen[addr] {
+				continue // two configured names for one address are one endpoint
+			}
+			seen[addr] = true
+			e := old[addr]
+			if e == nil {
+				e = &endpoint{addr: addr, host: ep}
+				e.healthy.Store(true)
+			}
+			eps = append(eps, e)
+		}
 	}
 	p.resolved = resolved
-	p.addrs.Store(&all)
+	p.endpoints.Store(&eps)
+	for addr, e := range old {
+		if !seen[addr] {
+			e.stopProbe() // a request holding it finishes on it
+		}
+	}
+	r.syncProbes(p)
+}
+
+// syncProbes starts a prober for each endpoint of p that needs one and has
+// none, and when p has no health check stops every prober and marks its
+// endpoint healthy. p.mu must be held.
+func (r *Registry) syncProbes(p *pool) {
+	hc := p.settings.Load().HealthCheck
+	for _, e := range *p.endpoints.Load() {
+		switch {
+		case hc != nil && p.probe && e.stop == nil:
+			ctx, cancel := context.WithCancel(r.ctx)
+			e.stop = cancel
+			go r.prober(ctx, p, e)
+		case hc == nil && e.stop != nil:
+			e.stopProbe()
+			e.mu.Lock()
+			e.healthy.Store(true)
+			e.successes, e.failures, e.lastErr = 0, 0, ""
+			e.mu.Unlock()
+		}
+	}
+}
+
+// stopProbe stops e's prober, if any. The pool's mu must be held.
+func (e *endpoint) stopProbe() {
+	if e.stop != nil {
+		e.stop()
+		e.stop = nil
+	}
+}
+
+// prober probes e until ctx ends (GW-08, ADR-0030): first after a random delay
+// within one interval, so that probes do not line up across endpoints and
+// replicas, then once per interval from the start of the previous probe. It
+// reads the upstream's health check before each probe, so a reload's new
+// interval, timeout or path applies from the next one.
+func (r *Registry) prober(ctx context.Context, p *pool, e *endpoint) {
+	hc := p.settings.Load().HealthCheck
+	if hc == nil {
+		return
+	}
+	t := time.NewTimer(rand.N(hc.Interval)) //nolint:gosec // G404: spreads probes out, not security
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		start := time.Now()
+		if hc = p.settings.Load().HealthCheck; hc == nil {
+			return
+		}
+		e.observe(ctx, r.probe(ctx, e, hc), hc, p.name, r.log)
+		t.Reset(time.Until(start.Add(hc.Interval)))
+	}
+}
+
+// probe sends one health check to e: GET path with e's configured address
+// as Host. A 2xx or 3xx within the timeout is a success; it reads at most 4
+// KiB of the body.
+func (r *Registry) probe(ctx context.Context, e *endpoint, hc *config.HealthCheck) error {
+	ctx, cancel := context.WithTimeout(ctx, hc.Timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+e.addr+hc.Path, nil)
+	if err != nil {
+		return err
+	}
+	req.Host = e.host
+	req.Header.Set("User-Agent", "spillway-health-check")
+	resp, err := r.probes.RoundTrip(req)
+	if err != nil {
+		return err
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
+	_ = resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
+		return fmt.Errorf("status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// observe counts a probe's result, err nil for a success: after hc.Unhealthy
+// failures in a row a healthy endpoint becomes unhealthy, and after
+// hc.Healthy successes in a row an unhealthy one becomes healthy. A result
+// that arrives after its prober was stopped is dropped.
+func (e *endpoint) observe(ctx context.Context, err error, hc *config.HealthCheck, upstream string, log *slog.Logger) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if ctx.Err() != nil {
+		return
+	}
+	if err == nil {
+		e.failures = 0
+		e.successes++
+		if !e.healthy.Load() && e.successes >= hc.Healthy {
+			e.healthy.Store(true)
+			log.Info("upstream endpoint healthy", "upstream", upstream, "endpoint", e.addr, "reason", e.lastErr)
+		}
+		return
+	}
+	e.successes = 0
+	e.failures++
+	e.lastErr = err.Error()
+	if e.healthy.Load() && e.failures >= hc.Unhealthy {
+		e.healthy.Store(false)
+		log.Warn("upstream endpoint unhealthy", "upstream", upstream, "endpoint", e.addr, "reason", e.lastErr)
+	}
 }
 
 func (r *Registry) lookup(ctx context.Context, upstream, endpoint string) ([]string, error) {
@@ -223,12 +423,99 @@ func (r *Registry) lookup(ctx context.Context, upstream, endpoint string) ([]str
 // errNoAddress means an upstream has no usable address right now.
 var errNoAddress = errors.New("upstream has no usable address")
 
-// pick returns the next address in round-robin order. Load balancing proper
-// arrives in M4 (GW-07).
-func (p *pool) pick() (string, error) {
-	addrs := *p.addrs.Load()
-	if len(addrs) == 0 {
-		return "", errNoAddress
+// selectable reports whether e takes traffic at now: healthy and not ejected
+// (ADR-0030).
+func (e *endpoint) selectable(now time.Time) bool {
+	return e.healthy.Load() && !e.outlier.Ejected(now)
+}
+
+func (e *endpoint) notEjected(now time.Time) bool { return !e.outlier.Ejected(now) }
+
+func (e *endpoint) always(time.Time) bool { return true }
+
+// pick returns the endpoint for an attempt at now, in round-robin order over
+// the selectable endpoints (GW-07 brings the other algorithms). When none is
+// selectable, it is in panic mode: it ignores health and picks among the
+// endpoints that are not ejected, or among all of them if every one is
+// (ADR-0030).
+func (p *pool) pick(now time.Time) (*endpoint, error) {
+	eps := *p.endpoints.Load()
+	if len(eps) == 0 {
+		return nil, errNoAddress
 	}
-	return addrs[(p.next.Add(1)-1)%uint64(len(addrs))], nil
+	candidate := (*endpoint).selectable
+	n := count(eps, now, candidate)
+	if n == 0 {
+		if p.panicking.CompareAndSwap(false, true) {
+			p.log.Warn("upstream has no healthy endpoint; ignoring health checks", "upstream", p.name)
+		}
+		candidate = (*endpoint).notEjected
+		if n = count(eps, now, candidate); n == 0 {
+			candidate, n = (*endpoint).always, len(eps)
+		}
+	} else if p.panicking.CompareAndSwap(true, false) {
+		p.log.Info("upstream has a healthy endpoint again; health checks apply", "upstream", p.name)
+	}
+	i := (p.next.Add(1) - 1) % uint64(n)
+	for _, e := range eps {
+		if candidate(e, now) {
+			if i == 0 {
+				return e, nil
+			}
+			i--
+		}
+	}
+	return eps[0], nil // an ejection or health change between the count and here
+}
+
+func count(eps []*endpoint, now time.Time, f func(*endpoint, time.Time) bool) int {
+	n := 0
+	for _, e := range eps {
+		if f(e, now) {
+			n++
+		}
+	}
+	return n
+}
+
+// record notes the outcome of an attempt sent to e (GW-09, ADR-0030): the
+// consecutive_failures-th failure in a row ejects e, unless that would eject
+// more than max_ejected_percent of the upstream's endpoints, rounded down.
+func (p *pool) record(e *endpoint, now time.Time, failed bool) {
+	s := &p.settings.Load().Outlier
+	if !e.outlier.Record(now, failed, s) {
+		return
+	}
+	p.ejectMu.Lock()
+	defer p.ejectMu.Unlock()
+	eps := *p.endpoints.Load()
+	if !slices.Contains(eps, e) {
+		return // removed by a reload or a DNS change
+	}
+	if count(eps, now, (*endpoint).ejected)+1 > len(eps)*s.MaxEjectedPercent/100 {
+		p.log.Info("upstream endpoint ejection skipped: max_ejected_percent reached", "upstream", p.name, "endpoint", e.addr)
+		return
+	}
+	if d := e.outlier.Eject(now, s); d > 0 {
+		p.log.Warn("upstream endpoint ejected", "upstream", p.name, "endpoint", e.addr, "for", d, "times", e.outlier.State().Times)
+	}
+}
+
+func (e *endpoint) ejected(now time.Time) bool { return e.outlier.Ejected(now) }
+
+// Describe and Collect make the registry a Prometheus collector of
+// gw_upstream_endpoint_healthy, one series per endpoint while it exists.
+func (r *Registry) Describe(ch chan<- *prometheus.Desc) { ch <- r.healthy }
+
+func (r *Registry) Collect(ch chan<- prometheus.Metric) {
+	now := r.clock.Now()
+	for _, p := range *r.pools.Load() {
+		for _, e := range *p.endpoints.Load() {
+			v := 0.0
+			if e.selectable(now) {
+				v = 1
+			}
+			ch <- prometheus.MustNewConstMetric(r.healthy, prometheus.GaugeValue, v, p.name, e.addr)
+		}
+	}
 }

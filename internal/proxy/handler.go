@@ -74,11 +74,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		q.Latency, q.BytesIn, q.BytesOut = time.Since(start), body.n.Load(), rw.bytes
 		h.rec.Request(r.Context(), &q)
 	}()
-	h.serve(rw, r, &q)
+	h.serve(rw, r, body, &q)
 }
 
-// serve answers r and notes in q what the access log and metrics need.
-func (h *Handler) serve(w *responseRecorder, r *http.Request, q *telemetry.Request) {
+// serve answers r, whose body reads through body, and notes in q what the
+// access log and metrics need.
+func (h *Handler) serve(w *responseRecorder, r *http.Request, body *countingBody, q *telemetry.Request) {
 	if r.Method == http.MethodConnect {
 		http.Error(w, "CONNECT is not supported", http.StatusMethodNotAllowed)
 		return
@@ -172,7 +173,7 @@ func (h *Handler) serve(w *responseRecorder, r *http.Request, q *telemetry.Reque
 	}
 	p := h.pools.pool(route.Upstream)
 	q.Upstream = p.name
-	addr, err := p.pick()
+	ep, err := p.pick(h.pools.clock.Now())
 	if err != nil {
 		q.Reason = telemetry.ReasonUpstream
 		h.log.Warn("no upstream address", "route", route.Name, "upstream", p.name, "request_id", q.ID)
@@ -200,6 +201,9 @@ func (h *Handler) serve(w *responseRecorder, r *http.Request, q *telemetry.Reque
 			start := time.Now()
 			resp, err := p.transport.RoundTrip(out)
 			h.rec.UpstreamAttempt(p.name, 1, time.Since(start)) // one attempt until retries (GW-12, M4)
+			if failed, counted := attemptOutcome(out.Context(), resp, err, body); counted {
+				p.record(ep, h.pools.clock.Now(), failed) // GW-09
+			}
 			return resp, err
 		}),
 		// Hop-by-hop headers are already removed from pr.Out when Rewrite
@@ -207,7 +211,7 @@ func (h *Handler) serve(w *responseRecorder, r *http.Request, q *telemetry.Reque
 		// other X-Forwarded-* the client sent (SEC-07).
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.Out.URL.Scheme = "http"
-			pr.Out.URL.Host = addr
+			pr.Out.URL.Host = ep.addr
 			pr.Out.URL.User = nil // an absolute-form URL's userinfo would become an Authorization header
 			pr.Out.URL.Path = upstreamPath
 			pr.Out.URL.RawPath = ""
@@ -309,6 +313,29 @@ func headerBytes(r *http.Request) int {
 		}
 	}
 	return n
+}
+
+// attemptOutcome classifies an upstream attempt that ended with resp or err
+// for outlier ejection (ADR-0030, "Attempt outcomes"). A 5xx, a connect
+// error, a reset or EOF before the response headers, and the attempt's own
+// deadline are failures; any other response is a success. Outcomes that are
+// the client's doing (it went away, its body failed or was over the route's
+// limit, the idle timeout) or the gateway's (the dial-time allow-list) are
+// not counted.
+func attemptOutcome(ctx context.Context, resp *http.Response, err error, body *countingBody) (failed, counted bool) {
+	if err == nil {
+		return resp.StatusCode >= 500, true
+	}
+	if body.broken.Load() || errors.Is(err, ErrNotAllowed) {
+		return false, false
+	}
+	if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
+		return false, false
+	}
+	if ctx.Err() != nil && !errors.Is(context.Cause(ctx), context.DeadlineExceeded) {
+		return false, false
+	}
+	return true, true
 }
 
 // proxyError answers a failed upstream request: 413 for a body over the

@@ -88,6 +88,7 @@ func run(log *slog.Logger) error {
 // requests get up to 10 s to finish, and serve returns.
 func serve(ctx context.Context, s settings, log *slog.Logger) error {
 	pools := proxy.NewRegistry(s.allow, net.DefaultResolver, log)
+	defer pools.Close() // stops the health probers once the servers are done
 	// Upstream pools and rate limiters live outside the snapshot and are
 	// reconciled before each new one goes live (GW-29).
 	limiters := local.NewRegistry(ratelimit.SystemClock)
@@ -126,6 +127,7 @@ func serve(ctx context.Context, s settings, log *slog.Logger) error {
 		go ids.Run(ctx, time.Second)
 	}
 	reg := telemetry.NewRegistry()
+	reg.MustRegister(pools) // gw_upstream_endpoint_healthy
 	rec := telemetry.NewRecorder(reg, log, s.accessLogSampleRate)
 	srv := proxy.NewServer(proxy.NewHandler(cfg.Snapshot, identity, s.trusted, pools, limiters, rl, s.devMode, rec, log), log)
 	if s.tlsCert != "" {

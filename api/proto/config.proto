@@ -25,6 +25,49 @@ message Upstream {
   // (GW-29).
   string name = 1;
   repeated Endpoint endpoints = 2;
+  // Fields 3 (lb) and 4 (hash_on) are for load balancing (GW-07, ADR-0030).
+
+  // Active health checks (GW-08); unset means none.
+  HealthCheck health_check = 5;
+  // Passive outlier ejection (GW-09); unset means the defaults (ADR-0030).
+  OutlierDetection outlier_detection = 6;
+}
+
+// HealthCheck probes each endpoint of an upstream on its own (GW-08,
+// ADR-0030). A 2xx or 3xx answer is a success.
+message HealthCheck {
+  // Required: the path probed with GET, such as "/healthz"; may carry a
+  // query.
+  string path = 1;
+  // Between the starts of two probes: a Go duration from 100ms to 1h. Unset
+  // means 5s.
+  string interval = 2;
+  // One probe, connect to response headers: more than 0 and at most
+  // interval. Unset means 1s, or interval when that is shorter.
+  string timeout = 3;
+  // Consecutive failed probes that make an endpoint unhealthy: 1 to 100.
+  // Unset means 3.
+  int32 unhealthy = 4;
+  // Consecutive successful probes that make it healthy again: 1 to 100.
+  // Unset means 2.
+  int32 healthy = 5;
+}
+
+// OutlierDetection ejects an endpoint whose attempts keep failing (GW-09,
+// ADR-0030).
+message OutlierDetection {
+  // Failed attempts in a row (5xx, connect error, reset or attempt timeout)
+  // that eject an endpoint: 1 to 1000. Unset means 5.
+  int32 consecutive_failures = 1;
+  // An ejection lasts base_ejection times the number of times the endpoint
+  // has been ejected: a Go duration from 1s to 1h. Unset means 30s.
+  string base_ejection = 2;
+  // The longest ejection: at least base_ejection, at most 24h. Unset means
+  // 300s, or base_ejection when that is longer.
+  string max_ejection = 3;
+  // At most this share of an upstream's endpoints, rounded down, is ejected
+  // at once: 1 to 100. Unset means 50.
+  int32 max_ejected_percent = 4;
 }
 
 // Endpoint is one address of an upstream.

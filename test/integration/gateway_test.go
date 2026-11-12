@@ -36,6 +36,7 @@ gw_requests_total{code_class="2xx",method="GET",origin="upstream",reason="none",
 gw_request_duration_seconds_count{route="default",tenant="none"} `,
 		`
 gw_upstream_duration_seconds_count{attempt="1",upstream="httpbin"} `,
+		"\ngw_upstream_endpoint_healthy{endpoint=",
 	} {
 		if !strings.Contains(metrics, m) {
 			t.Errorf("admin /metrics has no %s", strings.TrimSpace(m))
