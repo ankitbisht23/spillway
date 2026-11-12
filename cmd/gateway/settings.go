@@ -28,6 +28,10 @@ type settings struct {
 	allow      proxy.Allowlist // SPILLWAY_GATEWAY_ALLOWED_NETWORKS: comma-separated CIDRs (SEC-06)
 	dnsRefresh time.Duration   // SPILLWAY_GATEWAY_DNS_REFRESH: upstream re-resolution interval (GW-06), default 30s
 
+	// Shutdown (GW-23, ADR-0030)
+	drain         time.Duration // SPILLWAY_GATEWAY_DRAIN: how long the gateway keeps serving after SIGTERM with /readyz failing, default 5s, 0 allowed
+	shutdownGrace time.Duration // SPILLWAY_GATEWAY_SHUTDOWN_GRACE: after the drain, how long in-flight requests get to finish, default 15s
+
 	// Clients (SEC-05)
 	trusted proxy.TrustedProxies // SPILLWAY_GATEWAY_TRUSTED_PROXIES: comma-separated CIDRs of proxies whose X-Forwarded-For is believed, default none
 
@@ -55,6 +59,9 @@ func loadSettings(getenv func(string) string) (settings, error) {
 		tlsKey:     getenv("SPILLWAY_GATEWAY_TLS_KEY"),
 		adminAddr:  adminAddr(getenv),
 		dnsRefresh: 30 * time.Second,
+
+		drain:         5 * time.Second,
+		shutdownGrace: 15 * time.Second,
 
 		accessLogSampleRate: 1,
 		otlpEndpoint:        getenv("SPILLWAY_GATEWAY_OTLP_ENDPOINT"),
@@ -95,6 +102,16 @@ func loadSettings(getenv func(string) string) (settings, error) {
 	if v := getenv("SPILLWAY_GATEWAY_DNS_REFRESH"); v != "" {
 		if s.dnsRefresh, err = time.ParseDuration(v); err != nil || s.dnsRefresh <= 0 {
 			return s, fmt.Errorf("SPILLWAY_GATEWAY_DNS_REFRESH: %q is not a positive duration", v)
+		}
+	}
+	if v := getenv("SPILLWAY_GATEWAY_DRAIN"); v != "" {
+		if s.drain, err = time.ParseDuration(v); err != nil || s.drain < 0 {
+			return s, fmt.Errorf("SPILLWAY_GATEWAY_DRAIN: %q is not a duration of 0 or more", v)
+		}
+	}
+	if v := getenv("SPILLWAY_GATEWAY_SHUTDOWN_GRACE"); v != "" {
+		if s.shutdownGrace, err = time.ParseDuration(v); err != nil || s.shutdownGrace <= 0 {
+			return s, fmt.Errorf("SPILLWAY_GATEWAY_SHUTDOWN_GRACE: %q is not a positive duration", v)
 		}
 	}
 	if v := getenv("SPILLWAY_GATEWAY_ACCESS_LOG_SAMPLE_RATE"); v != "" {

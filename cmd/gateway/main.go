@@ -63,6 +63,7 @@ func run(log *slog.Logger) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	flush := func(context.Context) {}
 	if s.otlpEndpoint != "" {
 		// Logs go to stdout and to the OTel Collector (OB-03). Export errors
 		// go to stdout only, never back into the export queue.
@@ -72,23 +73,41 @@ func run(log *slog.Logger) error {
 		if err != nil {
 			return err
 		}
-		defer func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
+		flushed := false
+		flush = func(ctx context.Context) {
+			flushed = true
 			if err := shutdown(ctx); err != nil {
 				stdout.Warn("OTLP log flush failed", "err", err)
+			}
+		}
+		defer func() { // serve returned early, with an error
+			if !flushed {
+				ctx, cancel := context.WithTimeout(context.Background(), flushTimeout)
+				defer cancel()
+				flush(ctx)
 			}
 		}()
 		log = slog.New(slog.NewMultiHandler(log.Handler(), h))
 	}
-	return serve(ctx, s, log)
+	return serve(ctx, s, log, flush)
 }
 
-// serve runs the gateway until ctx ends. Then /readyz fails, in-flight
-// requests get up to 10 s to finish, and serve returns.
-func serve(ctx context.Context, s settings, log *slog.Logger) error {
+// flushTimeout bounds the flush of queued telemetry at shutdown (ADR-0030).
+const flushTimeout = 5 * time.Second
+
+// serve runs the gateway until ctx ends, then shuts it down gracefully
+// (GW-23, ADR-0030), in this order: /readyz fails; for the drain the
+// listeners keep serving, closing each HTTP/1.1 connection after its
+// response; the listeners close and in-flight requests get the shutdown
+// grace, after which the rest are cut; the health probers, DNS refresh and
+// watchers stop; flush sends the queued telemetry; the admin server closes.
+func serve(ctx context.Context, s settings, log *slog.Logger, flush func(context.Context)) error {
+	// Background work runs until step 4 of the shutdown, past ctx, so
+	// that health checks and reloads go on while the gateway drains.
+	bg, stopBG := context.WithCancel(context.Background())
+	defer stopBG()
 	pools := proxy.NewRegistry(s.allow, net.DefaultResolver, log)
-	defer pools.Close() // stops the health probers once the servers are done
+	defer pools.Close() // on an early return
 	// Upstream pools and rate limiters live outside the snapshot and are
 	// reconciled before each new one goes live (GW-29).
 	limiters := local.NewRegistry(ratelimit.SystemClock)
@@ -99,7 +118,7 @@ func serve(ctx context.Context, s settings, log *slog.Logger) error {
 	if len(s.redisAddrs) > 0 {
 		c := redis.NewClient(s.redisAddrs, s.redisAddrMap, ratelimit.SystemClock, log)
 		defer func() { _ = c.Close() }()
-		go c.Warm(ctx, time.Second)
+		go c.Warm(bg, time.Second)
 		rl = c
 	}
 	cfg, err := config.NewWatcher(s.configPath, log, func(snap *config.Snapshot) error {
@@ -124,24 +143,31 @@ func serve(ctx context.Context, s settings, log *slog.Logger) error {
 			return err
 		}
 		identity = ids.Identity
-		go ids.Run(ctx, time.Second)
+		go ids.Run(bg, time.Second)
 	}
 	reg := telemetry.NewRegistry()
 	reg.MustRegister(pools) // gw_upstream_endpoint_healthy
 	rec := telemetry.NewRecorder(reg, log, s.accessLogSampleRate)
-	srv := proxy.NewServer(proxy.NewHandler(cfg.Snapshot, identity, s.trusted, pools, limiters, rl, s.devMode, rec, log), log)
+	// Requests in flight, for the shutdown's log line.
+	var inFlight atomic.Int64
+	handler := proxy.NewHandler(cfg.Snapshot, identity, s.trusted, pools, limiters, rl, s.devMode, rec, log)
+	srv := proxy.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		inFlight.Add(1)
+		defer inFlight.Add(-1)
+		handler.ServeHTTP(w, r)
+	}), log)
 	if s.tlsCert != "" {
 		certs, err := proxy.NewCerts(s.tlsCert, s.tlsKey, log)
 		if err != nil {
 			return err
 		}
-		go certs.Run(ctx, time.Second)
+		go certs.Run(bg, time.Second)
 		srv.TLSConfig = certs.TLSConfig()
 	}
-	go cfg.Run(ctx, time.Second)
-	go pools.Run(ctx, s.dnsRefresh)
-	go limiters.Run(ctx, 10*time.Second) // drops idle limiter keys (ADR-0017)
-	go rec.Run(ctx, time.Minute)         // tenants are ranked per minute (OB-01)
+	go cfg.Run(bg, time.Second)
+	go pools.Run(bg, s.dnsRefresh)
+	go limiters.Run(bg, 10*time.Second) // drops idle limiter keys (ADR-0017)
+	go rec.Run(bg, time.Minute)         // tenants are ranked per minute (OB-01)
 
 	reg.MustRegister(prometheus.NewGaugeFunc(prometheus.GaugeOpts{
 		Name: "gw_config_version",
@@ -193,12 +219,39 @@ func serve(ctx context.Context, s settings, log *slog.Logger) error {
 		return err
 	case <-ctx.Done():
 	}
-	// Draining (GW-23) arrives in M4; until then, fail readiness, finish
-	// in-flight requests for a few seconds and exit.
+	// 1. Readiness fails, so load balancers stop sending new connections.
 	draining.Store(true)
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	log.Info("shutting down: draining", "drain", s.drain.String())
+	// 2. Drain: keep serving, but close each HTTP/1.1 connection after its
+	// response, so that clients reconnect, to other replicas once
+	// readiness has taken effect.
+	srv.SetKeepAlivesEnabled(false)
+	drain := time.NewTimer(s.drain)
+	select {
+	case <-drain.C:
+	case err := <-errc:
+		drain.Stop()
+		closeAll()
+		return err
+	}
+	// 3. Stop accepting; in-flight requests get the grace, then are cut.
+	log.Info("shutting down: closing listeners", "grace", s.shutdownGrace.String(), "requests", inFlight.Load())
+	graceCtx, cancel := context.WithTimeout(context.Background(), s.shutdownGrace)
 	defer cancel()
-	err = srv.Shutdown(shutdownCtx)
+	err = srv.Shutdown(graceCtx)
+	if errors.Is(err, context.DeadlineExceeded) {
+		log.Warn("shutdown grace ended; cutting requests", "requests", inFlight.Load())
+		_ = srv.Close()
+		err = nil
+	}
+	// 4. Background work: health probers, DNS refresh, watchers.
+	stopBG()
+	pools.Close()
+	// 5. Queued telemetry.
+	flushCtx, cancelFlush := context.WithTimeout(context.Background(), flushTimeout)
+	defer cancelFlush()
+	flush(flushCtx)
+	// 6. The admin server.
 	_ = admin.Close()
 	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
