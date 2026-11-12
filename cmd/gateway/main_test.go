@@ -286,10 +286,9 @@ func TestServeRedisPolicies(t *testing.T) {
 		t.Errorf("serve without Redis = %v, want the Redis policy error", err)
 	}
 
-	// With TLS on, as in TestServe: serve reads srv.TLSConfig after starting
-	// the plain-HTTP server, which sets it when it is nil.
-	s.tlsCert, s.tlsKey, s.tlsAddr = filepath.Join(t.TempDir(), "cert.pem"), filepath.Join(t.TempDir(), "key.pem"), freeAddr(t)
-	testcert.Write(t, s.tlsCert, s.tlsKey, 1)
+	// Plain HTTP only: the plain-HTTP server sets an empty TLSConfig when
+	// it starts, which must not open a TLS listener (run with -race).
+	s.tlsAddr = freeAddr(t)
 	s.redisAddrs = []string{freeAddr(t)} // nothing listens there
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
@@ -299,6 +298,10 @@ func TestServeRedisPolicies(t *testing.T) {
 		if code, body := get(t, "http://"+s.httpAddr+"/x"); code != http.StatusOK || body != "upstream" {
 			t.Errorf("GET /x with Redis down = %d %q, want 200 from the upstream", code, body)
 		}
+	}
+	if c, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", s.tlsAddr); err == nil {
+		_ = c.Close()
+		t.Errorf("a TLS listener on %s without a certificate", s.tlsAddr)
 	}
 	cancel()
 	if err := <-done; err != nil {
