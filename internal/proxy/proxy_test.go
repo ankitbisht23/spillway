@@ -58,13 +58,18 @@ func (f *fakeResolver) set(host string, ips ...string) {
 }
 
 // upstream is a test server that echoes what it received and counts the
-// requests it served and the connections it accepted and closed.
+// requests it served and the connections it accepted and closed. Health
+// check probes are counted apart and answered probeStatus, if set; other
+// requests are answered status, if set (GW-08, GW-09).
 type upstream struct {
 	*httptest.Server
-	name     string
-	requests atomic.Int64
-	conns    atomic.Int64
-	closed   atomic.Int64
+	name        string
+	requests    atomic.Int64
+	conns       atomic.Int64
+	closed      atomic.Int64
+	probes      atomic.Int64
+	probeStatus atomic.Int32
+	status      atomic.Int32
 }
 
 type echo struct {
@@ -81,7 +86,18 @@ func newUpstream(t *testing.T, name string) *upstream {
 	t.Helper()
 	u := &upstream{name: name}
 	u.Server = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("User-Agent") == "spillway-health-check" {
+			u.probes.Add(1)
+			if code := u.probeStatus.Load(); code != 0 {
+				w.WriteHeader(int(code))
+			}
+			return
+		}
 		u.requests.Add(1)
+		if code := u.status.Load(); code != 0 {
+			w.WriteHeader(int(code))
+			return
+		}
 		body, _ := io.ReadAll(r.Body)
 		w.Header().Set("Connection", "X-Upstream-Secret")
 		w.Header().Set("X-Upstream-Secret", "1")
@@ -130,6 +146,7 @@ var t0 = time.Date(2026, 11, 10, 12, 0, 0, 250_000_000, time.UTC)
 type gateway struct {
 	*httptest.Server
 	reg      *Registry
+	events   *logBuffer // the registry's log
 	limiters *local.Registry
 	clock    *ratelimit.FakeClock
 	current  atomic.Pointer[config.Snapshot]
@@ -158,7 +175,9 @@ func newGatewayWith(t *testing.T, res Resolver, yaml string, trusted TrustedProx
 // newDevGateway is newGatewayWith with dev mode on or off (ADR-0021).
 func newDevGateway(t *testing.T, res Resolver, yaml string, trusted TrustedProxies, redis Redis, devMode bool) *gateway {
 	t.Helper()
-	g := &gateway{reg: NewRegistry(loopback, res, slog.New(slog.DiscardHandler)), clock: ratelimit.NewFakeClock(t0), metrics: prometheus.NewRegistry(), logs: &logBuffer{}}
+	g := &gateway{events: &logBuffer{}, clock: ratelimit.NewFakeClock(t0), metrics: prometheus.NewRegistry(), logs: &logBuffer{}}
+	g.reg = NewRegistry(loopback, res, slog.New(slog.NewJSONHandler(g.events, nil)))
+	t.Cleanup(g.reg.Close)
 	g.limiters = local.NewRegistry(g.clock)
 	g.apply(t, yaml)
 	rec := telemetry.NewRecorder(g.metrics, slog.New(slog.NewJSONHandler(g.logs, nil)), 1)
@@ -598,9 +617,9 @@ func TestRemovedUpstreamStillServesOldSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	route, _, _ := old.Match("", "GET", "/", nil)
-	addr, err := g.reg.pool(route.Upstream).pick()
-	if err != nil || !strings.HasSuffix(addr, ":"+a.port()) {
-		t.Errorf("pick = %q, %v; want upstream a's address", addr, err)
+	ep, err := g.reg.pool(route.Upstream).pick(time.Now())
+	if err != nil || !strings.HasSuffix(ep.addr, ":"+a.port()) {
+		t.Errorf("pick = %v, %v; want upstream a's address", ep, err)
 	}
 }
 
@@ -625,7 +644,7 @@ func TestRebuiltPoolDoesNotHoldUpReload(t *testing.T) {
 
 	picked := make(chan error, 1)
 	go func() {
-		_, err := reg.pool(old.Upstreams["gone"]).pick()
+		_, err := reg.pool(old.Upstreams["gone"]).pick(time.Now())
 		picked <- err
 	}()
 	<-res.looking
@@ -687,8 +706,8 @@ func TestDNSReresolution(t *testing.T) {
 	if _, _, e := g.get(t, "/", nil); e.Upstream != "b" {
 		t.Errorf("after re-resolution: served by %q, want b", e.Upstream)
 	}
-	if addrs := *(*g.reg.pools.Load())["orders"].addrs.Load(); len(addrs) != 1 {
-		t.Errorf("addresses = %v, want only the allowed one", addrs)
+	if eps := *(*g.reg.pools.Load())["orders"].endpoints.Load(); len(eps) != 1 {
+		t.Errorf("%d endpoints, want only the allowed address", len(eps))
 	}
 
 	res.mu.Lock()

@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"bufio"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -68,16 +69,21 @@ func (w *responseRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 // Unwrap lets http.ResponseController reach the server's Flush.
 func (w *responseRecorder) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
-// countingBody counts the bytes read from a request body. The transport may
-// still be reading it on its own goroutine when the handler returns.
+// countingBody counts the bytes read from a request body, and notes a read
+// that failed other than at the body's end. The transport may still be
+// reading it on its own goroutine when the handler returns.
 type countingBody struct {
 	io.ReadCloser
-	n atomic.Int64
+	n      atomic.Int64
+	broken atomic.Bool
 }
 
 func (b *countingBody) Read(p []byte) (int, error) {
 	n, err := b.ReadCloser.Read(p)
 	b.n.Add(int64(n))
+	if err != nil && !errors.Is(err, io.EOF) {
+		b.broken.Store(true)
+	}
 	return n, err
 }
 
