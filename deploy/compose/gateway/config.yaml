@@ -11,6 +11,14 @@ upstreams:
       - address: upstream-1:8080
       - address: upstream-2:8080
       - address: upstream-3:8080
+  # The same endpoints for the retry route alone, so that its demo failures
+  # open only this upstream's breaker and eject only from it (ADR-0030):
+  # about seven GET /retry/status/503 within 10 s open it for 10 s.
+  - name: httpbin-retry
+    endpoints:
+      - address: upstream-1:8080
+      - address: upstream-2:8080
+      - address: upstream-3:8080
 routes:
   - name: delay
     match: { path_prefix: /delay }
@@ -29,7 +37,7 @@ routes:
   - name: retry
     match: { path_prefix: /retry }
     strip_prefix: /retry
-    upstream: httpbin
+    upstream: httpbin-retry
     retry: { attempts: 3 }
   - name: default
     match: { path_prefix: / }
