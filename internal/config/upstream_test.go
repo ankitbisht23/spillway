@@ -147,3 +147,67 @@ func TestLBRejects(t *testing.T) {
 		})
 	}
 }
+
+// TestRetrySettings: an upstream without retry_budget has GW-13's 20% and
+// 3/s; a route without retry has one attempt and retries only idempotent
+// methods; set fields replace the defaults one by one (GW-12, GW-13,
+// ADR-0030).
+func TestRetrySettings(t *testing.T) {
+	budgets := []struct {
+		fields string
+		want   RetryBudget
+	}{
+		{"", RetryBudget{0.2, 3}},
+		{"retry_budget: {}", RetryBudget{0.2, 3}},
+		{"retry_budget: {ratio: 0.5}", RetryBudget{0.5, 3}},
+		{"retry_budget: {min_per_sec: 0.5}", RetryBudget{0.2, 0.5}},
+		{"retry_budget: {ratio: 1, min_per_sec: 10000}", RetryBudget{1, 10000}},
+	}
+	for _, tt := range budgets {
+		s, err := parse([]byte(withUpstream(tt.fields)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := s.Upstreams["u"].RetryBudget; got != tt.want {
+			t.Errorf("%q: retry budget %+v, want %+v", tt.fields, got, tt.want)
+		}
+	}
+	retries := []struct {
+		fields string
+		want   Retry
+	}{
+		{"", Retry{1, false}},
+		{"retry: {}", Retry{1, false}},
+		{"retry: {attempts: 1}", Retry{1, false}},
+		{"retry: {attempts: 3}", Retry{3, false}},
+		{"retry: {attempts: 5, non_idempotent: true}", Retry{5, true}},
+	}
+	for _, tt := range retries {
+		s, err := parse([]byte(upstream + "routes: [{name: r, upstream: u, match: {path: /}, " + tt.fields + "}]"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := s.Routes[0].Retry; got != tt.want {
+			t.Errorf("%q: retry %+v, want %+v", tt.fields, got, tt.want)
+		}
+	}
+}
+
+func TestRetryBudgetRejects(t *testing.T) {
+	tests := []struct{ fields, want string }{
+		{"retry_budget: {ratio: -0.1}", `upstream "u": retry_budget.ratio: want more than 0 and at most 1`},
+		{"retry_budget: {ratio: 1.01}", "retry_budget.ratio: want more than 0 and at most 1"},
+		{"retry_budget: {ratio: NaN}", "retry_budget.ratio: want more than 0 and at most 1"},
+		{"retry_budget: {min_per_sec: -3}", `upstream "u": retry_budget.min_per_sec: want more than 0 and at most 10000`},
+		{"retry_budget: {min_per_sec: 10001}", "retry_budget.min_per_sec: want more than 0 and at most 10000"},
+		{"retry_budget: {window: 10s}", `unknown field "window"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.fields, func(t *testing.T) {
+			_, err := parse([]byte(withUpstream(tt.fields)))
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}

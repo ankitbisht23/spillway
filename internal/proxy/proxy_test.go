@@ -145,6 +145,7 @@ var t0 = time.Date(2026, 11, 10, 12, 0, 0, 250_000_000, time.UTC)
 // to logs and keeps its metrics in metrics.
 type gateway struct {
 	*httptest.Server
+	h        *Handler
 	reg      *Registry
 	events   *logBuffer // the registry's log
 	limiters *local.Registry
@@ -181,7 +182,8 @@ func newDevGateway(t *testing.T, res Resolver, yaml string, trusted TrustedProxi
 	g.limiters = local.NewRegistry(g.clock)
 	g.apply(t, yaml)
 	rec := telemetry.NewRecorder(g.metrics, slog.New(slog.NewJSONHandler(g.logs, nil)), 1)
-	g.Server = httptest.NewServer(NewHandler(g.current.Load, g.identity.Load, trusted, g.reg, g.limiters, redis, devMode, rec, slog.New(slog.DiscardHandler)))
+	g.h = NewHandler(g.current.Load, g.identity.Load, trusted, g.reg, g.limiters, redis, devMode, rec, slog.New(slog.DiscardHandler))
+	g.Server = httptest.NewServer(g.h)
 	t.Cleanup(g.Close)
 	return g
 }

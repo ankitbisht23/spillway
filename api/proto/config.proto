@@ -37,6 +37,21 @@ message Upstream {
   HealthCheck health_check = 5;
   // Passive outlier ejection (GW-09); unset means the defaults (ADR-0030).
   OutlierDetection outlier_detection = 6;
+  // Limits the upstream's retries (GW-13); unset means the defaults
+  // (ADR-0030).
+  RetryBudget retry_budget = 8;
+}
+
+// RetryBudget grants a retry while the retries granted over the last 10 s,
+// this one included, are at most ratio times the first attempts over the
+// same 10 s plus min_per_sec times 10 (GW-13, ADR-0030). Retries past it are
+// dropped, never queued.
+message RetryBudget {
+  // More than 0 and at most 1. Unset means 0.2.
+  double ratio = 1;
+  // Retries per second granted on top of ratio: more than 0 and at most
+  // 10000. Unset means 3.
+  double min_per_sec = 2;
 }
 
 // HealthCheck probes each endpoint of an upstream on its own (GW-08,
@@ -113,6 +128,19 @@ message Route {
   string hsts_max_age = 12;
   // Cost units each request deducts (RL-07); unset means 1.
   int64 cost = 13;
+  // Retries (GW-12); unset means one attempt, no retry.
+  Retry retry = 14;
+}
+
+// Retry sets how many attempts a route's requests get (GW-12, GW-13,
+// ADR-0030). The conditions are the gateway's own: a connect error, a reset
+// or the attempt's timeout before the response headers, or a 502, 503 or 504.
+message Retry {
+  // Attempts in all, the first included: 1 to 5. Unset means 1.
+  int32 attempts = 1;
+  // Retries every method, not only GET, HEAD, OPTIONS, PUT, DELETE and
+  // TRACE (D4). Unset means false.
+  bool non_idempotent = 2;
 }
 
 // HeaderTransform changes headers: remove first, then set, then add (GW-02).

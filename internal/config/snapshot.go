@@ -39,6 +39,7 @@ type Route struct {
 	Timeouts        Timeouts
 	HSTS            string // Strict-Transport-Security value for TLS responses; empty means none
 	Cost            int64  // cost units each request deducts (RL-07)
+	Retry           Retry  // attempts, and whether every method retries (GW-12)
 	strip           int    // leading path segments that strip_prefix removes
 }
 
@@ -50,6 +51,7 @@ type Upstream struct {
 	HashOn      *KeyTemplate // LBConsistentHash's key; nil for the others
 	HealthCheck *HealthCheck // nil means no active checks (GW-08)
 	Outlier     OutlierDetection
+	RetryBudget RetryBudget
 }
 
 // Match returns the route for a request; path must be clean
@@ -164,6 +166,9 @@ func compileUpstream(u *configpb.Upstream) (*Upstream, error) {
 	}
 	if up.Outlier, err = compileOutlier(u.GetOutlierDetection()); err != nil {
 		return nil, fmt.Errorf("outlier_detection.%w", err)
+	}
+	if up.RetryBudget, err = compileRetryBudget(u.GetRetryBudget()); err != nil {
+		return nil, fmt.Errorf("retry_budget.%w", err)
 	}
 	return up, nil
 }

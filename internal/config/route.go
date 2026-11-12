@@ -43,6 +43,15 @@ type Timeouts struct {
 	Idle    time.Duration // no body bytes in either direction; 0 means none
 }
 
+// Retry is a route's compiled retry setting (GW-12, GW-13, ADR-0030).
+type Retry struct {
+	Attempts      int  // the first included; 1 means no retry
+	NonIdempotent bool // retries every method, not only the idempotent ones (D4)
+}
+
+// MaxAttempts is the most attempts a route may set (ADR-0030).
+const MaxAttempts = 5
+
 // Apply removes, then sets, then adds headers in h.
 func (t *HeaderTransform) Apply(h http.Header) {
 	for _, name := range t.Remove {
@@ -75,7 +84,7 @@ func (r *Route) UpstreamPath(path string) string {
 	return path
 }
 
-// compileTransforms fills in r's transforms, limits, timeouts, HSTS and cost; path
+// compileTransforms fills in r's transforms, limits, timeouts, HSTS, cost and retry; path
 // is the route's match.path or match.path_prefix.
 func (r *Route) compileTransforms(c *configpb.Route, path string) error {
 	if p := c.GetStripPrefix(); p != "" {
@@ -117,6 +126,11 @@ func (r *Route) compileTransforms(c *configpb.Route, path string) error {
 		return fmt.Errorf("cost: %d is not 1 to %d; unset means 1", r.Cost, maxQuantity)
 	}
 	r.Cost = max(r.Cost, 1)
+	r.Retry = Retry{Attempts: int(c.GetRetry().GetAttempts()), NonIdempotent: c.GetRetry().GetNonIdempotent()}
+	if r.Retry.Attempts < 0 || r.Retry.Attempts > MaxAttempts {
+		return fmt.Errorf("retry.attempts: want 1 to %d", MaxAttempts)
+	}
+	r.Retry.Attempts = max(r.Retry.Attempts, 1)
 	return nil
 }
 
@@ -128,12 +142,12 @@ func isPrefix(p string) bool {
 
 // gatewayHeaders are the headers a transform may not name, besides
 // X-Forwarded-*: the gateway owns framing, hop-by-hop handling, forwarding
-// headers (SEC-07) and the request ID (GW-22), and a transform must not undo
-// that.
+// headers (SEC-07), the request ID (GW-22) and the deadline header (GW-15),
+// and a transform must not undo that.
 var gatewayHeaders = map[string]bool{
 	"Connection": true, "Proxy-Connection": true, "Keep-Alive": true, "Proxy-Authenticate": true,
 	"Proxy-Authorization": true, "Te": true, "Trailer": true, "Transfer-Encoding": true, "Upgrade": true,
-	"Host": true, "Content-Length": true, "Forwarded": true, "X-Request-Id": true,
+	"Host": true, "Content-Length": true, "Forwarded": true, "X-Request-Id": true, "Spillway-Deadline-Ms": true,
 }
 
 func compileHeaders(t *configpb.HeaderTransform) (HeaderTransform, error) {

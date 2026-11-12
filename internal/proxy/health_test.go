@@ -394,20 +394,24 @@ func stateOf(e *endpoint) endpointState {
 }
 
 // TestReloadKeepsEndpointState (GW-29): under steady load, reloads that
-// change settings, the algorithm included, but keep the upstream and its
-// endpoints keep every endpoint object with its health, outlier state and
-// in-flight count; a reload that replaces one endpoint drops only that one
-// and stops its prober.
+// change settings, the algorithm and retry budget included, but keep the
+// upstream and its endpoints keep every endpoint object with its health,
+// outlier state and in-flight count, and the upstream's retry budget with
+// every first attempt and retry it counted; a reload that replaces one
+// endpoint drops only that one and stops its prober.
 func TestReloadKeepsEndpointState(t *testing.T) {
 	a, b, c, d := newUpstream(t, "a"), newUpstream(t, "b"), newUpstream(t, "c"), newUpstream(t, "d")
 	a.probeStatus.Store(http.StatusServiceUnavailable) // unhealthy
 	b.status.Store(http.StatusServiceUnavailable)      // ejected
 	cfg := func(n int, us ...*upstream) string {
-		return fmt.Sprintf("version: %d\n", n) + upstreamOf(fmt.Sprintf(
-			"health_check: {path: /health, interval: %dms, timeout: 250ms, unhealthy: 3, healthy: 2}, outlier_detection: {consecutive_failures: %d, base_ejection: 1h}, lb: %s",
-			250+n, 3+n%2, []string{"round_robin", "p2c", "consistent_hash, hash_on: '{ip}'"}[n%3]), us...)
+		return strings.Replace(fmt.Sprintf("version: %d\n", n)+upstreamOf(fmt.Sprintf(
+			"health_check: {path: /health, interval: %dms, timeout: 250ms, unhealthy: 3, healthy: 2}, outlier_detection: {consecutive_failures: %d, base_ejection: 1h}, "+
+				"retry_budget: {ratio: 0.%d}, lb: %s",
+			250+n, 3+n%2, 1+n%9, []string{"round_robin", "p2c", "consistent_hash, hash_on: '{ip}'"}[n%3]), us...),
+			"match: {path_prefix: /}", "match: {path_prefix: /}, retry: {attempts: 2}", 1)
 	}
 	g := newGateway(t, newResolver(a, b, c, d), cfg(0, a, b, c))
+	g.reg.clock = g.clock // the budget's window never rolls
 	waitFor(t, "a unhealthy", func() bool { return !g.endpoint(t, a.addr()).healthy.Load() })
 	for i := 0; endpointGauge(t, g.reg)["u "+b.addr()] == 1; i++ {
 		if i == 20 {
@@ -416,6 +420,10 @@ func TestReloadKeepsEndpointState(t *testing.T) {
 		g.get(t, "/", nil)
 	}
 	pool := (*g.reg.pools.Load())["u"]
+	budget := pool.budget
+	if q, r := budget.Counts(g.clock.Now()); q == 0 || r == 0 {
+		t.Fatalf("budget counted %d first attempts and %d retries before the reloads, want some of each", q, r)
+	}
 	eps := map[string]*endpoint{}
 	before := map[string]endpointState{}
 	for i, u := range []*upstream{a, b, c} {
@@ -467,9 +475,18 @@ func TestReloadKeepsEndpointState(t *testing.T) {
 		}
 		return true
 	})
-	if (*g.reg.pools.Load())["u"] != pool {
+	if (*g.reg.pools.Load())["u"] != pool || pool.budget != budget {
 		t.Fatal("a reload replaced the upstream's state")
 	}
+	// Every first attempt and retry since the gateway started is still in
+	// the budget's window. A handler the load's client left may still make
+	// an attempt, so the counts and the metrics are compared until they
+	// settle; after a reset they never would.
+	waitFor(t, "the budget to hold every first attempt and retry", func() bool {
+		first, sent := g.metric(t, `gw_upstream_duration_seconds_count{attempt="1",upstream="u"}`), g.metric(t, `gw_retries_total{outcome="sent",upstream="u"}`)
+		q, r := budget.Counts(g.clock.Now())
+		return float64(q) == first && float64(r) == sent
+	})
 	for _, u := range []*upstream{a, b, c} {
 		e := g.endpoint(t, u.addr())
 		if e != eps[u.name] {

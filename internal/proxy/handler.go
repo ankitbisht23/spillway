@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"log/slog"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -30,7 +31,8 @@ type Handler struct {
 	pools    *Registry
 	limiters *local.Registry
 	redis    Redis
-	devMode  bool // Spillway-Decision-Time on Redis-decided responses (ADR-0021)
+	devMode  bool                              // Spillway-Decision-Time on Redis-decided responses (ADR-0021) and Spillway-Attempts (ADR-0030)
+	jitter   func(time.Duration) time.Duration // draws a retry's backoff in [0, n) (GW-12)
 	rec      *telemetry.Recorder
 	log      *slog.Logger
 	errLog   *log.Logger
@@ -43,9 +45,10 @@ type Handler struct {
 // limiters in limiters (ADR-0017) and its Redis policies with redis, nil if
 // the gateway has no Redis (ADR-0021), and records requests with rec (OB-01,
 // OB-03). With devMode, a response decided in Redis carries the decision's
-// Redis time for the accuracy harness (ADR-0021).
+// Redis time for the accuracy harness (ADR-0021), and a response after
+// upstream attempts their number for the M4 exit check (ADR-0030).
 func NewHandler(snapshot func() *config.Snapshot, identity func() *config.Identity, trusted TrustedProxies, pools *Registry, limiters *local.Registry, redis Redis, devMode bool, rec *telemetry.Recorder, log *slog.Logger) *Handler {
-	return &Handler{snapshot: snapshot, identity: identity, trusted: trusted, pools: pools, limiters: limiters, redis: redis, devMode: devMode, rec: rec, log: log, errLog: slog.NewLogLogger(log.Handler(), slog.LevelWarn)}
+	return &Handler{snapshot: snapshot, identity: identity, trusted: trusted, pools: pools, limiters: limiters, redis: redis, devMode: devMode, jitter: rand.N[time.Duration], rec: rec, log: log, errLog: slog.NewLogLogger(log.Handler(), slog.LevelWarn)}
 }
 
 // statusClientClosed is recorded for a request whose client went away before
@@ -174,7 +177,8 @@ func (h *Handler) serve(w *responseRecorder, r *http.Request, body *countingBody
 	}
 	p := h.pools.pool(route.Upstream)
 	q.Upstream = p.name
-	ep, err := p.pick(h.pools.clock.Now(), hashKey(p.settings.Load(), lim, ip), nil)
+	key := hashKey(p.settings.Load(), lim, ip)
+	ep, err := p.pick(h.pools.clock.Now(), key, nil)
 	if err != nil {
 		q.Reason = telemetry.ReasonUpstream
 		h.log.Warn("no upstream address", "route", route.Name, "upstream", p.name, "request_id", q.ID)
@@ -182,10 +186,10 @@ func (h *Handler) serve(w *responseRecorder, r *http.Request, body *countingBody
 		return
 	}
 
-	// Timeouts (GW-11). Until retries arrive (GW-12, M4) the one attempt
-	// spans the whole request, so per_try and total bound the same span.
+	// Timeouts (GW-11): total bounds the whole request, and each attempt
+	// its own min(per_try, what total leaves) (ADR-0030).
 	t := route.Timeouts
-	ctx, cancel := context.WithTimeout(r.Context(), min(t.PerTry, t.Total))
+	ctx, cancel := context.WithTimeout(r.Context(), t.Total)
 	defer cancel()
 	ctx = context.WithValue(ctx, connectTimeoutKey{}, t.Connect)
 	var idle *idleTimer
@@ -195,36 +199,29 @@ func (h *Handler) serve(w *responseRecorder, r *http.Request, body *countingBody
 		r.Body = idleBody{r.Body, idle}
 	}
 	r = r.WithContext(ctx)
-	// The attempt is in flight on ep (p2c) until its response body is
-	// closed or it fails; this defer covers every other way out, a panic
-	// or a 101's tunnel included.
-	release := func() {}
-	defer func() { release() }()
+
+	// Retries (GW-12): a body is buffered for them only when the route
+	// and method could retry, and only up to maxRetryBody (ADR-0030).
+	a := &attempts{h: h, p: p, route: route, q: q, body: body, key: key, first: ep, retry: mayRetry(&route.Retry, r.Method)}
+	if a.retry && r.ContentLength != 0 {
+		a.buf, r.Body, a.buffered = bufferBody(r.Body, r.ContentLength)
+		a.retry = a.buffered
+	}
+	// Each attempt is in flight on its endpoint (p2c) until it fails, is
+	// retried, or its response body is closed; this covers every other
+	// way out, a panic or a 101's tunnel included.
+	defer a.done()
 
 	upstreamPath := route.UpstreamPath(path)
 	rp := &httputil.ReverseProxy{
-		Transport: roundTripFunc(func(out *http.Request) (*http.Response, error) {
-			release = ep.begin()
-			start := time.Now()
-			resp, err := p.transport.RoundTrip(out)
-			h.rec.UpstreamAttempt(p.name, 1, time.Since(start)) // one attempt until retries (GW-12, M4)
-			if failed, counted := attemptOutcome(out.Context(), resp, err, body); counted {
-				p.record(ep, h.pools.clock.Now(), failed) // GW-09
-			}
-			if err != nil {
-				release()
-			} else if resp.StatusCode != http.StatusSwitchingProtocols { // a 101's body must stay an io.ReadWriteCloser
-				resp.Body = releaseBody{resp.Body, release}
-			}
-			return resp, err
-		}),
+		Transport: a,
 		// Hop-by-hop headers are already removed from pr.Out when Rewrite
 		// runs, and so are X-Forwarded-For, -Host and -Proto, but not the
 		// other X-Forwarded-* the client sent (SEC-07).
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.Out.URL.Scheme = "http"
-			pr.Out.URL.Host = ep.addr
-			pr.Out.URL.User = nil // an absolute-form URL's userinfo would become an Authorization header
+			pr.Out.URL.Host = ep.addr // each attempt sets its own (attempts.RoundTrip)
+			pr.Out.URL.User = nil     // an absolute-form URL's userinfo would become an Authorization header
 			pr.Out.URL.Path = upstreamPath
 			pr.Out.URL.RawPath = ""
 			pr.Out.Host = pr.In.Host
@@ -256,6 +253,9 @@ func (h *Handler) serve(w *responseRecorder, r *http.Request, body *countingBody
 			// but a 101 is written without WriteHeader (GW-22).
 			resp.Header.Set(telemetry.RequestIDHeader, q.ID)
 			w.setRateLimit(resp.Header)
+			if h.devMode {
+				resp.Header.Set(attemptsHeader, strconv.Itoa(q.Attempts)) // replaces the upstream's
+			}
 			if route.HSTS != "" && r.TLS != nil {
 				resp.Header.Set("Strict-Transport-Security", route.HSTS) // SEC-01; replaces the upstream's
 			}
@@ -391,6 +391,9 @@ func (h *Handler) proxyError(w http.ResponseWriter, r *http.Request, err error, 
 		return
 	}
 	q.Reason = telemetry.ReasonUpstream
+	if h.devMode && q.Attempts > 0 {
+		w.Header().Set(attemptsHeader, strconv.Itoa(q.Attempts))
+	}
 	status := http.StatusBadGateway
 	var ne net.Error
 	if cause != nil || errors.Is(err, context.DeadlineExceeded) || errors.As(err, &ne) && ne.Timeout() {

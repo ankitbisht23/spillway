@@ -86,8 +86,3 @@ func (b *countingBody) Read(p []byte) (int, error) {
 	}
 	return n, err
 }
-
-// roundTripFunc lets a function serve as an http.RoundTripper.
-type roundTripFunc func(*http.Request) (*http.Response, error)
-
-func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

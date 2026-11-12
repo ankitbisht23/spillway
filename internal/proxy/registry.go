@@ -32,11 +32,11 @@ type Resolver interface {
 }
 
 // Registry holds each upstream's runtime state, keyed by upstream name and
-// kept outside any snapshot: its connection pool, resolved addresses and
-// settings, and each endpoint's health and outlier state, keyed by the
-// endpoint's resolved ip:port. A reload keeps the state of the upstreams and
-// endpoints it still has (GW-29, ADR-0030). The registry is a Prometheus
-// collector of gw_upstream_endpoint_healthy.
+// kept outside any snapshot: its connection pool, resolved addresses,
+// settings and retry budget, and each endpoint's health and outlier state,
+// keyed by the endpoint's resolved ip:port. A reload keeps the state of the
+// upstreams and endpoints it still has (GW-29, ADR-0030). The registry is a
+// Prometheus collector of gw_upstream_endpoint_healthy.
 type Registry struct {
 	allow    Allowlist
 	resolver Resolver
@@ -60,6 +60,7 @@ type pool struct {
 	settings  atomic.Pointer[config.Upstream] // the latest snapshot's, changed in place on reload
 	endpoints atomic.Pointer[[]*endpoint]     // one per resolved address, published after each resolve
 	next      atomic.Uint64                   // round robin (GW-07)
+	budget    *resilience.Budget              // retries (GW-13)
 	panicking atomic.Bool                     // no endpoint was selectable at the last pick
 	ejectMu   sync.Mutex                      // one ejection decision at a time, so the cap holds
 	probe     bool                            // runs probers: false for a pool rebuilt for an older snapshot; guarded by mu
@@ -209,7 +210,7 @@ func (r *Registry) refresh() {
 }
 
 func (r *Registry) newPool(name string) *pool {
-	p := &pool{name: name, log: r.log, transport: &http.Transport{
+	p := &pool{name: name, log: r.log, budget: resilience.NewBudget(), transport: &http.Transport{
 		Proxy:                  nil, // never HTTP_PROXY from the environment
 		DialContext:            r.dial,
 		MaxIdleConnsPerHost:    512,

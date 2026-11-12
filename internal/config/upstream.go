@@ -142,3 +142,31 @@ func compileOutlier(o *configpb.OutlierDetection) (OutlierDetection, error) {
 	}
 	return out, nil
 }
+
+// RetryBudget is an upstream's compiled retry budget (GW-13, ADR-0030): a
+// retry is granted while the retries granted over the last 10 s, it
+// included, are at most Ratio × the first attempts over that time plus
+// MinPerSec × 10 s.
+type RetryBudget struct {
+	Ratio     float64
+	MinPerSec float64
+}
+
+// compileRetryBudget fills in the defaults: every upstream has a retry
+// budget (ADR-0030).
+func compileRetryBudget(b *configpb.RetryBudget) (RetryBudget, error) {
+	out := RetryBudget{Ratio: 0.2, MinPerSec: 3}
+	if v := b.GetRatio(); v != 0 {
+		if !(v > 0 && v <= 1) { // NaN too
+			return out, errors.New("ratio: want more than 0 and at most 1")
+		}
+		out.Ratio = v
+	}
+	if v := b.GetMinPerSec(); v != 0 {
+		if !(v > 0 && v <= 10000) {
+			return out, errors.New("min_per_sec: want more than 0 and at most 10000")
+		}
+		out.MinPerSec = v
+	}
+	return out, nil
+}
