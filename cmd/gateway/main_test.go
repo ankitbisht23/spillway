@@ -41,7 +41,8 @@ func TestLoadSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	if s.configPath != "/etc/spillway/config.yaml" || s.identity != "" || s.httpAddr != ":8000" || s.tlsCert != "" || s.adminAddr != "127.0.0.1:8001" || len(s.allow) != 1 || s.dnsRefresh != 30*time.Second ||
-		len(s.trusted) != 0 || s.accessLogSampleRate != 1 || s.otlpEndpoint != "" || s.drain != 5*time.Second || s.shutdownGrace != 15*time.Second {
+		len(s.trusted) != 0 || s.accessLogSampleRate != 1 || s.otlpEndpoint != "" || s.drain != 5*time.Second || s.shutdownGrace != 15*time.Second ||
+		s.maxConnections != 8192 || s.maxInFlight != 4096 {
 		t.Errorf("settings = %+v", s)
 	}
 	tlsOnly := map[string]string{"SPILLWAY_GATEWAY_HTTP_ADDR": "", "SPILLWAY_GATEWAY_TLS_CERT": "/c.pem", "SPILLWAY_GATEWAY_TLS_KEY": "/k.pem"}
@@ -88,6 +89,9 @@ func TestLoadSettings(t *testing.T) {
 	if s, err := loadSettings(env(map[string]string{"SPILLWAY_GATEWAY_SHUTDOWN_GRACE": "30s"})); err != nil || s.shutdownGrace != 30*time.Second {
 		t.Errorf("shutdown grace 30s: %+v, %v", s, err)
 	}
+	if s, err := loadSettings(env(map[string]string{"SPILLWAY_GATEWAY_MAX_CONNECTIONS": "100", "SPILLWAY_GATEWAY_MAX_IN_FLIGHT": "50"})); err != nil || s.maxConnections != 100 || s.maxInFlight != 50 {
+		t.Errorf("caps 100 and 50: %+v, %v", s, err)
+	}
 	if s, err := loadSettings(env(map[string]string{"SPILLWAY_GATEWAY_ADMIN_ADDR": ":8001"})); err != nil || s.adminAddr != ":8001" {
 		t.Errorf("admin address :8001: %+v, %v", s, err)
 	}
@@ -117,6 +121,9 @@ func TestLoadSettings(t *testing.T) {
 		{map[string]string{"SPILLWAY_GATEWAY_DRAIN": "5"}, `SPILLWAY_GATEWAY_DRAIN: "5" is not a duration of 0 or more`},
 		{map[string]string{"SPILLWAY_GATEWAY_SHUTDOWN_GRACE": "0s"}, `SPILLWAY_GATEWAY_SHUTDOWN_GRACE: "0s" is not a positive duration`},
 		{map[string]string{"SPILLWAY_GATEWAY_SHUTDOWN_GRACE": "x"}, `SPILLWAY_GATEWAY_SHUTDOWN_GRACE: "x" is not a positive duration`},
+		{map[string]string{"SPILLWAY_GATEWAY_MAX_CONNECTIONS": "0"}, `SPILLWAY_GATEWAY_MAX_CONNECTIONS: "0" is not a positive integer`},
+		{map[string]string{"SPILLWAY_GATEWAY_MAX_CONNECTIONS": "1e4"}, `SPILLWAY_GATEWAY_MAX_CONNECTIONS: "1e4" is not a positive integer`},
+		{map[string]string{"SPILLWAY_GATEWAY_MAX_IN_FLIGHT": "-1"}, `SPILLWAY_GATEWAY_MAX_IN_FLIGHT: "-1" is not a positive integer`},
 		{map[string]string{"SPILLWAY_GATEWAY_ACCESS_LOG_SAMPLE_RATE": "-0.1"}, "SPILLWAY_GATEWAY_ACCESS_LOG_SAMPLE_RATE"},
 		{map[string]string{"SPILLWAY_GATEWAY_ACCESS_LOG_SAMPLE_RATE": "1.5"}, "SPILLWAY_GATEWAY_ACCESS_LOG_SAMPLE_RATE"},
 		{map[string]string{"SPILLWAY_GATEWAY_ACCESS_LOG_SAMPLE_RATE": "NaN"}, "SPILLWAY_GATEWAY_ACCESS_LOG_SAMPLE_RATE"},
@@ -190,6 +197,9 @@ func TestServe(t *testing.T) {
 		dnsRefresh: time.Minute,
 
 		shutdownGrace: 5 * time.Second,
+
+		maxConnections: defaultMaxConnections,
+		maxInFlight:    defaultMaxInFlight,
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -296,7 +306,7 @@ func TestServeRedisPolicies(t *testing.T) {
 	if err := os.WriteFile(cfg, []byte(yaml), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	s := settings{configPath: cfg, httpAddr: freeAddr(t), adminAddr: freeAddr(t), allow: proxy.Allowlist{netip.MustParsePrefix("127.0.0.0/8")}, dnsRefresh: time.Minute, shutdownGrace: 5 * time.Second}
+	s := settings{configPath: cfg, httpAddr: freeAddr(t), adminAddr: freeAddr(t), allow: proxy.Allowlist{netip.MustParsePrefix("127.0.0.0/8")}, dnsRefresh: time.Minute, shutdownGrace: 5 * time.Second, maxConnections: defaultMaxConnections, maxInFlight: defaultMaxInFlight}
 	if err := serve(t.Context(), s, slog.New(slog.DiscardHandler), noFlush); err == nil || !strings.Contains(err.Error(), `policy "shared" runs in Redis (local is not true), but SPILLWAY_GATEWAY_REDIS_ADDRS is not set`) {
 		t.Errorf("serve without Redis = %v, want the Redis policy error", err)
 	}

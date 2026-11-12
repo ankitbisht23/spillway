@@ -375,7 +375,7 @@ func TestBackoff(t *testing.T) {
 			t.Errorf("backoff(%d) at least %v, want 0", n+1, got)
 		}
 	}
-	h := NewHandler(nil, nil, nil, nil, nil, nil, false, nil, discard)
+	h := NewHandler(nil, nil, nil, nil, nil, nil, false, 4096, nil, discard)
 	for range 1000 {
 		if d := backoff(2, h.jitter); d < 0 || d >= 50*time.Millisecond {
 			t.Fatalf("backoff(2) = %v, want [0, 50ms)", d)

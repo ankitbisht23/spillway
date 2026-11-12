@@ -32,6 +32,10 @@ type settings struct {
 	drain         time.Duration // SPILLWAY_GATEWAY_DRAIN: how long the gateway keeps serving after SIGTERM with /readyz failing, default 5s, 0 allowed
 	shutdownGrace time.Duration // SPILLWAY_GATEWAY_SHUTDOWN_GRACE: after the drain, how long in-flight requests get to finish, default 15s
 
+	// Load shedding (GW-26, ADR-0030); the admin port is exempt
+	maxConnections int64 // SPILLWAY_GATEWAY_MAX_CONNECTIONS: open client connections across the traffic listeners, default 8192
+	maxInFlight    int64 // SPILLWAY_GATEWAY_MAX_IN_FLIGHT: requests being handled at once, default 4096
+
 	// Clients (SEC-05)
 	trusted proxy.TrustedProxies // SPILLWAY_GATEWAY_TRUSTED_PROXIES: comma-separated CIDRs of proxies whose X-Forwarded-For is believed, default none
 
@@ -49,6 +53,13 @@ type settings struct {
 // interface is named (GW-25, SEC-02).
 const defaultAdminAddr = "127.0.0.1:8001"
 
+// The load-shedding caps' defaults (GW-26), with their file descriptor and
+// memory budget in ADR-0030.
+const (
+	defaultMaxConnections = 8192
+	defaultMaxInFlight    = 4096
+)
+
 func loadSettings(getenv func(string) string) (settings, error) {
 	s := settings{
 		configPath: getenv("SPILLWAY_GATEWAY_CONFIG"),
@@ -62,6 +73,9 @@ func loadSettings(getenv func(string) string) (settings, error) {
 
 		drain:         5 * time.Second,
 		shutdownGrace: 15 * time.Second,
+
+		maxConnections: defaultMaxConnections,
+		maxInFlight:    defaultMaxInFlight,
 
 		accessLogSampleRate: 1,
 		otlpEndpoint:        getenv("SPILLWAY_GATEWAY_OTLP_ENDPOINT"),
@@ -112,6 +126,16 @@ func loadSettings(getenv func(string) string) (settings, error) {
 	if v := getenv("SPILLWAY_GATEWAY_SHUTDOWN_GRACE"); v != "" {
 		if s.shutdownGrace, err = time.ParseDuration(v); err != nil || s.shutdownGrace <= 0 {
 			return s, fmt.Errorf("SPILLWAY_GATEWAY_SHUTDOWN_GRACE: %q is not a positive duration", v)
+		}
+	}
+	if v := getenv("SPILLWAY_GATEWAY_MAX_CONNECTIONS"); v != "" {
+		if s.maxConnections, err = strconv.ParseInt(v, 10, 64); err != nil || s.maxConnections <= 0 {
+			return s, fmt.Errorf("SPILLWAY_GATEWAY_MAX_CONNECTIONS: %q is not a positive integer", v)
+		}
+	}
+	if v := getenv("SPILLWAY_GATEWAY_MAX_IN_FLIGHT"); v != "" {
+		if s.maxInFlight, err = strconv.ParseInt(v, 10, 64); err != nil || s.maxInFlight <= 0 {
+			return s, fmt.Errorf("SPILLWAY_GATEWAY_MAX_IN_FLIGHT: %q is not a positive integer", v)
 		}
 	}
 	if v := getenv("SPILLWAY_GATEWAY_ACCESS_LOG_SAMPLE_RATE"); v != "" {

@@ -90,6 +90,9 @@ func shutdownGateway(t *testing.T, u *shutdownUpstream, drain, grace time.Durati
 		dnsRefresh:    time.Minute,
 		drain:         drain,
 		shutdownGrace: grace,
+
+		maxConnections: defaultMaxConnections,
+		maxInFlight:    defaultMaxInFlight,
 	}
 	logs = &lockedBuffer{}
 	ctx, cancel := context.WithCancel(t.Context())

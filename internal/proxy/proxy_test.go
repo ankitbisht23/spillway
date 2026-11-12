@@ -182,7 +182,7 @@ func newDevGateway(t *testing.T, res Resolver, yaml string, trusted TrustedProxi
 	g.limiters = local.NewRegistry(g.clock)
 	g.apply(t, yaml)
 	rec := telemetry.NewRecorder(g.metrics, slog.New(slog.NewJSONHandler(g.logs, nil)), 1)
-	g.h = NewHandler(g.current.Load, g.identity.Load, trusted, g.reg, g.limiters, redis, devMode, rec, slog.New(slog.DiscardHandler))
+	g.h = NewHandler(g.current.Load, g.identity.Load, trusted, g.reg, g.limiters, redis, devMode, 4096, rec, slog.New(slog.DiscardHandler))
 	g.Server = httptest.NewServer(g.h)
 	t.Cleanup(g.Close)
 	return g
@@ -467,7 +467,7 @@ policies: [{name: login-once, level: route, match: {routes: [login]}, key_templa
 }
 
 func TestProxyErrorStatus(t *testing.T) {
-	h := NewHandler(nil, nil, nil, nil, nil, nil, false, nil, slog.New(slog.DiscardHandler))
+	h := NewHandler(nil, nil, nil, nil, nil, nil, false, 4096, nil, slog.New(slog.DiscardHandler))
 	for _, tt := range []struct {
 		err    error
 		want   int
