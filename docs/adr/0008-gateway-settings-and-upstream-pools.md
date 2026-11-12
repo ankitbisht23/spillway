@@ -1,6 +1,6 @@
 # 0008. Gateway settings and upstream pools
 
-- **Status:** Accepted
+- **Status:** Accepted; endpoint selection superseded by [ADR-0030](0030-resilience-model.md)
 - **Date:** 2026-11-04
 - **Requirement IDs:** GW-06, GW-21, GW-27, GW-28, GW-29, SEC-06
 
