@@ -515,7 +515,7 @@ policies: [{name: per-key, level: global, match: {routes: ['*']}, key_template: 
 	l := g.limiter(t, "per-key", config.GCRA, time.Minute)
 	shard := ratelimit.Key("new")[0] % 64
 	for i := 0; ; i++ {
-		if _, err := l.Allow(t.Context(), string([]byte{shard, byte(i), byte(i >> 8)}), 1); err != nil {
+		if _, err := l.Allow(t.Context(), string([]byte{shard})+strconv.Itoa(i), 1); err != nil {
 			break // the shard is full
 		}
 	}

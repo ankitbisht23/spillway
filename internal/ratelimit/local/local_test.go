@@ -3,6 +3,7 @@ package local
 import (
 	"context"
 	"errors"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -469,13 +470,13 @@ func TestKeyCap(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			// Shard 5's keys start with byte 5, 69, 133 or 197.
-			key := func(i int) string { return string([]byte{5, byte(i), byte(i >> 8)}) }
+			key := func(i int) string { return "\x05" + strconv.Itoa(i) }
 			for i := range shardKeys {
 				if d, err := l.Allow(ctx, key(i), 1); err != nil || !d.Allowed {
 					t.Fatalf("key %d: %+v, %v", i, d, err)
 				}
 			}
-			newKey := string([]byte{69, 0, 0})
+			newKey := "\x45new"
 			if d, err := l.Allow(ctx, newKey, 1); !errors.Is(err, ErrKeyCap) || d != (ratelimit.Decision{}) {
 				t.Fatalf("a new key in a full shard: %+v, %v; want ErrKeyCap and a zero decision", d, err)
 			}
