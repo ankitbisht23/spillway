@@ -1,6 +1,6 @@
 # 0007. Route matching: precedence and path rules
 
-- **Status:** Accepted
+- **Status:** Accepted; no implicit HEAD for GET superseded by 0030 (D1) and 0033
 - **Date:** 2026-11-03
 - **Requirement IDs:** GW-01, GW-02, CP-03
 

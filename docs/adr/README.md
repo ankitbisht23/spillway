@@ -15,11 +15,11 @@ Decisions that shape Spillway and are not obvious from the code or from docs/des
 | [0004](0004-dev-networking.md) | Dev networking: every process in compose, Redis Cluster by hostname | Accepted | 2026-11-02 |
 | [0005](0005-config-and-identity.md) | Config and identity streams; one config schema | Accepted | 2026-11-02 |
 | [0006](0006-dev-containers.md) | Dev containers: healthchecks, mock upstreams, image layout | Accepted | 2026-11-03 |
-| [0007](0007-route-matching.md) | Route matching: precedence and path rules | Accepted | 2026-11-03 |
+| [0007](0007-route-matching.md) | Route matching: precedence and path rules | Accepted; no implicit HEAD for GET superseded by 0030 (D1) and 0033 | 2026-11-03 |
 | [0008](0008-gateway-settings-and-upstream-pools.md) | Gateway settings and upstream pools | Accepted; endpoint selection superseded by 0030 | 2026-11-04 |
 | [0009](0009-request-framing.md) | Request framing: re-frame instead of rejecting Content-Length with Transfer-Encoding | Accepted | 2026-11-04 |
 | [0010](0010-admin-port-and-compose-gateway.md) | Admin port and the gateway in compose | Accepted; shutdown superseded by 0030 | 2026-11-04 |
-| [0011](0011-route-transforms-limits-timeouts.md) | Route transforms, size limits and timeouts | Accepted | 2026-11-04 |
+| [0011](0011-route-transforms-limits-timeouts.md) | Route transforms, size limits and timeouts | Accepted; stalled request bodies superseded by 0033 | 2026-11-04 |
 | [0012](0012-tls-listener-and-certificates.md) | TLS listener and certificates | Accepted | 2026-11-04 |
 | [0013](0013-request-ids-access-logs-metrics.md) | Request IDs, access logs and request metrics | Accepted; trace context passthrough and the access log's trace ID source superseded by 0030 | 2026-11-04 |
 | [0014](0014-load-generator.md) | Load generator v1: open model, achieved rate, JSON result | Accepted | 2026-11-04 |
@@ -38,6 +38,7 @@ Decisions that shape Spillway and are not obvious from the code or from docs/des
 | [0027](0027-tolerance-for-host-stalls-in-the-m3-exit-check.md) | Tolerance for host stalls in the M3 exit check | Accepted | 2026-11-12 |
 | [0028](0028-conservative-gcra-refunds.md) | Conservative GCRA refunds | Accepted | 2026-11-12 |
 | [0029](0029-methods-not-in-upper-case.md) | Methods that are not upper case | Accepted | 2026-11-12 |
-| [0030](0030-resilience-model.md) | Resilience model | Accepted | 2026-11-12 |
-| [0031](0031-m4-exit-check.md) | The M4 exit check | Accepted | 2026-11-12 |
-| [0032](0032-answering-shed-connections.md) | Answering shed connections | Accepted | 2026-11-12 |
+| [0030](0030-resilience-model.md) | Resilience model | Accepted; connection-cap answer timing superseded by 0032; connection cap at capacity, round-robin retries and the order of retry checks superseded by 0033 | 2026-11-12 |
+| [0031](0031-m4-exit-check.md) | The M4 exit check | Accepted; rule (c)'s "by construction" note corrected in 0033 | 2026-11-12 |
+| [0032](0032-answering-shed-connections.md) | Answering shed connections | Accepted; which connections are shed at the cap superseded by 0033 | 2026-11-12 |
+| [0033](0033-m1-m4-review-fixes.md) | M1–M4 review fixes | Accepted | 2026-11-13 |

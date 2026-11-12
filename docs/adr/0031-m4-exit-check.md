@@ -1,6 +1,6 @@
 # 0031. The M4 exit check
 
-- **Status:** Accepted
+- **Status:** Accepted; rule (c)'s "by construction" note corrected in 0033
 - **Date:** 2026-11-12
 - **Requirement IDs:** GW-08, GW-09, GW-12, GW-13, GW-14, OB-02
 
