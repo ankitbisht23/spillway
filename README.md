@@ -39,8 +39,8 @@ Upstream endpoint failures (GW-08, GW-09, GW-12, GW-13, OB-02, [Chaos scenarios]
 
 | Scenario | Injected | Measured | Result |
 | --- | --- | --- | --- |
-| Endpoint returns 5xx | `upstream-fault` answers 503 to everything | the endpoint out of rotation within the first scrape after the fault (1.0 s); 5,001/5,001 requests in the 10 s from the fault answered 2xx; 5 retries, all within budget (930 allowed in the tightest window); each retried request's trace in Tempo with one span per attempt; the breaker stays closed | PASS in 3 of 3 runs on the M4 exit branch |
-| Endpoint refuses connections | `upstream-fault` closes its listener and connections | the same, with connect errors retried: 5,001/5,001 answered 2xx, 5 retries | PASS in 3 of 3 runs |
+| Endpoint returns 5xx | `upstream-fault` answers 503 to everything | the endpoint out of rotation within the first scrape after the fault (1.0 s); 5,001/5,001 requests in the 10 s from the fault answered 2xx; 5 retries, all within budget (930 allowed in the tightest window); each retried request's trace in Tempo with one span per attempt; the breaker stays closed | PASS in 6 of 6 runs on the M4 exit branch |
+| Endpoint refuses connections | `upstream-fault` closes its listener and connections | the same, with connect errors retried: 5,001/5,001 answered 2xx, 5 retries | PASS in 6 of 6 runs |
 
 With one endpoint of three failing, outlier ejection after 5 consecutive failures removes it, and each of those failed attempts is retried on another endpoint, so no client sees the failure. The breaker opens only when most attempts to an upstream fail, which one bad endpoint of three never causes (ADR-0031).
 

@@ -291,8 +291,9 @@ func (s *upstreamSender) drive(ctx context.Context) scenarioRun {
 	// last request before it. A request sent just before t_f would race
 	// the fault request to the mock (it goes through the gateway, the fault
 	// request does not) and could be one of the failures that eject the
-	// endpoint while it is not in rule (c)'s set. When the sender runs
-	// late, that is up to faultGap after -fault-after; no request waits.
+	// endpoint while it is not in rule (c)'s set. Only when the sender runs
+	// late does t_f move, by up to faultGap after -fault-after, and the first
+	// request due after it is then sent up to faultGap later; none is dropped.
 	faultAt := r.start.Add(s.faultAfter)
 	gap := min(faultGap, interval*3/4)
 	var lastSent time.Time
