@@ -61,11 +61,15 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 func (u *upstream) addr() string { return "127.0.0.1:" + u.port() }
 
 // upstreamOf is a config whose upstream u has the given servers as endpoints,
-// by name, and extra fields, with one route to it.
+// by name, and extra fields, with one route to it. u is balanced round robin
+// unless fields set lb, so that tests can count where requests go.
 func upstreamOf(fields string, us ...*upstream) string {
 	var eps []string
 	for _, u := range us {
 		eps = append(eps, fmt.Sprintf("{address: '%s:%s'}", u.name, u.port()))
+	}
+	if !strings.Contains(fields, "lb:") {
+		fields = strings.TrimPrefix(fields+", lb: round_robin", ", ")
 	}
 	return fmt.Sprintf("upstreams: [{name: u, endpoints: [%s], %s}]\nroutes: [{name: r, upstream: u, match: {path_prefix: /}}]\n",
 		strings.Join(eps, ", "), fields)
@@ -380,26 +384,28 @@ func TestAttemptOutcome(t *testing.T) {
 
 // endpointState is what a reload must keep of an endpoint, by value.
 type endpointState struct {
-	healthy bool
-	outlier resilience.OutlierState
+	healthy  bool
+	outlier  resilience.OutlierState
+	inFlight int64
 }
 
 func stateOf(e *endpoint) endpointState {
-	return endpointState{e.healthy.Load(), e.outlier.State()}
+	return endpointState{e.healthy.Load(), e.outlier.State(), e.inFlight.Load()}
 }
 
 // TestReloadKeepsEndpointState (GW-29): under steady load, reloads that
-// change settings but keep the upstream and its endpoints keep every
-// endpoint object with its health and outlier state; a reload that replaces
-// one endpoint drops only that one and stops its prober.
+// change settings, the algorithm included, but keep the upstream and its
+// endpoints keep every endpoint object with its health, outlier state and
+// in-flight count; a reload that replaces one endpoint drops only that one
+// and stops its prober.
 func TestReloadKeepsEndpointState(t *testing.T) {
 	a, b, c, d := newUpstream(t, "a"), newUpstream(t, "b"), newUpstream(t, "c"), newUpstream(t, "d")
 	a.probeStatus.Store(http.StatusServiceUnavailable) // unhealthy
 	b.status.Store(http.StatusServiceUnavailable)      // ejected
 	cfg := func(n int, us ...*upstream) string {
 		return fmt.Sprintf("version: %d\n", n) + upstreamOf(fmt.Sprintf(
-			"health_check: {path: /health, interval: %dms, timeout: 250ms, unhealthy: 3, healthy: 2}, outlier_detection: {consecutive_failures: %d, base_ejection: 1h}",
-			250+n, 3+n%2), us...)
+			"health_check: {path: /health, interval: %dms, timeout: 250ms, unhealthy: 3, healthy: 2}, outlier_detection: {consecutive_failures: %d, base_ejection: 1h}, lb: %s",
+			250+n, 3+n%2, []string{"round_robin", "p2c", "consistent_hash, hash_on: '{ip}'"}[n%3]), us...)
 	}
 	g := newGateway(t, newResolver(a, b, c, d), cfg(0, a, b, c))
 	waitFor(t, "a unhealthy", func() bool { return !g.endpoint(t, a.addr()).healthy.Load() })
@@ -412,8 +418,11 @@ func TestReloadKeepsEndpointState(t *testing.T) {
 	pool := (*g.reg.pools.Load())["u"]
 	eps := map[string]*endpoint{}
 	before := map[string]endpointState{}
-	for _, u := range []*upstream{a, b, c} {
+	for i, u := range []*upstream{a, b, c} {
 		eps[u.name] = g.endpoint(t, u.addr())
+		for range i + 1 { // attempts held in flight across the reloads
+			defer eps[u.name].begin()()
+		}
 		before[u.name] = stateOf(eps[u.name])
 	}
 
@@ -448,6 +457,16 @@ func TestReloadKeepsEndpointState(t *testing.T) {
 	if bad.Load() != 0 {
 		t.Errorf("%d requests under load failed", bad.Load())
 	}
+	// A client can read a whole response just before the gateway closes the
+	// upstream body and ends the attempt.
+	waitFor(t, "the load's attempts to end", func() bool {
+		for _, u := range []*upstream{a, b, c} {
+			if e := g.endpoint(t, u.addr()); e != nil && e.inFlight.Load() != before[u.name].inFlight {
+				return false
+			}
+		}
+		return true
+	})
 	if (*g.reg.pools.Load())["u"] != pool {
 		t.Fatal("a reload replaced the upstream's state")
 	}
@@ -470,8 +489,8 @@ func TestReloadKeepsEndpointState(t *testing.T) {
 	if _, ok := endpointGauge(t, g.reg)["u "+a.addr()]; ok {
 		t.Error("removed endpoint a still has a gauge series")
 	}
-	if e := g.endpoint(t, d.addr()); e == nil || !e.healthy.Load() || e.outlier.State() != (resilience.OutlierState{}) {
-		t.Errorf("new endpoint d = %+v, want healthy with no outlier state", e)
+	if e := g.endpoint(t, d.addr()); e == nil || !e.healthy.Load() || e.outlier.State() != (resilience.OutlierState{}) || e.inFlight.Load() != 0 {
+		t.Errorf("new endpoint d = %+v, want healthy with no outlier state and nothing in flight", e)
 	}
 	for _, u := range []*upstream{b, c} {
 		if e := g.endpoint(t, u.addr()); e != eps[u.name] || stateOf(e) != before[u.name] {

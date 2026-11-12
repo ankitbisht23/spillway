@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/cespare/xxhash/v2"
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/ankitbisht23/spillway/internal/config"
@@ -58,7 +59,7 @@ type pool struct {
 	transport *http.Transport
 	settings  atomic.Pointer[config.Upstream] // the latest snapshot's, changed in place on reload
 	endpoints atomic.Pointer[[]*endpoint]     // one per resolved address, published after each resolve
-	next      atomic.Uint64                   // round robin
+	next      atomic.Uint64                   // round robin (GW-07)
 	panicking atomic.Bool                     // no endpoint was selectable at the last pick
 	ejectMu   sync.Mutex                      // one ejection decision at a time, so the cap holds
 	probe     bool                            // runs probers: false for a pool rebuilt for an older snapshot; guarded by mu
@@ -68,13 +69,16 @@ type pool struct {
 	resolved   map[string][]string // per configured endpoint; kept when a lookup fails
 }
 
-// endpoint is one resolved address of an upstream, with its health and
-// outlier state (GW-08, GW-09).
+// endpoint is one resolved address of an upstream, with its health,
+// outlier state and attempts in flight (GW-07, GW-08, GW-09).
 type endpoint struct {
 	addr    string      // resolved ip:port: the endpoint's identity
 	host    string      // the configured address it came from, e.g. upstream-1:8080
 	healthy atomic.Bool // active health; true without health checks
 	outlier resilience.Outlier
+	// attempts sent to it and not finished, for p2c: from sending an
+	// attempt until its response body is closed, or the attempt fails
+	inFlight atomic.Int64
 
 	mu        sync.Mutex // guards the probe counts
 	successes int        // probes in a row
@@ -429,43 +433,103 @@ func (e *endpoint) selectable(now time.Time) bool {
 	return e.healthy.Load() && !e.outlier.Ejected(now)
 }
 
-func (e *endpoint) notEjected(now time.Time) bool { return !e.outlier.Ejected(now) }
-
-func (e *endpoint) always(time.Time) bool { return true }
-
-// pick returns the endpoint for an attempt at now, in round-robin order over
-// the selectable endpoints (GW-07 brings the other algorithms). When none is
-// selectable, it is in panic mode: it ignores health and picks among the
-// endpoints that are not ejected, or among all of them if every one is
-// (ADR-0030).
-func (p *pool) pick(now time.Time) (*endpoint, error) {
+// pick returns the endpoint for an attempt at now with the upstream's
+// algorithm (GW-07, ADR-0030), among the candidates: the selectable
+// endpoints that tried does not hold, or all the selectable ones if it holds
+// every one. When none is selectable, it is in panic mode: it ignores health
+// and uses the endpoints that are not ejected, or all of them if every one
+// is. key is the request's filled hash_on template for consistent_hash; ""
+// when it could not be filled, and the request is then balanced with p2c.
+func (p *pool) pick(now time.Time, key string, tried []*endpoint) (*endpoint, error) {
 	eps := *p.endpoints.Load()
 	if len(eps) == 0 {
 		return nil, errNoAddress
 	}
-	candidate := (*endpoint).selectable
-	n := count(eps, now, candidate)
-	if n == 0 {
-		if p.panicking.CompareAndSwap(false, true) {
-			p.log.Warn("upstream has no healthy endpoint; ignoring health checks", "upstream", p.name)
-		}
-		candidate = (*endpoint).notEjected
-		if n = count(eps, now, candidate); n == 0 {
-			candidate, n = (*endpoint).always, len(eps)
-		}
-	} else if p.panicking.CompareAndSwap(true, false) {
-		p.log.Info("upstream has a healthy endpoint again; health checks apply", "upstream", p.name)
+	var buf [16]*endpoint // upstreams hold a few endpoints: no allocation
+	cands := p.candidates(buf[:0], eps, now)
+	if len(tried) > 0 && slices.ContainsFunc(cands, func(e *endpoint) bool { return !slices.Contains(tried, e) }) {
+		cands = slices.DeleteFunc(cands, func(e *endpoint) bool { return slices.Contains(tried, e) })
 	}
-	i := (p.next.Add(1) - 1) % uint64(n)
+	if len(cands) == 1 {
+		return cands[0], nil
+	}
+	switch lb := p.settings.Load().LB; {
+	case lb == config.LBRoundRobin:
+		return cands[(p.next.Add(1)-1)%uint64(len(cands))], nil
+	case lb == config.LBConsistentHash && key != "":
+		return rendezvous(cands, key), nil
+	}
+	// p2c: two distinct candidates drawn at random; the one with fewer
+	// attempts in flight wins, a tie goes to the first drawn.
+	i := rand.N(len(cands))     //nolint:gosec // G404: load balancing, not security
+	j := rand.N(len(cands) - 1) //nolint:gosec // G404: load balancing, not security
+	if j >= i {
+		j++
+	}
+	if a, b := cands[i], cands[j]; b.inFlight.Load() < a.inFlight.Load() {
+		return b, nil
+	}
+	return cands[i], nil
+}
+
+// candidates appends to buf the endpoints of eps selectable at now, or in
+// panic mode the ones not ejected, or all of them (ADR-0030).
+func (p *pool) candidates(buf, eps []*endpoint, now time.Time) []*endpoint {
 	for _, e := range eps {
-		if candidate(e, now) {
-			if i == 0 {
-				return e, nil
-			}
-			i--
+		if e.selectable(now) {
+			buf = append(buf, e)
 		}
 	}
-	return eps[0], nil // an ejection or health change between the count and here
+	if len(buf) > 0 {
+		if p.panicking.CompareAndSwap(true, false) {
+			p.log.Info("upstream has a healthy endpoint again; health checks apply", "upstream", p.name)
+		}
+		return buf
+	}
+	if p.panicking.CompareAndSwap(false, true) {
+		p.log.Warn("upstream has no healthy endpoint; ignoring health checks", "upstream", p.name)
+	}
+	for _, e := range eps {
+		if !e.ejected(now) {
+			buf = append(buf, e)
+		}
+	}
+	if len(buf) > 0 {
+		return buf
+	}
+	return append(buf, eps...)
+}
+
+// rendezvous returns the candidate with the highest score
+// xxhash64(key + "\x00" + addr) (rendezvous hashing, ADR-0030): every
+// replica picks the same endpoint for a key, and when an endpoint leaves the
+// candidates only its keys move, each to its next-highest endpoint.
+func rendezvous(cands []*endpoint, key string) *endpoint {
+	var best *endpoint
+	var top uint64
+	var d xxhash.Digest
+	for _, e := range cands {
+		d.Reset()
+		_, _ = d.WriteString(key)
+		_, _ = d.WriteString("\x00")
+		_, _ = d.WriteString(e.addr)
+		if score := d.Sum64(); best == nil || score > top {
+			best, top = e, score
+		}
+	}
+	return best
+}
+
+// begin counts an attempt in flight on e (p2c) until the returned release
+// is called; release may be called any number of times, and counts once.
+func (e *endpoint) begin() (release func()) {
+	e.inFlight.Add(1)
+	var done atomic.Bool
+	return func() {
+		if done.CompareAndSwap(false, true) {
+			e.inFlight.Add(-1)
+		}
+	}
 }
 
 func count(eps []*endpoint, now time.Time, f func(*endpoint, time.Time) bool) int {
