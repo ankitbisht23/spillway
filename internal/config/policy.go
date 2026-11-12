@@ -364,6 +364,9 @@ type KeyTemplate struct {
 	// UsesIdentity is true when the template has {api_key}, {consumer} or
 	// {tenant}, so it can be filled only after API key resolution.
 	UsesIdentity bool
+	// ClientChosen is true when the template has a {header:<Name>}, whose
+	// values the client picks freely (D2, ADR-0030).
+	ClientChosen bool
 }
 
 type keyPart struct {
@@ -446,6 +449,7 @@ func parseKeyTemplate(tmpl string) (KeyTemplate, error) {
 				return t, fmt.Errorf("key_template %q: header name %q is not valid", tmpl, h)
 			}
 			t.parts = append(t.parts, keyPart{field: fieldHeader, text: http.CanonicalHeaderKey(h)})
+			t.ClientChosen = true
 			continue
 		}
 		f, ok := keyFields[name]

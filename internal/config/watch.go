@@ -35,6 +35,7 @@ func NewWatcher(path string, log *slog.Logger, apply func(*Snapshot) error) (*Wa
 				return nil, fmt.Errorf("config: %w", err)
 			}
 		}
+		warnClientChosenKeys(s, log)
 		return s, nil
 	}
 	w.describe = func(s *Snapshot) []any {
@@ -128,4 +129,18 @@ func (w *watcher[T]) reload() error {
 	w.current.Store(v)
 	w.log.Info(w.name+" loaded", append([]any{"path", w.path}, w.describe(v)...)...)
 	return nil
+}
+
+// warnClientChosenKeys logs, once per snapshot load, each Redis policy whose
+// keys come from a client-chosen header: a client can send distinct values
+// until a noeviction Redis node is full, after which the policy follows its
+// failure mode. Such limits should be local, where the key cap bounds them,
+// or keyed by a header the client cannot vary freely (D2, ADR-0030).
+func warnClientChosenKeys(s *Snapshot, log *slog.Logger) {
+	for i := range s.Policies {
+		if p := &s.Policies[i]; !p.Local && p.Mode != Off && p.Key.ClientChosen {
+			log.Warn("policy keys come from a client-chosen header; distinct values can fill a noeviction Redis node, after which the policy follows its failure mode",
+				"policy", p.Name)
+		}
+	}
 }
