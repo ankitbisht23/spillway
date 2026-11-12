@@ -10,6 +10,38 @@ import (
 	"github.com/ankitbisht23/spillway/internal/gen/configpb"
 )
 
+// Load balancing algorithms (GW-07, ADR-0030).
+const (
+	LBRoundRobin     = "round_robin"
+	LBP2C            = "p2c" // least request with the power of two choices; the default
+	LBConsistentHash = "consistent_hash"
+)
+
+// compileLB returns an upstream's algorithm, p2c when unset, and for
+// consistent_hash its compiled hash_on key template.
+func compileLB(lb, hashOn string) (string, *KeyTemplate, error) {
+	switch lb {
+	case "":
+		lb = LBP2C
+	case LBRoundRobin, LBP2C, LBConsistentHash:
+	default:
+		return "", nil, fmt.Errorf("lb %q: want round_robin, p2c or consistent_hash", lb)
+	}
+	switch {
+	case lb == LBConsistentHash && hashOn == "":
+		return "", nil, errors.New("hash_on is required with lb consistent_hash")
+	case lb != LBConsistentHash && hashOn != "":
+		return "", nil, errors.New("hash_on is only for lb consistent_hash")
+	case hashOn == "":
+		return lb, nil, nil
+	}
+	t, err := parseKeyTemplate(hashOn)
+	if err != nil {
+		return "", nil, fmt.Errorf("hash_on: %w", err)
+	}
+	return lb, &t, nil
+}
+
 // HealthCheck is an upstream's compiled active health check (GW-08,
 // ADR-0030).
 type HealthCheck struct {

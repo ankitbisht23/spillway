@@ -111,7 +111,14 @@ type Upstream struct {
 	// Unique; routes refer to the upstream by name, and it is its stable ID
 	// (GW-29).
 	Name      string      `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Endpoints []*Endpoint `protobuf:"bytes,2,rep,name=endpoints,proto3" json:"endpoints,omitempty"` // Fields 3 (lb) and 4 (hash_on) are for load balancing (GW-07, ADR-0030).
+	Endpoints []*Endpoint `protobuf:"bytes,2,rep,name=endpoints,proto3" json:"endpoints,omitempty"`
+	// Load balancing (GW-07, ADR-0030): "round_robin", "p2c" (least request
+	// with the power of two choices) or "consistent_hash". Unset means p2c.
+	Lb string `protobuf:"bytes,3,opt,name=lb,proto3" json:"lb,omitempty"`
+	// consistent_hash only, and required with it: a key template, as a rate
+	// limit policy's (ADR-0017), such as "{header:X-Cart-Id}". A request whose
+	// template cannot be filled is balanced with p2c.
+	HashOn string `protobuf:"bytes,4,opt,name=hash_on,json=hashOn,proto3" json:"hash_on,omitempty"`
 	// Active health checks (GW-08); unset means none.
 	HealthCheck *HealthCheck `protobuf:"bytes,5,opt,name=health_check,json=healthCheck,proto3" json:"health_check,omitempty"`
 	// Passive outlier ejection (GW-09); unset means the defaults (ADR-0030).
@@ -162,6 +169,20 @@ func (x *Upstream) GetEndpoints() []*Endpoint {
 		return x.Endpoints
 	}
 	return nil
+}
+
+func (x *Upstream) GetLb() string {
+	if x != nil {
+		return x.Lb
+	}
+	return ""
+}
+
+func (x *Upstream) GetHashOn() string {
+	if x != nil {
+		return x.HashOn
+	}
+	return ""
 }
 
 func (x *Upstream) GetHealthCheck() *HealthCheck {
@@ -1376,10 +1397,12 @@ const file_config_proto_rawDesc = "" +
 	"\tupstreams\x18\x02 \x03(\v2\x1c.spillway.config.v1.UpstreamR\tupstreams\x121\n" +
 	"\x06routes\x18\x03 \x03(\v2\x19.spillway.config.v1.RouteR\x06routes\x12C\n" +
 	"\tratelimit\x18\x04 \x01(\v2%.spillway.config.v1.RateLimitSettingsR\tratelimit\x126\n" +
-	"\bpolicies\x18\x05 \x03(\v2\x1a.spillway.config.v1.PolicyR\bpolicies\"\xf1\x01\n" +
+	"\bpolicies\x18\x05 \x03(\v2\x1a.spillway.config.v1.PolicyR\bpolicies\"\x9a\x02\n" +
 	"\bUpstream\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12:\n" +
-	"\tendpoints\x18\x02 \x03(\v2\x1c.spillway.config.v1.EndpointR\tendpoints\x12B\n" +
+	"\tendpoints\x18\x02 \x03(\v2\x1c.spillway.config.v1.EndpointR\tendpoints\x12\x0e\n" +
+	"\x02lb\x18\x03 \x01(\tR\x02lb\x12\x17\n" +
+	"\ahash_on\x18\x04 \x01(\tR\x06hashOn\x12B\n" +
 	"\fhealth_check\x18\x05 \x01(\v2\x1f.spillway.config.v1.HealthCheckR\vhealthCheck\x12Q\n" +
 	"\x11outlier_detection\x18\x06 \x01(\v2$.spillway.config.v1.OutlierDetectionR\x10outlierDetection\"\x8f\x01\n" +
 	"\vHealthCheck\x12\x12\n" +
