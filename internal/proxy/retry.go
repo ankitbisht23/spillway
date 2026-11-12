@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/ankitbisht23/spillway/internal/config"
 	"github.com/ankitbisht23/spillway/internal/resilience"
 	"github.com/ankitbisht23/spillway/internal/telemetry"
@@ -181,6 +183,8 @@ func (a *attempts) RoundTrip(out *http.Request) (*http.Response, error) {
 	var buf [config.MaxAttempts]*endpoint
 	tried := buf[:0]
 	ep := a.first
+	var wait time.Duration // the backoff before attempt n
+	var reason string      // why attempt n − 1 failed, for attempt n's span
 	for n := 1; ; n++ {
 		a.q.Attempts = n
 		deadline := time.Now().Add(a.route.Timeouts.PerTry)
@@ -203,6 +207,10 @@ func (a *attempts) RoundTrip(out *http.Request) (*http.Response, error) {
 			req.Body = io.NopCloser(bytes.NewReader(a.buf))
 		}
 		req.Header.Set(DeadlineHeader, deadlineMs(deadline)) // replaces the client's
+		var span trace.Span
+		if a.h.tracer != nil {
+			span = a.startAttemptSpan(ctx, req, ep, n, wait, reason) // sets traceparent (OB-02)
+		}
 		release := ep.begin()
 		start := time.Now()
 		resp, err := a.p.transport.RoundTrip(req)
@@ -220,7 +228,15 @@ func (a *attempts) RoundTrip(out *http.Request) (*http.Response, error) {
 			a.p.record(ep, now, failed) // GW-09
 			a.pass.Record(now, failed)  // GW-14
 		}
-		wait, ok := a.next(ctx, n, total, now, retryable(resp, err, failed, counted))
+		if span != nil {
+			reason = ""
+			if failed && counted {
+				reason = failureType(actx, resp, err)
+			}
+			endAttemptSpan(span, resp, reason)
+		}
+		var ok bool
+		wait, ok = a.next(ctx, n, total, now, retryable(resp, err, failed, counted))
 		if !ok {
 			a.release, a.cancel = release, cancel
 			if err != nil {
@@ -263,20 +279,26 @@ func (a *attempts) RoundTrip(out *http.Request) (*http.Response, error) {
 // before the total deadline; the breaker is closed and the request is not
 // a half-open probe; the upstream's budget grants it, which
 // gw_retries_total counts either way. A retry not sent is dropped, never
-// queued: the client gets attempt n's answer.
+// queued: the client gets attempt n's answer. The request's span notes why
+// (OB-02).
 func (a *attempts) next(ctx context.Context, n int, total, now time.Time, retryable bool) (time.Duration, bool) {
 	if !retryable || !a.retry || n >= a.route.Retry.Attempts || ctx.Err() != nil || a.interim.Load() {
 		return 0, false
 	}
 	wait := backoff(n, a.h.jitter)
 	if !time.Now().Add(wait + minAttemptTime).Before(total) {
+		dropRetry(ctx, "deadline")
 		return 0, false
 	}
 	if !a.pass.MayRetry() {
+		dropRetry(ctx, "breaker")
 		return 0, false
 	}
 	b := &a.p.settings.Load().RetryBudget
 	sent := a.p.budget.TryRetry(now, b.Ratio, b.MinPerSec)
 	a.h.rec.Retry(a.p.name, sent)
+	if !sent {
+		dropRetry(ctx, "budget_exhausted")
+	}
 	return wait, sent
 }

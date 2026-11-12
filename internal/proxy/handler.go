@@ -16,6 +16,9 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/ankitbisht23/spillway/internal/config"
 	"github.com/ankitbisht23/spillway/internal/ratelimit/local"
 	"github.com/ankitbisht23/spillway/internal/resilience"
@@ -34,6 +37,7 @@ type Handler struct {
 	redis    Redis
 	devMode  bool                              // Spillway-Decision-Time on Redis-decided responses (ADR-0021) and Spillway-Attempts (ADR-0030)
 	jitter   func(time.Duration) time.Duration // draws a retry's backoff in [0, n) (GW-12)
+	tracer   trace.Tracer                      // nil when tracing is off (OB-02)
 	rec      *telemetry.Recorder
 	log      *slog.Logger
 	errLog   *log.Logger
@@ -52,9 +56,11 @@ type Handler struct {
 // OB-03). With devMode, a response decided in Redis carries the decision's
 // Redis time for the accuracy harness (ADR-0021), and a response after
 // upstream attempts their number for the M4 exit check (ADR-0030). Past
-// maxInFlight requests at once, it sheds the rest (GW-26).
-func NewHandler(snapshot func() *config.Snapshot, identity func() *config.Identity, trusted TrustedProxies, pools *Registry, limiters *local.Registry, redis Redis, devMode bool, maxInFlight int64, rec *telemetry.Recorder, log *slog.Logger) *Handler {
-	return &Handler{snapshot: snapshot, identity: identity, trusted: trusted, pools: pools, limiters: limiters, redis: redis, devMode: devMode, jitter: rand.N[time.Duration], maxInFlight: maxInFlight, rec: rec, log: log, errLog: slog.NewLogLogger(log.Handler(), slog.LevelWarn)}
+// maxInFlight requests at once, it sheds the rest (GW-26). With a tracer,
+// it traces every request it does not shed (OB-02); with none, traceparent
+// goes upstream unchanged.
+func NewHandler(snapshot func() *config.Snapshot, identity func() *config.Identity, trusted TrustedProxies, pools *Registry, limiters *local.Registry, redis Redis, devMode bool, maxInFlight int64, tracer trace.Tracer, rec *telemetry.Recorder, log *slog.Logger) *Handler {
+	return &Handler{snapshot: snapshot, identity: identity, trusted: trusted, pools: pools, limiters: limiters, redis: redis, devMode: devMode, jitter: rand.N[time.Duration], tracer: tracer, maxInFlight: maxInFlight, rec: rec, log: log, errLog: slog.NewLogLogger(log.Handler(), slog.LevelWarn)}
 }
 
 // InFlight returns the number of requests being handled.
@@ -69,33 +75,44 @@ const statusClientClosed = 499
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	q := telemetry.Request{
-		ID:      telemetry.RequestID(r.Header.Values(telemetry.RequestIDHeader)),
-		TraceID: telemetry.TraceID(r.Header), // traceparent itself goes upstream unchanged (GW-22)
-		Route:   telemetry.NoRoute,
-		Method:  r.Method,
-		Origin:  telemetry.OriginGateway,
-		Reason:  telemetry.ReasonNone,
-		Tenant:  telemetry.NoTenant, // tenants arrive in M5
+		ID:     telemetry.RequestID(r.Header.Values(telemetry.RequestIDHeader)),
+		Route:  telemetry.NoRoute,
+		Method: r.Method,
+		Origin: telemetry.OriginGateway,
+		Reason: telemetry.ReasonNone,
+		Tenant: telemetry.NoTenant, // tenants arrive in M5
 	}
 	rw := &responseRecorder{ResponseWriter: w, requestID: q.ID}
 	body := &countingBody{ReadCloser: r.Body}
 	r.Body = body
+	var span trace.Span // the server span, nil when not traced (OB-02)
 	// Deferred, so that a response cut off mid-body, which ends the handler
 	// with a panic, is recorded too. Only a client that went away gets no
 	// answer (proxyError).
 	defer func() {
 		q.Status = cmp.Or(rw.status, statusClientClosed)
 		q.Latency, q.BytesIn, q.BytesOut = time.Since(start), body.n.Load(), rw.bytes
+		if span != nil {
+			endServerSpan(span, r, &q)
+		}
 		h.rec.Request(r.Context(), &q)
 	}()
 	// Load shedding (GW-26): past the cap, answer at once rather than
 	// queue. HTTP/2 streams count one each; an upgraded connection holds
-	// its place until its tunnel closes.
+	// its place until its tunnel closes. A shed request gets no span.
 	if !h.inFlight.TryAcquire(h.maxInFlight) {
+		q.TraceID = telemetry.TraceID(r.Header)
 		shed(rw, &q)
 		return
 	}
 	defer h.inFlight.Release()
+	if h.tracer == nil {
+		q.TraceID = telemetry.TraceID(r.Header) // traceparent itself goes upstream unchanged (GW-22)
+	} else {
+		// The gateway's trace ID, sampled or not (ADR-0030).
+		r, span = startServerSpan(h.tracer, r)
+		q.TraceID = span.SpanContext().TraceID().String()
+	}
 	h.serve(rw, r, body, &q)
 }
 
@@ -153,11 +170,16 @@ func (h *Handler) serve(w *responseRecorder, r *http.Request, body *countingBody
 	// phase is not authenticated.
 	peer, _ := netip.ParseAddrPort(r.RemoteAddr)
 	ip := h.trusted.ClientIP(peer.Addr(), r.Header.Values("X-Forwarded-For"))
-	lim := newLimits(s, route, h.limiters, h.redis, h.rec, h.log, r, q, ip)
+	lim := newLimits(s, route, h.limiters, h.redis, h.tracer, h.rec, h.log, r, q, ip)
 	defer lim.release()
 	allowed := lim.check(false)
 	if allowed {
+		span := childSpan(r.Context(), h.tracer, "authn")
 		consumer, ok := h.authenticate(r.Header, q)
+		if span != nil {
+			span.SetAttributes(attribute.String("spillway.authn.result", authnResult(consumer, ok)))
+			span.End()
+		}
 		if !ok {
 			w.rateLimitPolicy, w.rateLimit = lim.headers() // the first phase's deductions stay
 			jsonError(w, http.StatusUnauthorized, "invalid API key")

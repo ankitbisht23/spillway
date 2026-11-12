@@ -35,7 +35,7 @@ func (g *gateway) capped(t *testing.T, maxInFlight int64) {
 	g.Close()
 	g.metrics, g.logs = prometheus.NewRegistry(), &logBuffer{}
 	rec := telemetry.NewRecorder(g.metrics, slog.New(slog.NewJSONHandler(g.logs, nil)), 1)
-	g.h = NewHandler(g.current.Load, g.identity.Load, nil, g.reg, g.limiters, nil, false, maxInFlight, rec, slog.New(slog.DiscardHandler))
+	g.h = NewHandler(g.current.Load, g.identity.Load, nil, g.reg, g.limiters, nil, false, maxInFlight, nil, rec, slog.New(slog.DiscardHandler))
 	g.Server = httptest.NewServer(g.h)
 	t.Cleanup(g.Close)
 }

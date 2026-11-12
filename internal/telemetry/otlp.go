@@ -23,14 +23,19 @@ func NewOTLPLogHandler(ctx context.Context, endpoint, service, version string) (
 	if err != nil {
 		return nil, nil, err
 	}
-	host, _ := os.Hostname() // tells replicas apart in Loki
 	lp := sdklog.NewLoggerProvider(
-		sdklog.WithResource(resource.NewSchemaless(
-			attribute.String("service.name", service),
-			attribute.String("service.version", version),
-			attribute.String("service.instance.id", host),
-		)),
+		sdklog.WithResource(newResource(service, version)),
 		sdklog.WithProcessor(sdklog.NewBatchProcessor(exp)),
 	)
 	return otelslog.NewHandler(service, otelslog.WithLoggerProvider(lp)), lp.Shutdown, nil
+}
+
+// newResource describes the process in the logs and traces it exports.
+func newResource(service, version string) *resource.Resource {
+	host, _ := os.Hostname() // tells replicas apart in Loki and Tempo
+	return resource.NewSchemaless(
+		attribute.String("service.name", service),
+		attribute.String("service.version", version),
+		attribute.String("service.instance.id", host),
+	)
 }

@@ -86,7 +86,7 @@ upstreams: [{name: up, endpoints: [{address: 'up:%s'}]}]
 routes: [{name: r, upstream: up, match: {path_prefix: /}, retry: {attempts: 2}, timeouts: {total: 59s, per_try: 59s}}]
 `, port))
 	rec := telemetry.NewRecorder(prometheus.NewRegistry(), discard, 0)
-	h := NewHandler(g.current.Load, g.identity.Load, nil, g.reg, g.limiters, nil, false, 4096, rec, discard)
+	h := NewHandler(g.current.Load, g.identity.Load, nil, g.reg, g.limiters, nil, false, 4096, nil, rec, discard)
 	conns := NewConnLimit(8192, rec, discard)
 	certs, _, certFile, _ := newCerts(t, 1)
 	tlsConfig := certs.TLSConfig()

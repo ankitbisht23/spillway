@@ -3,10 +3,12 @@
 # ADR-0015). Runs the gateway, the mock upstream and loadgen in a Docker
 # network of their own, each pinned to its own CPUs (gateway 0, loadgen 1-2,
 # upstream 3), and drives the gateway's plain-HTTP listener at a constant
-# rate: 30 s warm-up and 3 min measured, 5 times. Prints one JSON result for
-# the run set on stdout: the median and spread of each number, every run's
-# loadgen result, the commit and the hardware, CPU topology included
-# (ADR-0016). Progress goes to stderr.
+# rate: 30 s warm-up and 3 min measured, 5 times. The gateway traces a fixed
+# 1% of requests and exports them, with its 1% of access logs, to an OTel
+# Collector that drops them, pinned with the upstream (OB-02, D6, ADR-0030).
+# Prints one JSON result for the run set on stdout: the median and spread of
+# each number, every run's loadgen result, the commit and the hardware, CPU
+# topology included (ADR-0016). Progress goes to stderr.
 # bench.yml runs it on GitHub Actions; on a laptop it needs Docker with at
 # least 4 CPUs:
 #   test/load/bench.sh > result.json
@@ -25,12 +27,14 @@ gateway_vcpus=1
 # Logging every successful request would cost the gateway about 30% of its
 # throughput; benchmarks log a fixed 1% of them (ADR-0015).
 sample_rate=0.01
+# Benchmarks head-sample a fixed 1% of traces, with no tail sampling (D6).
+trace_ratio=0.01
 net=spillway-bench
 
 log() { echo "bench: $*" >&2; }
 
 cleanup() {
-	docker rm -f "$net-gateway" "$net-upstream" >/dev/null 2>&1 || true
+	docker rm -f "$net-gateway" "$net-upstream" "$net-collector" >/dev/null 2>&1 || true
 	docker network rm "$net" >/dev/null 2>&1 || true
 }
 
@@ -77,6 +81,7 @@ log "building images"
 docker build -q --target gateway -t spillway-gateway:bench . >/dev/null
 docker build -q --target loadgen -t spillway-loadgen:bench . >/dev/null
 docker build -q -t spillway-upstream:bench deploy/compose/upstream >/dev/null
+docker build -q -t spillway-otel-collector:bench deploy/compose/otel-collector >/dev/null
 
 docker network create "$net" >/dev/null
 subnet=$(docker network inspect -f '{{(index .IPAM.Config 0).Subnet}}' "$net")
@@ -86,6 +91,11 @@ docker run -d --name "$net-upstream" --network "$net" --network-alias upstream \
 	--cpuset-cpus "$upstream_cpus" --ulimit nofile=65536 \
 	spillway-upstream:bench -log-level OFF >/dev/null
 ready "$net-upstream" /busybox wget -q -O /dev/null http://127.0.0.1:8080/status/200
+docker run -d --name "$net-collector" --network "$net" --network-alias otel-collector \
+	--cpuset-cpus "$upstream_cpus" --read-only \
+	-v "$PWD/deploy/compose/otel-collector/bench.yaml:/etc/otelcol/config.yaml:ro" \
+	spillway-otel-collector:bench --config=/etc/otelcol/config.yaml >/dev/null
+ready "$net-collector" /busybox wget -q -O /dev/null http://127.0.0.1:13133/
 # The gateway may reach only this network (SEC-06).
 docker run -d --name "$net-gateway" --network "$net" --network-alias gateway \
 	--cpuset-cpus "$gateway_cpus" --ulimit nofile=65536 --read-only \
@@ -94,6 +104,8 @@ docker run -d --name "$net-gateway" --network "$net" --network-alias gateway \
 	-e SPILLWAY_GATEWAY_HTTP_ADDR=:8000 \
 	-e SPILLWAY_GATEWAY_ALLOWED_NETWORKS="$subnet" \
 	-e SPILLWAY_GATEWAY_ACCESS_LOG_SAMPLE_RATE="$sample_rate" \
+	-e SPILLWAY_GATEWAY_OTLP_ENDPOINT=http://otel-collector:4317 \
+	-e SPILLWAY_GATEWAY_TRACE_SAMPLE_RATIO="$trace_ratio" \
 	spillway-gateway:bench >/dev/null
 ready "$net-gateway" /gateway healthcheck
 
@@ -113,7 +125,7 @@ done
 
 result=$(printf '%s\n' "${results[@]}" | jq -s \
 	--arg timestamp "$timestamp" --arg commit "$commit" --arg ref "$ref" --arg run_url "$run_url" --arg arch "$arch" \
-	--argjson host "$host" --argjson topology "$topology" --argjson gateway_vcpus "$gateway_vcpus" --argjson sample_rate "$sample_rate" \
+	--argjson host "$host" --argjson topology "$topology" --argjson gateway_vcpus "$gateway_vcpus" --argjson sample_rate "$sample_rate" --argjson trace_ratio "$trace_ratio" \
 	--arg gateway_cpus "$gateway_cpus" --arg loadgen_cpus "$loadgen_cpus" --arg upstream_cpus "$upstream_cpus" \
 	--arg warmup "$warmup" --arg duration "$duration" '
 	# median, min, max and spread ((max - min) / median) of f across the runs
@@ -138,7 +150,8 @@ result=$(printf '%s\n' "${results[@]}" | jq -s \
 			gateway_vcpus: $gateway_vcpus,
 			cpus: {gateway: $gateway_cpus, loadgen: $loadgen_cpus, upstream: $upstream_cpus},
 			url: .[0].url, protocol: .[0].protocol, warmup: $warmup, duration: $duration,
-			access_log_sample_rate: $sample_rate
+			access_log_sample_rate: $sample_rate,
+			trace_sample_ratio: $trace_ratio
 		},
 		hardware: ({cpu_model: .[0].hardware.cpu_model} + ($host | del(.arch)) + {topology: $topology}),
 		runs: .

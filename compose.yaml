@@ -229,7 +229,8 @@ services:
         SPILLWAY_GATEWAY_TLS_KEY: /etc/spillway-certs/gateway-key.pem
         SPILLWAY_GATEWAY_ADMIN_ADDR: ":8001" # all interfaces in the container, so Prometheus can scrape it
         SPILLWAY_GATEWAY_ALLOWED_NETWORKS: 172.29.0.0/16 # the compose network below (SEC-06)
-        SPILLWAY_GATEWAY_OTLP_ENDPOINT: http://otel-collector:4317 # logs to Loki through the Collector, plaintext in the compose network (OB-03)
+        SPILLWAY_GATEWAY_OTLP_ENDPOINT: http://otel-collector:4317 # logs to Loki and traces to Tempo through the Collector, plaintext in the compose network (OB-03, OB-02)
+        SPILLWAY_GATEWAY_TRACE_SAMPLE_RATIO: ${SPILLWAY_GATEWAY_TRACE_SAMPLE_RATIO:-1} # every trace, tail-sampled in the Collector; the latency checks set 0.01 (OB-02, ADR-0030)
         SPILLWAY_GATEWAY_REDIS_ADDRS: redis-0:6379,redis-1:6379,redis-2:6379,redis-3:6379,redis-4:6379,redis-5:6379 # seeds of the limiter's cluster; Redis policies need it (ADR-0021)
         SPILLWAY_GATEWAY_DEV_MODE: "true" # Spillway-Decision-Time on Redis-decided responses, for the accuracy harness; never in production (ADR-0021)
         SPILLWAY_GATEWAY_DRAIN: ${SPILLWAY_GATEWAY_DRAIN:-5s} # after SIGTERM, keep serving with /readyz failing (GW-23, ADR-0030)

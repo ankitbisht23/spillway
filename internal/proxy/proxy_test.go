@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/ankitbisht23/spillway/internal/config"
 	"github.com/ankitbisht23/spillway/internal/ratelimit"
@@ -176,13 +177,20 @@ func newGatewayWith(t *testing.T, res Resolver, yaml string, trusted TrustedProx
 // newDevGateway is newGatewayWith with dev mode on or off (ADR-0021).
 func newDevGateway(t *testing.T, res Resolver, yaml string, trusted TrustedProxies, redis Redis, devMode bool) *gateway {
 	t.Helper()
+	return newTracedGateway(t, res, yaml, trusted, redis, devMode, nil)
+}
+
+// newTracedGateway is newDevGateway that traces requests with tracer, if
+// not nil (OB-02).
+func newTracedGateway(t *testing.T, res Resolver, yaml string, trusted TrustedProxies, redis Redis, devMode bool, tracer trace.Tracer) *gateway {
+	t.Helper()
 	g := &gateway{events: &logBuffer{}, clock: ratelimit.NewFakeClock(t0), metrics: prometheus.NewRegistry(), logs: &logBuffer{}}
 	g.reg = NewRegistry(loopback, res, slog.New(slog.NewJSONHandler(g.events, nil)))
 	t.Cleanup(g.reg.Close)
 	g.limiters = local.NewRegistry(g.clock)
 	g.apply(t, yaml)
 	rec := telemetry.NewRecorder(g.metrics, slog.New(slog.NewJSONHandler(g.logs, nil)), 1)
-	g.h = NewHandler(g.current.Load, g.identity.Load, trusted, g.reg, g.limiters, redis, devMode, 4096, rec, slog.New(slog.DiscardHandler))
+	g.h = NewHandler(g.current.Load, g.identity.Load, trusted, g.reg, g.limiters, redis, devMode, 4096, tracer, rec, slog.New(slog.DiscardHandler))
 	g.Server = httptest.NewServer(g.h)
 	t.Cleanup(g.Close)
 	return g
@@ -467,7 +475,7 @@ policies: [{name: login-once, level: route, match: {routes: [login]}, key_templa
 }
 
 func TestProxyErrorStatus(t *testing.T) {
-	h := NewHandler(nil, nil, nil, nil, nil, nil, false, 4096, nil, slog.New(slog.DiscardHandler))
+	h := NewHandler(nil, nil, nil, nil, nil, nil, false, 4096, nil, nil, slog.New(slog.DiscardHandler))
 	for _, tt := range []struct {
 		err    error
 		want   int

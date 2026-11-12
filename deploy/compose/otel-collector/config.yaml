@@ -9,6 +9,28 @@ receivers:
 
 processors:
   batch: {}
+  # Dev and demo (OB-02, ADR-0030): the gateway samples every trace and the
+  # Collector keeps a trace if any policy matches: an error (a 5xx or a
+  # failed upstream attempt, so every retried request), a request slower
+  # than 500 ms, or a tenth of the rest. A trace is decided 10 s after its
+  # first span; later spans follow the decision, which is cached.
+  tail_sampling:
+    decision_wait: 10s
+    num_traces: 100000
+    expected_new_traces_per_sec: 1000
+    decision_cache:
+      sampled_cache_size: 100000
+      non_sampled_cache_size: 100000
+    policies:
+      - name: errors
+        type: status_code
+        status_code: { status_codes: [ERROR] }
+      - name: slow
+        type: latency
+        latency: { threshold_ms: 500 }
+      - name: rest
+        type: probabilistic
+        probabilistic: { sampling_percentage: 10 }
 
 exporters:
   otlp_grpc/tempo:
@@ -27,7 +49,7 @@ service:
   pipelines:
     traces:
       receivers: [otlp]
-      processors: [batch]
+      processors: [tail_sampling, batch]
       exporters: [otlp_grpc/tempo]
     logs:
       receivers: [otlp]

@@ -117,6 +117,12 @@ lint-proto: tool-buf tool-protoc-gen-go
 bench:
 	go test -run '^$$' -bench . -benchmem ./...
 
+# Checks that measure latency run the gateways at the benchmarks' fixed 1%
+# trace head ratio (OB-02, D6, ADR-0030): their dev prerequisite recreates
+# the gateways with it. make dev alone, and make verify-m4, recreate them at
+# compose's default of 1.
+verify-m1 verify-m2 verify-m3 accuracy chaos-redis-outage chaos-redis-primary: export SPILLWAY_GATEWAY_TRACE_SAMPLE_RATIO = 0.01
+
 # M0 exit checks (docs/design.md): the dev stack, then CI and the main ruleset
 # on GitHub. CI runs only the stack part, since it can't check its own result.
 verify-m0: dev
