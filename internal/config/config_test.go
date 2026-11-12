@@ -66,6 +66,7 @@ func TestCompile(t *testing.T) {
 		Timeouts:        Timeouts{Connect: 200 * time.Millisecond, PerTry: time.Second, Total: 3 * time.Second, Idle: 500 * time.Millisecond},
 		HSTS:            "max-age=31536000",
 		Cost:            1,
+		Retry:           Retry{Attempts: 1},
 		strip:           1,
 	}
 	if !reflect.DeepEqual(orders, wantOrders) {
@@ -155,6 +156,8 @@ func TestRejects(t *testing.T) {
 		{"set Forwarded", route("request_headers: {set: [{name: forwarded, value: for=1.2.3.4}]}"), "is the gateway's own"},
 		{"set X-Request-Id", route("request_headers: {set: [{name: x-request-id, value: a}]}"), "is the gateway's own"},
 		{"remove X-Request-Id", route("response_headers: {remove: [X-Request-Id]}"), "is the gateway's own"},
+		{"set Spillway-Deadline-Ms", route("request_headers: {set: [{name: spillway-deadline-ms, value: '9999'}]}"), "is the gateway's own"},
+		{"remove Spillway-Deadline-Ms", route("request_headers: {remove: [Spillway-Deadline-Ms]}"), "is the gateway's own"},
 		{"invalid header name", route("request_headers: {set: [{name: 'x y', value: z}]}"), `header name "x y" is not valid`},
 		{"empty header name", route("response_headers: {remove: ['']}"), `header name "" is not valid`},
 		{"header value with CR LF", route("request_headers: {add: [{name: x, value: \"a\\r\\nInjected: 1\"}]}"), "control character"},
@@ -172,6 +175,9 @@ func TestRejects(t *testing.T) {
 		{"hsts_max_age not whole seconds", route("hsts_max_age: 1500ms"), "hsts_max_age"},
 		{"negative cost", route("cost: -1"), `route "r": cost: -1 is not 1 to 1000000000`},
 		{"cost too large", route("cost: 1000000001"), "cost: 1000000001 is not 1 to 1000000000"},
+		{"negative attempts", route("retry: {attempts: -1}"), `route "r": retry.attempts: want 1 to 5`},
+		{"too many attempts", route("retry: {attempts: 6}"), "retry.attempts: want 1 to 5"},
+		{"unknown retry field", route("retry: {on: [503]}"), `unknown field "on"`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

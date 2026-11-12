@@ -123,8 +123,11 @@ type Upstream struct {
 	HealthCheck *HealthCheck `protobuf:"bytes,5,opt,name=health_check,json=healthCheck,proto3" json:"health_check,omitempty"`
 	// Passive outlier ejection (GW-09); unset means the defaults (ADR-0030).
 	OutlierDetection *OutlierDetection `protobuf:"bytes,6,opt,name=outlier_detection,json=outlierDetection,proto3" json:"outlier_detection,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Limits the upstream's retries (GW-13); unset means the defaults
+	// (ADR-0030).
+	RetryBudget   *RetryBudget `protobuf:"bytes,8,opt,name=retry_budget,json=retryBudget,proto3" json:"retry_budget,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Upstream) Reset() {
@@ -199,6 +202,72 @@ func (x *Upstream) GetOutlierDetection() *OutlierDetection {
 	return nil
 }
 
+func (x *Upstream) GetRetryBudget() *RetryBudget {
+	if x != nil {
+		return x.RetryBudget
+	}
+	return nil
+}
+
+// RetryBudget grants a retry while the retries granted over the last 10 s,
+// this one included, are at most ratio times the first attempts over the
+// same 10 s plus min_per_sec times 10 (GW-13, ADR-0030). Retries past it are
+// dropped, never queued.
+type RetryBudget struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// More than 0 and at most 1. Unset means 0.2.
+	Ratio float64 `protobuf:"fixed64,1,opt,name=ratio,proto3" json:"ratio,omitempty"`
+	// Retries per second granted on top of ratio: more than 0 and at most
+	// 10000. Unset means 3.
+	MinPerSec     float64 `protobuf:"fixed64,2,opt,name=min_per_sec,json=minPerSec,proto3" json:"min_per_sec,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RetryBudget) Reset() {
+	*x = RetryBudget{}
+	mi := &file_config_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RetryBudget) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RetryBudget) ProtoMessage() {}
+
+func (x *RetryBudget) ProtoReflect() protoreflect.Message {
+	mi := &file_config_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RetryBudget.ProtoReflect.Descriptor instead.
+func (*RetryBudget) Descriptor() ([]byte, []int) {
+	return file_config_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *RetryBudget) GetRatio() float64 {
+	if x != nil {
+		return x.Ratio
+	}
+	return 0
+}
+
+func (x *RetryBudget) GetMinPerSec() float64 {
+	if x != nil {
+		return x.MinPerSec
+	}
+	return 0
+}
+
 // HealthCheck probes each endpoint of an upstream on its own (GW-08,
 // ADR-0030). A 2xx or 3xx answer is a success.
 type HealthCheck struct {
@@ -224,7 +293,7 @@ type HealthCheck struct {
 
 func (x *HealthCheck) Reset() {
 	*x = HealthCheck{}
-	mi := &file_config_proto_msgTypes[2]
+	mi := &file_config_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -236,7 +305,7 @@ func (x *HealthCheck) String() string {
 func (*HealthCheck) ProtoMessage() {}
 
 func (x *HealthCheck) ProtoReflect() protoreflect.Message {
-	mi := &file_config_proto_msgTypes[2]
+	mi := &file_config_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -249,7 +318,7 @@ func (x *HealthCheck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HealthCheck.ProtoReflect.Descriptor instead.
 func (*HealthCheck) Descriptor() ([]byte, []int) {
-	return file_config_proto_rawDescGZIP(), []int{2}
+	return file_config_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *HealthCheck) GetPath() string {
@@ -309,7 +378,7 @@ type OutlierDetection struct {
 
 func (x *OutlierDetection) Reset() {
 	*x = OutlierDetection{}
-	mi := &file_config_proto_msgTypes[3]
+	mi := &file_config_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -321,7 +390,7 @@ func (x *OutlierDetection) String() string {
 func (*OutlierDetection) ProtoMessage() {}
 
 func (x *OutlierDetection) ProtoReflect() protoreflect.Message {
-	mi := &file_config_proto_msgTypes[3]
+	mi := &file_config_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -334,7 +403,7 @@ func (x *OutlierDetection) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OutlierDetection.ProtoReflect.Descriptor instead.
 func (*OutlierDetection) Descriptor() ([]byte, []int) {
-	return file_config_proto_rawDescGZIP(), []int{3}
+	return file_config_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *OutlierDetection) GetConsecutiveFailures() int32 {
@@ -377,7 +446,7 @@ type Endpoint struct {
 
 func (x *Endpoint) Reset() {
 	*x = Endpoint{}
-	mi := &file_config_proto_msgTypes[4]
+	mi := &file_config_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -389,7 +458,7 @@ func (x *Endpoint) String() string {
 func (*Endpoint) ProtoMessage() {}
 
 func (x *Endpoint) ProtoReflect() protoreflect.Message {
-	mi := &file_config_proto_msgTypes[4]
+	mi := &file_config_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -402,7 +471,7 @@ func (x *Endpoint) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Endpoint.ProtoReflect.Descriptor instead.
 func (*Endpoint) Descriptor() ([]byte, []int) {
-	return file_config_proto_rawDescGZIP(), []int{4}
+	return file_config_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *Endpoint) GetAddress() string {
@@ -442,14 +511,16 @@ type Route struct {
 	// (SEC-01).
 	HstsMaxAge string `protobuf:"bytes,12,opt,name=hsts_max_age,json=hstsMaxAge,proto3" json:"hsts_max_age,omitempty"`
 	// Cost units each request deducts (RL-07); unset means 1.
-	Cost          int64 `protobuf:"varint,13,opt,name=cost,proto3" json:"cost,omitempty"`
+	Cost int64 `protobuf:"varint,13,opt,name=cost,proto3" json:"cost,omitempty"`
+	// Retries (GW-12); unset means one attempt, no retry.
+	Retry         *Retry `protobuf:"bytes,14,opt,name=retry,proto3" json:"retry,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Route) Reset() {
 	*x = Route{}
-	mi := &file_config_proto_msgTypes[5]
+	mi := &file_config_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -461,7 +532,7 @@ func (x *Route) String() string {
 func (*Route) ProtoMessage() {}
 
 func (x *Route) ProtoReflect() protoreflect.Message {
-	mi := &file_config_proto_msgTypes[5]
+	mi := &file_config_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -474,7 +545,7 @@ func (x *Route) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Route.ProtoReflect.Descriptor instead.
 func (*Route) Descriptor() ([]byte, []int) {
-	return file_config_proto_rawDescGZIP(), []int{5}
+	return file_config_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *Route) GetName() string {
@@ -568,6 +639,71 @@ func (x *Route) GetCost() int64 {
 	return 0
 }
 
+func (x *Route) GetRetry() *Retry {
+	if x != nil {
+		return x.Retry
+	}
+	return nil
+}
+
+// Retry sets how many attempts a route's requests get (GW-12, GW-13,
+// ADR-0030). The conditions are the gateway's own: a connect error, a reset
+// or the attempt's timeout before the response headers, or a 502, 503 or 504.
+type Retry struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Attempts in all, the first included: 1 to 5. Unset means 1.
+	Attempts int32 `protobuf:"varint,1,opt,name=attempts,proto3" json:"attempts,omitempty"`
+	// Retries every method, not only GET, HEAD, OPTIONS, PUT, DELETE and
+	// TRACE (D4). Unset means false.
+	NonIdempotent bool `protobuf:"varint,2,opt,name=non_idempotent,json=nonIdempotent,proto3" json:"non_idempotent,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Retry) Reset() {
+	*x = Retry{}
+	mi := &file_config_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Retry) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Retry) ProtoMessage() {}
+
+func (x *Retry) ProtoReflect() protoreflect.Message {
+	mi := &file_config_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Retry.ProtoReflect.Descriptor instead.
+func (*Retry) Descriptor() ([]byte, []int) {
+	return file_config_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *Retry) GetAttempts() int32 {
+	if x != nil {
+		return x.Attempts
+	}
+	return 0
+}
+
+func (x *Retry) GetNonIdempotent() bool {
+	if x != nil {
+		return x.NonIdempotent
+	}
+	return false
+}
+
 // HeaderTransform changes headers: remove first, then set, then add (GW-02).
 // Framing, hop-by-hop, Host, Forwarded and X-Forwarded-* headers belong to
 // the gateway and cannot be named (SEC-07).
@@ -585,7 +721,7 @@ type HeaderTransform struct {
 
 func (x *HeaderTransform) Reset() {
 	*x = HeaderTransform{}
-	mi := &file_config_proto_msgTypes[6]
+	mi := &file_config_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -597,7 +733,7 @@ func (x *HeaderTransform) String() string {
 func (*HeaderTransform) ProtoMessage() {}
 
 func (x *HeaderTransform) ProtoReflect() protoreflect.Message {
-	mi := &file_config_proto_msgTypes[6]
+	mi := &file_config_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -610,7 +746,7 @@ func (x *HeaderTransform) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeaderTransform.ProtoReflect.Descriptor instead.
 func (*HeaderTransform) Descriptor() ([]byte, []int) {
-	return file_config_proto_rawDescGZIP(), []int{6}
+	return file_config_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *HeaderTransform) GetSet() []*HeaderValue {
@@ -645,7 +781,7 @@ type HeaderValue struct {
 
 func (x *HeaderValue) Reset() {
 	*x = HeaderValue{}
-	mi := &file_config_proto_msgTypes[7]
+	mi := &file_config_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -657,7 +793,7 @@ func (x *HeaderValue) String() string {
 func (*HeaderValue) ProtoMessage() {}
 
 func (x *HeaderValue) ProtoReflect() protoreflect.Message {
-	mi := &file_config_proto_msgTypes[7]
+	mi := &file_config_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -670,7 +806,7 @@ func (x *HeaderValue) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeaderValue.ProtoReflect.Descriptor instead.
 func (*HeaderValue) Descriptor() ([]byte, []int) {
-	return file_config_proto_rawDescGZIP(), []int{7}
+	return file_config_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *HeaderValue) GetName() string {
@@ -706,7 +842,7 @@ type Timeouts struct {
 
 func (x *Timeouts) Reset() {
 	*x = Timeouts{}
-	mi := &file_config_proto_msgTypes[8]
+	mi := &file_config_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -718,7 +854,7 @@ func (x *Timeouts) String() string {
 func (*Timeouts) ProtoMessage() {}
 
 func (x *Timeouts) ProtoReflect() protoreflect.Message {
-	mi := &file_config_proto_msgTypes[8]
+	mi := &file_config_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -731,7 +867,7 @@ func (x *Timeouts) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Timeouts.ProtoReflect.Descriptor instead.
 func (*Timeouts) Descriptor() ([]byte, []int) {
-	return file_config_proto_rawDescGZIP(), []int{8}
+	return file_config_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *Timeouts) GetConnect() string {
@@ -781,7 +917,7 @@ type RouteMatch struct {
 
 func (x *RouteMatch) Reset() {
 	*x = RouteMatch{}
-	mi := &file_config_proto_msgTypes[9]
+	mi := &file_config_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -793,7 +929,7 @@ func (x *RouteMatch) String() string {
 func (*RouteMatch) ProtoMessage() {}
 
 func (x *RouteMatch) ProtoReflect() protoreflect.Message {
-	mi := &file_config_proto_msgTypes[9]
+	mi := &file_config_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -806,7 +942,7 @@ func (x *RouteMatch) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RouteMatch.ProtoReflect.Descriptor instead.
 func (*RouteMatch) Descriptor() ([]byte, []int) {
-	return file_config_proto_rawDescGZIP(), []int{9}
+	return file_config_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *RouteMatch) GetHost() string {
@@ -858,7 +994,7 @@ type HeaderMatch struct {
 
 func (x *HeaderMatch) Reset() {
 	*x = HeaderMatch{}
-	mi := &file_config_proto_msgTypes[10]
+	mi := &file_config_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -870,7 +1006,7 @@ func (x *HeaderMatch) String() string {
 func (*HeaderMatch) ProtoMessage() {}
 
 func (x *HeaderMatch) ProtoReflect() protoreflect.Message {
-	mi := &file_config_proto_msgTypes[10]
+	mi := &file_config_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -883,7 +1019,7 @@ func (x *HeaderMatch) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeaderMatch.ProtoReflect.Descriptor instead.
 func (*HeaderMatch) Descriptor() ([]byte, []int) {
-	return file_config_proto_rawDescGZIP(), []int{10}
+	return file_config_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *HeaderMatch) GetName() string {
@@ -922,7 +1058,7 @@ type RateLimitSettings struct {
 
 func (x *RateLimitSettings) Reset() {
 	*x = RateLimitSettings{}
-	mi := &file_config_proto_msgTypes[11]
+	mi := &file_config_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -934,7 +1070,7 @@ func (x *RateLimitSettings) String() string {
 func (*RateLimitSettings) ProtoMessage() {}
 
 func (x *RateLimitSettings) ProtoReflect() protoreflect.Message {
-	mi := &file_config_proto_msgTypes[11]
+	mi := &file_config_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -947,7 +1083,7 @@ func (x *RateLimitSettings) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RateLimitSettings.ProtoReflect.Descriptor instead.
 func (*RateLimitSettings) Descriptor() ([]byte, []int) {
-	return file_config_proto_rawDescGZIP(), []int{11}
+	return file_config_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *RateLimitSettings) GetReplicas() int32 {
@@ -991,7 +1127,7 @@ type Policy struct {
 
 func (x *Policy) Reset() {
 	*x = Policy{}
-	mi := &file_config_proto_msgTypes[12]
+	mi := &file_config_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1003,7 +1139,7 @@ func (x *Policy) String() string {
 func (*Policy) ProtoMessage() {}
 
 func (x *Policy) ProtoReflect() protoreflect.Message {
-	mi := &file_config_proto_msgTypes[12]
+	mi := &file_config_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1016,7 +1152,7 @@ func (x *Policy) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Policy.ProtoReflect.Descriptor instead.
 func (*Policy) Descriptor() ([]byte, []int) {
-	return file_config_proto_rawDescGZIP(), []int{12}
+	return file_config_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *Policy) GetName() string {
@@ -1095,7 +1231,7 @@ type PolicyMatch struct {
 
 func (x *PolicyMatch) Reset() {
 	*x = PolicyMatch{}
-	mi := &file_config_proto_msgTypes[13]
+	mi := &file_config_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1107,7 +1243,7 @@ func (x *PolicyMatch) String() string {
 func (*PolicyMatch) ProtoMessage() {}
 
 func (x *PolicyMatch) ProtoReflect() protoreflect.Message {
-	mi := &file_config_proto_msgTypes[13]
+	mi := &file_config_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1120,7 +1256,7 @@ func (x *PolicyMatch) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PolicyMatch.ProtoReflect.Descriptor instead.
 func (*PolicyMatch) Descriptor() ([]byte, []int) {
-	return file_config_proto_rawDescGZIP(), []int{13}
+	return file_config_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *PolicyMatch) GetRoutes() []string {
@@ -1154,7 +1290,7 @@ type Limit struct {
 
 func (x *Limit) Reset() {
 	*x = Limit{}
-	mi := &file_config_proto_msgTypes[14]
+	mi := &file_config_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1166,7 +1302,7 @@ func (x *Limit) String() string {
 func (*Limit) ProtoMessage() {}
 
 func (x *Limit) ProtoReflect() protoreflect.Message {
-	mi := &file_config_proto_msgTypes[14]
+	mi := &file_config_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1179,7 +1315,7 @@ func (x *Limit) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Limit.ProtoReflect.Descriptor instead.
 func (*Limit) Descriptor() ([]byte, []int) {
-	return file_config_proto_rawDescGZIP(), []int{14}
+	return file_config_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *Limit) GetRate() int64 {
@@ -1217,7 +1353,7 @@ type Identity struct {
 
 func (x *Identity) Reset() {
 	*x = Identity{}
-	mi := &file_config_proto_msgTypes[15]
+	mi := &file_config_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1229,7 +1365,7 @@ func (x *Identity) String() string {
 func (*Identity) ProtoMessage() {}
 
 func (x *Identity) ProtoReflect() protoreflect.Message {
-	mi := &file_config_proto_msgTypes[15]
+	mi := &file_config_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1242,7 +1378,7 @@ func (x *Identity) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Identity.ProtoReflect.Descriptor instead.
 func (*Identity) Descriptor() ([]byte, []int) {
-	return file_config_proto_rawDescGZIP(), []int{15}
+	return file_config_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *Identity) GetVersion() int64 {
@@ -1280,7 +1416,7 @@ type Consumer struct {
 
 func (x *Consumer) Reset() {
 	*x = Consumer{}
-	mi := &file_config_proto_msgTypes[16]
+	mi := &file_config_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1292,7 +1428,7 @@ func (x *Consumer) String() string {
 func (*Consumer) ProtoMessage() {}
 
 func (x *Consumer) ProtoReflect() protoreflect.Message {
-	mi := &file_config_proto_msgTypes[16]
+	mi := &file_config_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1305,7 +1441,7 @@ func (x *Consumer) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Consumer.ProtoReflect.Descriptor instead.
 func (*Consumer) Descriptor() ([]byte, []int) {
-	return file_config_proto_rawDescGZIP(), []int{16}
+	return file_config_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *Consumer) GetName() string {
@@ -1338,7 +1474,7 @@ type ApiKey struct {
 
 func (x *ApiKey) Reset() {
 	*x = ApiKey{}
-	mi := &file_config_proto_msgTypes[17]
+	mi := &file_config_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1350,7 +1486,7 @@ func (x *ApiKey) String() string {
 func (*ApiKey) ProtoMessage() {}
 
 func (x *ApiKey) ProtoReflect() protoreflect.Message {
-	mi := &file_config_proto_msgTypes[17]
+	mi := &file_config_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1363,7 +1499,7 @@ func (x *ApiKey) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApiKey.ProtoReflect.Descriptor instead.
 func (*ApiKey) Descriptor() ([]byte, []int) {
-	return file_config_proto_rawDescGZIP(), []int{17}
+	return file_config_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *ApiKey) GetPrefix() string {
@@ -1397,14 +1533,18 @@ const file_config_proto_rawDesc = "" +
 	"\tupstreams\x18\x02 \x03(\v2\x1c.spillway.config.v1.UpstreamR\tupstreams\x121\n" +
 	"\x06routes\x18\x03 \x03(\v2\x19.spillway.config.v1.RouteR\x06routes\x12C\n" +
 	"\tratelimit\x18\x04 \x01(\v2%.spillway.config.v1.RateLimitSettingsR\tratelimit\x126\n" +
-	"\bpolicies\x18\x05 \x03(\v2\x1a.spillway.config.v1.PolicyR\bpolicies\"\x9a\x02\n" +
+	"\bpolicies\x18\x05 \x03(\v2\x1a.spillway.config.v1.PolicyR\bpolicies\"\xde\x02\n" +
 	"\bUpstream\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12:\n" +
 	"\tendpoints\x18\x02 \x03(\v2\x1c.spillway.config.v1.EndpointR\tendpoints\x12\x0e\n" +
 	"\x02lb\x18\x03 \x01(\tR\x02lb\x12\x17\n" +
 	"\ahash_on\x18\x04 \x01(\tR\x06hashOn\x12B\n" +
 	"\fhealth_check\x18\x05 \x01(\v2\x1f.spillway.config.v1.HealthCheckR\vhealthCheck\x12Q\n" +
-	"\x11outlier_detection\x18\x06 \x01(\v2$.spillway.config.v1.OutlierDetectionR\x10outlierDetection\"\x8f\x01\n" +
+	"\x11outlier_detection\x18\x06 \x01(\v2$.spillway.config.v1.OutlierDetectionR\x10outlierDetection\x12B\n" +
+	"\fretry_budget\x18\b \x01(\v2\x1f.spillway.config.v1.RetryBudgetR\vretryBudget\"C\n" +
+	"\vRetryBudget\x12\x14\n" +
+	"\x05ratio\x18\x01 \x01(\x01R\x05ratio\x12\x1e\n" +
+	"\vmin_per_sec\x18\x02 \x01(\x01R\tminPerSec\"\x8f\x01\n" +
 	"\vHealthCheck\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x1a\n" +
 	"\binterval\x18\x02 \x01(\tR\binterval\x12\x18\n" +
@@ -1417,7 +1557,7 @@ const file_config_proto_rawDesc = "" +
 	"\fmax_ejection\x18\x03 \x01(\tR\vmaxEjection\x12.\n" +
 	"\x13max_ejected_percent\x18\x04 \x01(\x05R\x11maxEjectedPercent\"$\n" +
 	"\bEndpoint\x12\x18\n" +
-	"\aaddress\x18\x01 \x01(\tR\aaddress\"\xa9\x04\n" +
+	"\aaddress\x18\x01 \x01(\tR\aaddress\"\xda\x04\n" +
 	"\x05Route\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x124\n" +
 	"\x05match\x18\x02 \x01(\v2\x1e.spillway.config.v1.RouteMatchR\x05match\x12\x1a\n" +
@@ -1434,7 +1574,11 @@ const file_config_proto_rawDesc = "" +
 	"\btimeouts\x18\v \x01(\v2\x1c.spillway.config.v1.TimeoutsR\btimeouts\x12 \n" +
 	"\fhsts_max_age\x18\f \x01(\tR\n" +
 	"hstsMaxAge\x12\x12\n" +
-	"\x04cost\x18\r \x01(\x03R\x04cost\"\x8f\x01\n" +
+	"\x04cost\x18\r \x01(\x03R\x04cost\x12/\n" +
+	"\x05retry\x18\x0e \x01(\v2\x19.spillway.config.v1.RetryR\x05retry\"J\n" +
+	"\x05Retry\x12\x1a\n" +
+	"\battempts\x18\x01 \x01(\x05R\battempts\x12%\n" +
+	"\x0enon_idempotent\x18\x02 \x01(\bR\rnonIdempotent\"\x8f\x01\n" +
 	"\x0fHeaderTransform\x121\n" +
 	"\x03set\x18\x01 \x03(\v2\x1f.spillway.config.v1.HeaderValueR\x03set\x121\n" +
 	"\x03add\x18\x02 \x03(\v2\x1f.spillway.config.v1.HeaderValueR\x03add\x12\x16\n" +
@@ -1503,51 +1647,55 @@ func file_config_proto_rawDescGZIP() []byte {
 	return file_config_proto_rawDescData
 }
 
-var file_config_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
+var file_config_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
 var file_config_proto_goTypes = []any{
 	(*Config)(nil),            // 0: spillway.config.v1.Config
 	(*Upstream)(nil),          // 1: spillway.config.v1.Upstream
-	(*HealthCheck)(nil),       // 2: spillway.config.v1.HealthCheck
-	(*OutlierDetection)(nil),  // 3: spillway.config.v1.OutlierDetection
-	(*Endpoint)(nil),          // 4: spillway.config.v1.Endpoint
-	(*Route)(nil),             // 5: spillway.config.v1.Route
-	(*HeaderTransform)(nil),   // 6: spillway.config.v1.HeaderTransform
-	(*HeaderValue)(nil),       // 7: spillway.config.v1.HeaderValue
-	(*Timeouts)(nil),          // 8: spillway.config.v1.Timeouts
-	(*RouteMatch)(nil),        // 9: spillway.config.v1.RouteMatch
-	(*HeaderMatch)(nil),       // 10: spillway.config.v1.HeaderMatch
-	(*RateLimitSettings)(nil), // 11: spillway.config.v1.RateLimitSettings
-	(*Policy)(nil),            // 12: spillway.config.v1.Policy
-	(*PolicyMatch)(nil),       // 13: spillway.config.v1.PolicyMatch
-	(*Limit)(nil),             // 14: spillway.config.v1.Limit
-	(*Identity)(nil),          // 15: spillway.config.v1.Identity
-	(*Consumer)(nil),          // 16: spillway.config.v1.Consumer
-	(*ApiKey)(nil),            // 17: spillway.config.v1.ApiKey
+	(*RetryBudget)(nil),       // 2: spillway.config.v1.RetryBudget
+	(*HealthCheck)(nil),       // 3: spillway.config.v1.HealthCheck
+	(*OutlierDetection)(nil),  // 4: spillway.config.v1.OutlierDetection
+	(*Endpoint)(nil),          // 5: spillway.config.v1.Endpoint
+	(*Route)(nil),             // 6: spillway.config.v1.Route
+	(*Retry)(nil),             // 7: spillway.config.v1.Retry
+	(*HeaderTransform)(nil),   // 8: spillway.config.v1.HeaderTransform
+	(*HeaderValue)(nil),       // 9: spillway.config.v1.HeaderValue
+	(*Timeouts)(nil),          // 10: spillway.config.v1.Timeouts
+	(*RouteMatch)(nil),        // 11: spillway.config.v1.RouteMatch
+	(*HeaderMatch)(nil),       // 12: spillway.config.v1.HeaderMatch
+	(*RateLimitSettings)(nil), // 13: spillway.config.v1.RateLimitSettings
+	(*Policy)(nil),            // 14: spillway.config.v1.Policy
+	(*PolicyMatch)(nil),       // 15: spillway.config.v1.PolicyMatch
+	(*Limit)(nil),             // 16: spillway.config.v1.Limit
+	(*Identity)(nil),          // 17: spillway.config.v1.Identity
+	(*Consumer)(nil),          // 18: spillway.config.v1.Consumer
+	(*ApiKey)(nil),            // 19: spillway.config.v1.ApiKey
 }
 var file_config_proto_depIdxs = []int32{
 	1,  // 0: spillway.config.v1.Config.upstreams:type_name -> spillway.config.v1.Upstream
-	5,  // 1: spillway.config.v1.Config.routes:type_name -> spillway.config.v1.Route
-	11, // 2: spillway.config.v1.Config.ratelimit:type_name -> spillway.config.v1.RateLimitSettings
-	12, // 3: spillway.config.v1.Config.policies:type_name -> spillway.config.v1.Policy
-	4,  // 4: spillway.config.v1.Upstream.endpoints:type_name -> spillway.config.v1.Endpoint
-	2,  // 5: spillway.config.v1.Upstream.health_check:type_name -> spillway.config.v1.HealthCheck
-	3,  // 6: spillway.config.v1.Upstream.outlier_detection:type_name -> spillway.config.v1.OutlierDetection
-	9,  // 7: spillway.config.v1.Route.match:type_name -> spillway.config.v1.RouteMatch
-	6,  // 8: spillway.config.v1.Route.request_headers:type_name -> spillway.config.v1.HeaderTransform
-	6,  // 9: spillway.config.v1.Route.response_headers:type_name -> spillway.config.v1.HeaderTransform
-	8,  // 10: spillway.config.v1.Route.timeouts:type_name -> spillway.config.v1.Timeouts
-	7,  // 11: spillway.config.v1.HeaderTransform.set:type_name -> spillway.config.v1.HeaderValue
-	7,  // 12: spillway.config.v1.HeaderTransform.add:type_name -> spillway.config.v1.HeaderValue
-	10, // 13: spillway.config.v1.RouteMatch.headers:type_name -> spillway.config.v1.HeaderMatch
-	13, // 14: spillway.config.v1.Policy.match:type_name -> spillway.config.v1.PolicyMatch
-	14, // 15: spillway.config.v1.Policy.limits:type_name -> spillway.config.v1.Limit
-	16, // 16: spillway.config.v1.Identity.consumers:type_name -> spillway.config.v1.Consumer
-	17, // 17: spillway.config.v1.Identity.api_keys:type_name -> spillway.config.v1.ApiKey
-	18, // [18:18] is the sub-list for method output_type
-	18, // [18:18] is the sub-list for method input_type
-	18, // [18:18] is the sub-list for extension type_name
-	18, // [18:18] is the sub-list for extension extendee
-	0,  // [0:18] is the sub-list for field type_name
+	6,  // 1: spillway.config.v1.Config.routes:type_name -> spillway.config.v1.Route
+	13, // 2: spillway.config.v1.Config.ratelimit:type_name -> spillway.config.v1.RateLimitSettings
+	14, // 3: spillway.config.v1.Config.policies:type_name -> spillway.config.v1.Policy
+	5,  // 4: spillway.config.v1.Upstream.endpoints:type_name -> spillway.config.v1.Endpoint
+	3,  // 5: spillway.config.v1.Upstream.health_check:type_name -> spillway.config.v1.HealthCheck
+	4,  // 6: spillway.config.v1.Upstream.outlier_detection:type_name -> spillway.config.v1.OutlierDetection
+	2,  // 7: spillway.config.v1.Upstream.retry_budget:type_name -> spillway.config.v1.RetryBudget
+	11, // 8: spillway.config.v1.Route.match:type_name -> spillway.config.v1.RouteMatch
+	8,  // 9: spillway.config.v1.Route.request_headers:type_name -> spillway.config.v1.HeaderTransform
+	8,  // 10: spillway.config.v1.Route.response_headers:type_name -> spillway.config.v1.HeaderTransform
+	10, // 11: spillway.config.v1.Route.timeouts:type_name -> spillway.config.v1.Timeouts
+	7,  // 12: spillway.config.v1.Route.retry:type_name -> spillway.config.v1.Retry
+	9,  // 13: spillway.config.v1.HeaderTransform.set:type_name -> spillway.config.v1.HeaderValue
+	9,  // 14: spillway.config.v1.HeaderTransform.add:type_name -> spillway.config.v1.HeaderValue
+	12, // 15: spillway.config.v1.RouteMatch.headers:type_name -> spillway.config.v1.HeaderMatch
+	15, // 16: spillway.config.v1.Policy.match:type_name -> spillway.config.v1.PolicyMatch
+	16, // 17: spillway.config.v1.Policy.limits:type_name -> spillway.config.v1.Limit
+	18, // 18: spillway.config.v1.Identity.consumers:type_name -> spillway.config.v1.Consumer
+	19, // 19: spillway.config.v1.Identity.api_keys:type_name -> spillway.config.v1.ApiKey
+	20, // [20:20] is the sub-list for method output_type
+	20, // [20:20] is the sub-list for method input_type
+	20, // [20:20] is the sub-list for extension type_name
+	20, // [20:20] is the sub-list for extension extendee
+	0,  // [0:20] is the sub-list for field type_name
 }
 
 func init() { file_config_proto_init() }
@@ -1561,7 +1709,7 @@ func file_config_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_config_proto_rawDesc), len(file_config_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   18,
+			NumMessages:   20,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
