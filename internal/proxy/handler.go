@@ -37,6 +37,10 @@ type Handler struct {
 	rec      *telemetry.Recorder
 	log      *slog.Logger
 	errLog   *log.Logger
+
+	// inFlight counts requests being handled against maxInFlight (GW-26).
+	inFlight    resilience.Gate
+	maxInFlight int64
 }
 
 // NewHandler returns a Handler that reads the current snapshot from snapshot
@@ -47,9 +51,15 @@ type Handler struct {
 // the gateway has no Redis (ADR-0021), and records requests with rec (OB-01,
 // OB-03). With devMode, a response decided in Redis carries the decision's
 // Redis time for the accuracy harness (ADR-0021), and a response after
-// upstream attempts their number for the M4 exit check (ADR-0030).
-func NewHandler(snapshot func() *config.Snapshot, identity func() *config.Identity, trusted TrustedProxies, pools *Registry, limiters *local.Registry, redis Redis, devMode bool, rec *telemetry.Recorder, log *slog.Logger) *Handler {
-	return &Handler{snapshot: snapshot, identity: identity, trusted: trusted, pools: pools, limiters: limiters, redis: redis, devMode: devMode, jitter: rand.N[time.Duration], rec: rec, log: log, errLog: slog.NewLogLogger(log.Handler(), slog.LevelWarn)}
+// upstream attempts their number for the M4 exit check (ADR-0030). Past
+// maxInFlight requests at once, it sheds the rest (GW-26).
+func NewHandler(snapshot func() *config.Snapshot, identity func() *config.Identity, trusted TrustedProxies, pools *Registry, limiters *local.Registry, redis Redis, devMode bool, maxInFlight int64, rec *telemetry.Recorder, log *slog.Logger) *Handler {
+	return &Handler{snapshot: snapshot, identity: identity, trusted: trusted, pools: pools, limiters: limiters, redis: redis, devMode: devMode, jitter: rand.N[time.Duration], maxInFlight: maxInFlight, rec: rec, log: log, errLog: slog.NewLogLogger(log.Handler(), slog.LevelWarn)}
+}
+
+// InFlight returns the number of requests being handled.
+func (h *Handler) InFlight() int64 {
+	return h.inFlight.InUse()
 }
 
 // statusClientClosed is recorded for a request whose client went away before
@@ -78,7 +88,22 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		q.Latency, q.BytesIn, q.BytesOut = time.Since(start), body.n.Load(), rw.bytes
 		h.rec.Request(r.Context(), &q)
 	}()
+	// Load shedding (GW-26): past the cap, answer at once rather than
+	// queue. HTTP/2 streams count one each; an upgraded connection holds
+	// its place until its tunnel closes.
+	if !h.inFlight.TryAcquire(h.maxInFlight) {
+		shed(rw, &q)
+		return
+	}
+	defer h.inFlight.Release()
 	h.serve(rw, r, body, &q)
+}
+
+// shed answers a request the in-flight cap refused (GW-26, ADR-0030).
+func shed(w http.ResponseWriter, q *telemetry.Request) {
+	q.Reason = telemetry.ReasonShed
+	w.Header().Set("Retry-After", "1")
+	jsonError(w, http.StatusServiceUnavailable, "overloaded")
 }
 
 // serve answers r, whose body reads through body, and notes in q what the

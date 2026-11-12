@@ -257,7 +257,8 @@ func TestPickConcurrently(t *testing.T) {
 // sending it until its response body is closed, and returns to 0 however
 // the request ends: a response, a 5xx, a refused connection, a timeout, a
 // client that goes away before or during the response, and a 101 whose
-// tunnel closes (GW-07).
+// tunnel closes (GW-07). The gateway's own in-flight count, which the
+// in-flight cap uses, does the same (GW-26).
 func TestInFlightReleased(t *testing.T) {
 	hold, held := make(chan struct{}), make(chan struct{}, 1)
 	u := newUpstream(t, "u")
@@ -302,7 +303,7 @@ routes:
 	inFlight := func(name string) int64 { return (*(*g.reg.pools.Load())[name].endpoints.Load())[0].inFlight.Load() }
 	zero := func(what, name string) {
 		t.Helper()
-		waitFor(t, what+": in-flight count back to 0", func() bool { return inFlight(name) == 0 })
+		waitFor(t, what+": in-flight count back to 0", func() bool { return inFlight(name) == 0 && g.h.InFlight() == 0 })
 	}
 
 	for _, path := range []string{"/ok", "/503"} {
@@ -328,8 +329,8 @@ routes:
 		}
 	}()
 	<-held
-	if n := inFlight("u"); n != 1 {
-		t.Errorf("waiting for the headers: %d in flight, want 1", n)
+	if n, m := inFlight("u"), g.h.InFlight(); n != 1 || m != 1 {
+		t.Errorf("waiting for the headers: %d in flight at the endpoint and %d at the gateway, want 1", n, m)
 	}
 	cancel()
 	<-done
@@ -344,8 +345,8 @@ routes:
 		t.Fatal(err)
 	}
 	<-held
-	if n := inFlight("u"); n != 1 {
-		t.Errorf("while the body streams: %d in flight, want 1", n)
+	if n, m := inFlight("u"), g.h.InFlight(); n != 1 || m != 1 {
+		t.Errorf("while the body streams: %d in flight at the endpoint and %d at the gateway, want 1", n, m)
 	}
 	cancel()
 	_ = resp.Body.Close()
@@ -362,8 +363,8 @@ routes:
 	if upgraded.StatusCode != http.StatusSwitchingProtocols {
 		t.Fatalf("upgrade: %d, want 101", upgraded.StatusCode)
 	}
-	if n := inFlight("u"); n != 1 {
-		t.Errorf("tunnel open: %d in flight, want 1", n)
+	if n, m := inFlight("u"), g.h.InFlight(); n != 1 || m != 1 {
+		t.Errorf("tunnel open: %d in flight at the endpoint and %d at the gateway, want 1", n, m)
 	}
 	_ = conn.Close()
 	zero("tunnel closed", "u")

@@ -267,6 +267,15 @@ func (c *countedConn) Close() error {
 	return c.Conn.Close()
 }
 
+// CloseWrite lets net/http half-close a client connection the connection
+// cap counts (GW-26), as it does a *net.TCPConn.
+func (c *countedConn) CloseWrite() error {
+	if cw, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return nil
+}
+
 // logCircuit logs a transition of p's breaker (ADR-0030).
 func (p *pool) logCircuit(t resilience.Transition) {
 	switch t.To {

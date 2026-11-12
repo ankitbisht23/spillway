@@ -30,6 +30,9 @@ const (
 	// ReasonCircuitOpen: the gateway answered 503 because the upstream's
 	// circuit breaker is open or one of its caps is full (GW-14).
 	ReasonCircuitOpen = "circuit_open"
+	// ReasonShed: the gateway answered 503, or closed a connection, because
+	// one of its own caps was full (GW-26).
+	ReasonShed = "shed"
 
 	BackendLocal = "local" // rate limit checks in the gateway's memory
 	BackendRedis = "redis" // rate limit checks on Redis Cluster (ADR-0021)
@@ -192,6 +195,13 @@ func (rec *Recorder) observe(q *Request) {
 	for _, d := range q.Decisions {
 		rec.decisions.WithLabelValues(d.Policy, d.Decision, d.Mode).Inc()
 	}
+}
+
+// ShedConnection records a connection the connection cap refused (GW-26).
+// No request was read from it, so it has no access-log line and no
+// duration (ADR-0030).
+func (rec *Recorder) ShedConnection() {
+	rec.requests.WithLabelValues(NoRoute, "other", "5xx", OriginGateway, ReasonShed, NoTenant).Inc()
 }
 
 // RateLimitCheck records how long one phase of a request's rate limit checks

@@ -148,14 +148,11 @@ func serve(ctx context.Context, s settings, log *slog.Logger, flush func(context
 	reg := telemetry.NewRegistry()
 	reg.MustRegister(pools) // gw_upstream_endpoint_healthy
 	rec := telemetry.NewRecorder(reg, log, s.accessLogSampleRate)
-	// Requests in flight, for the shutdown's log line.
-	var inFlight atomic.Int64
-	handler := proxy.NewHandler(cfg.Snapshot, identity, s.trusted, pools, limiters, rl, s.devMode, rec, log)
-	srv := proxy.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		inFlight.Add(1)
-		defer inFlight.Add(-1)
-		handler.ServeHTTP(w, r)
-	}), log)
+	// The handler sheds requests past the in-flight cap and the listeners
+	// connections past the connection cap; the admin port is exempt (GW-26).
+	handler := proxy.NewHandler(cfg.Snapshot, identity, s.trusted, pools, limiters, rl, s.devMode, s.maxInFlight, rec, log)
+	conns := proxy.NewConnLimit(s.maxConnections, rec, log)
+	srv := proxy.NewServer(handler, log)
 	if s.tlsCert != "" {
 		certs, err := proxy.NewCerts(s.tlsCert, s.tlsKey, log)
 		if err != nil {
@@ -192,13 +189,15 @@ func serve(ctx context.Context, s settings, log *slog.Logger, flush func(context
 	}
 	addrs := []any{"admin", aln.Addr().String()}
 	// Read before Serve starts: it sets an empty TLSConfig when there is none.
-	tlsOn := srv.TLSConfig != nil
+	tlsConfig := srv.TLSConfig
+	tlsOn := tlsConfig != nil
 	if s.httpAddr != "" {
 		ln, err := lc.Listen(ctx, "tcp", s.httpAddr)
 		if err != nil {
 			closeAll()
 			return err
 		}
+		ln = conns.Listener(ln, nil)
 		go func() { errc <- srv.Serve(ln) }()
 		addrs = append(addrs, "http", ln.Addr().String())
 	}
@@ -208,6 +207,7 @@ func serve(ctx context.Context, s settings, log *slog.Logger, flush func(context
 			closeAll()
 			return err
 		}
+		ln = conns.Listener(ln, tlsConfig)
 		go func() { errc <- srv.ServeTLS(ln, "", "") }() // HTTP/2 or HTTP/1.1, by ALPN
 		addrs = append(addrs, "tls", ln.Addr().String())
 	}
@@ -235,12 +235,12 @@ func serve(ctx context.Context, s settings, log *slog.Logger, flush func(context
 		return err
 	}
 	// 3. Stop accepting; in-flight requests get the grace, then are cut.
-	log.Info("shutting down: closing listeners", "grace", s.shutdownGrace.String(), "requests", inFlight.Load())
+	log.Info("shutting down: closing listeners", "grace", s.shutdownGrace.String(), "requests", handler.InFlight())
 	graceCtx, cancel := context.WithTimeout(context.Background(), s.shutdownGrace)
 	defer cancel()
 	err = srv.Shutdown(graceCtx)
 	if errors.Is(err, context.DeadlineExceeded) {
-		log.Warn("shutdown grace ended; cutting requests", "requests", inFlight.Load())
+		log.Warn("shutdown grace ended; cutting requests", "requests", handler.InFlight())
 		_ = srv.Close()
 		err = nil
 	}
