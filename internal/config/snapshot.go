@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ankitbisht23/spillway/internal/gen/configpb"
@@ -81,6 +83,7 @@ func Compile(c *configpb.Config) (*Snapshot, error) {
 
 	names := map[string]bool{}
 	var routes []router.Route
+	heads := explicitHead(c.GetRoutes())
 	for _, r := range c.GetRoutes() {
 		if r.GetName() == "" {
 			return nil, errors.New("route: name is required")
@@ -106,6 +109,9 @@ func Compile(c *configpb.Config) (*Snapshot, error) {
 			Path:     m.GetPath() + m.GetPathPrefix(),
 			Prefix:   m.GetPathPrefix() != "",
 			Priority: int(r.GetPriority()),
+		}
+		if !heads[headKey(m)] {
+			rr.Methods = withHead(rr.Methods)
 		}
 		for _, h := range m.GetHeaders() {
 			rr.Headers = append(rr.Headers, router.HeaderMatch{Name: h.GetName(), Exact: h.GetExact(), Regex: h.GetRegex()})
@@ -175,4 +181,32 @@ func compileUpstream(u *configpb.Upstream) (*Upstream, error) {
 		return nil, fmt.Errorf("retry_budget.%w", err)
 	}
 	return up, nil
+}
+
+// withHead returns methods with HEAD added when they list GET and not HEAD:
+// HEAD is GET without the body (RFC 9110 §9.3.2), so a HEAD request matches
+// the routes and policies a GET would, and cannot skip a GET route and its
+// limits for a broader route (D1, ADR-0030). methods is not changed.
+func withHead(methods []string) []string {
+	if !slices.Contains(methods, http.MethodGet) || slices.Contains(methods, http.MethodHead) {
+		return methods
+	}
+	return append(slices.Clip(methods), http.MethodHead)
+}
+
+// explicitHead returns the headKey of every route that lists HEAD itself: a
+// GET route with the same host and path leaves HEAD to it (ADR-0033).
+func explicitHead(routes []*configpb.Route) map[string]bool {
+	heads := map[string]bool{}
+	for _, r := range routes {
+		if slices.Contains(r.GetMatch().GetMethods(), http.MethodHead) {
+			heads[headKey(r.GetMatch())] = true
+		}
+	}
+	return heads
+}
+
+// headKey is a route match's host and path, as explicitHead compares them.
+func headKey(m *configpb.RouteMatch) string {
+	return strings.ToLower(m.GetHost()) + " " + m.GetPath() + " " + m.GetPathPrefix()
 }

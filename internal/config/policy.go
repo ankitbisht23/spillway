@@ -266,6 +266,7 @@ func (pol *Policy) compileMatch(m *configpb.PolicyMatch, routes []Route) error {
 		}
 		pol.Methods = append(pol.Methods, method)
 	}
+	pol.Methods = withHead(pol.Methods) // D1
 	return nil
 }
 

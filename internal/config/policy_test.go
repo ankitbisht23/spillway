@@ -328,11 +328,12 @@ func TestPolicyMatches(t *testing.T) {
 	s, err := parse([]byte(policies("",
 		p("name", "all"),
 		p("name", "a-writes", "match", "{routes: [a], methods: [POST, PUT]}"),
+		p("name", "a-reads", "match", "{routes: [a], methods: [GET]}"),
 	)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	all, writes := &s.Policies[0], &s.Policies[1]
+	all, writes, reads := &s.Policies[0], &s.Policies[1], &s.Policies[2]
 	for _, tt := range []struct {
 		p             *Policy
 		route, method string
@@ -345,6 +346,11 @@ func TestPolicyMatches(t *testing.T) {
 		{writes, "a", "GET", false},
 		{writes, "a", "post", false},
 		{writes, "b", "POST", false},
+		{writes, "a", "HEAD", false},
+		// HEAD is GET without the body (D1, ADR-0030).
+		{reads, "a", "GET", true},
+		{reads, "a", "HEAD", true},
+		{reads, "a", "OPTIONS", false},
 	} {
 		if got := tt.p.Matches(tt.route, tt.method); got != tt.want {
 			t.Errorf("%s.Matches(%s, %s) = %v, want %v", tt.p.Name, tt.route, tt.method, got, tt.want)
