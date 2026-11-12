@@ -658,7 +658,7 @@ Exit (`make verify-m3`): GCRA in strict mode shows zero over-admission at 3 repl
 - [x] Round robin, P2C least-request, consistent hash (GW-07)
 - [x] Retries with backoff; retry budget on the upstream (`retry_budget`: 20% of requests over 10 s, floor 3/s); deadline propagation (GW-12, GW-13, GW-15)
 - [x] Circuit breaker per upstream with `min_requests` and `half_open_probes`; graceful shutdown (GW-14, GW-23)
-- [ ] Connection and in-flight caps with fast load shedding (GW-26)
+- [x] Connection and in-flight caps with fast load shedding (GW-26)
 - [ ] OTel tracing with a span per stage over OTLP: 100% at the gateway plus Collector tail sampling in dev and demo, a fixed head ratio for benchmarks (OB-02)
 
 Exit (`make verify-m4`): with one of three endpoints failing, ≥ 99% of requests succeed within 10 s of the failure, retries stay within budget, and traces show each attempt.

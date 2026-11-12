@@ -234,6 +234,8 @@ services:
         SPILLWAY_GATEWAY_DEV_MODE: "true" # Spillway-Decision-Time on Redis-decided responses, for the accuracy harness; never in production (ADR-0021)
         SPILLWAY_GATEWAY_DRAIN: ${SPILLWAY_GATEWAY_DRAIN:-5s} # after SIGTERM, keep serving with /readyz failing (GW-23, ADR-0030)
         SPILLWAY_GATEWAY_SHUTDOWN_GRACE: ${SPILLWAY_GATEWAY_SHUTDOWN_GRACE:-15s} # then in-flight requests get this long
+        SPILLWAY_GATEWAY_MAX_CONNECTIONS: ${SPILLWAY_GATEWAY_MAX_CONNECTIONS:-8192} # open client connections; past it, a 503 or a reset (GW-26, ADR-0030)
+        SPILLWAY_GATEWAY_MAX_IN_FLIGHT: ${SPILLWAY_GATEWAY_MAX_IN_FLIGHT:-4096} # requests at once; past it, 503 reason shed
       # Drain + grace + 5 s of telemetry flush, with room (ADR-0030).
       stop_grace_period: 30s
       volumes: ["./deploy/compose/gateway:/etc/spillway:ro", "./deploy/certs:/etc/spillway-certs:ro"]
