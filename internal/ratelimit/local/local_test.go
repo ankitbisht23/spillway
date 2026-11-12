@@ -2,6 +2,7 @@ package local
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -445,6 +446,56 @@ func TestConcurrentCallers(t *testing.T) {
 			wg.Wait()
 			if n := admitted.Load(); n != tt.want {
 				t.Fatalf("admitted %d, want %d", n, tt.want)
+			}
+		})
+	}
+}
+
+// TestKeyCap: a limiter holds at most shardKeys keys per shard. A new key in
+// a full shard gets ErrKeyCap with nothing taken, while the shard's keys and
+// other shards keep working, refunds and releases never fail, and a sweep or
+// a release makes room again (ADR-0021, U1).
+func TestKeyCap(t *testing.T) {
+	type limiter interface {
+		ratelimit.Limiter
+		Sweep()
+	}
+	clock := ratelimit.NewFakeClock(base)
+	for name, l := range map[string]ratelimit.Limiter{
+		"gcra":        NewGCRA(clock, 1, time.Second, 1),
+		"fixed":       NewFixedWindow(clock, 1, time.Second),
+		"sliding":     NewSlidingWindow(clock, 1, time.Second),
+		"concurrency": NewConcurrency(1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			// Shard 5's keys start with byte 5, 69, 133 or 197.
+			key := func(i int) string { return string([]byte{5, byte(i), byte(i >> 8)}) }
+			for i := range shardKeys {
+				if d, err := l.Allow(ctx, key(i), 1); err != nil || !d.Allowed {
+					t.Fatalf("key %d: %+v, %v", i, d, err)
+				}
+			}
+			newKey := string([]byte{69, 0, 0})
+			if d, err := l.Allow(ctx, newKey, 1); !errors.Is(err, ErrKeyCap) || d != (ratelimit.Decision{}) {
+				t.Fatalf("a new key in a full shard: %+v, %v; want ErrKeyCap and a zero decision", d, err)
+			}
+			if d, err := l.Allow(ctx, key(0), 1); err != nil || d.Allowed {
+				t.Errorf("a key the shard holds: %+v, %v; want a deny", d, err)
+			}
+			if d, err := l.Allow(ctx, string([]byte{6}), 1); err != nil || !d.Allowed {
+				t.Errorf("a key in another shard: %+v, %v; want allowed", d, err)
+			}
+			if _, err := l.Allow(ctx, newKey, -1); err != nil {
+				t.Errorf("a refund of a missing key in a full shard: %v", err)
+			}
+			if c, ok := l.(*Concurrency); ok {
+				c.Release(key(0), 1)
+			} else {
+				clock.Advance(2 * time.Second)
+				l.(limiter).Sweep()
+			}
+			if d, err := l.Allow(ctx, newKey, 1); err != nil || !d.Allowed {
+				t.Errorf("a new key once there is room: %+v, %v; want allowed", d, err)
 			}
 		})
 	}

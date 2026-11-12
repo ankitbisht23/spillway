@@ -138,8 +138,12 @@ func (l *limits) check(identity bool) bool {
 			if limiter == nil {
 				continue // removed by a reload since this request's snapshot
 			}
+			d, err := limiter.Allow(l.r.Context(), key, l.cost) // local limiters fail only with ErrKeyCap
+			if err != nil {
+				l.rec.KeyCapSkip(p.Name) // a new key in a full limiter: the limit is skipped (ADR-0021, U1)
+				continue
+			}
 			applied = true
-			d, _ := limiter.Allow(l.r.Context(), key, l.cost) // local limiters never fail
 			l.checks = append(l.checks, check{policy: p, limit: lim, limiter: limiter, key: key, d: d, at: at, held: d.Allowed})
 			if !d.Allowed {
 				decision = "deny"
@@ -258,11 +262,15 @@ func (l *limits) failed(c *redisCall, err error) bool {
 				if limiter == nil {
 					continue // removed by a reload since this request's snapshot
 				}
-				applied = true
 				// Keyed like the Redis key, so a tenant's degraded state is
 				// its own as in Redis.
 				key := ratelimit.Key(c.limits[k].Key)
-				d, _ := limiter.Allow(l.r.Context(), key, l.cost) // local limiters never fail
+				d, err := limiter.Allow(l.r.Context(), key, l.cost) // local limiters fail only with ErrKeyCap
+				if err != nil {
+					l.rec.KeyCapSkip(p.Name) // a new key in a full limiter: the limit is skipped (ADR-0021, U1)
+					continue
+				}
+				applied = true
 				l.checks = append(l.checks, check{policy: p, limit: c.conf[k].PerReplica(l.replicas), limiter: limiter, key: key, d: d, at: at, held: d.Allowed})
 				if !d.Allowed {
 					decision = "deny"

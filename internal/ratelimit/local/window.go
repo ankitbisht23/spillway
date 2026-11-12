@@ -32,7 +32,7 @@ func NewFixedWindow(clock ratelimit.Clock, rate int64, period time.Duration) *Fi
 // current window; Refund is the one that knows the admission's window.
 func (f *FixedWindow) Allow(_ context.Context, key string, cost int64) (ratelimit.Decision, error) {
 	now := f.clock.Now().UnixNano()
-	return f.allow(key, cost, now, now), nil
+	return f.allow(key, cost, now, now)
 }
 
 // Refund reverses an admission of cost made at at: it returns what Allow with
@@ -40,14 +40,15 @@ func (f *FixedWindow) Allow(_ context.Context, key string, cost int64) (ratelimi
 // refund that crosses a window boundary is lost, which errs towards denying
 // (ADR-0017).
 func (f *FixedWindow) Refund(key string, cost int64, at time.Time) ratelimit.Decision {
-	return f.allow(key, -cost, f.clock.Now().UnixNano(), at.UnixNano())
+	d, _ := f.allow(key, -cost, f.clock.Now().UnixNano(), at.UnixNano()) // never adds key
+	return d
 }
 
 // allow is Allow at now, for an admission made at admitted if cost < 0.
-func (f *FixedWindow) allow(key string, cost, now, admitted int64) ratelimit.Decision {
+func (f *FixedWindow) allow(key string, cost, now, admitted int64) (ratelimit.Decision, error) {
 	start := now - now%f.period
 	d := ratelimit.Decision{ResetAfter: time.Duration(f.period - (now - start))}
-	f.state.update(key, func(s fixedState, ok bool) (fixedState, bool) {
+	err := f.state.update(key, func(s fixedState, ok bool) (fixedState, bool) {
 		if s.start != start {
 			s = fixedState{start: start}
 		}
@@ -66,7 +67,10 @@ func (f *FixedWindow) allow(key string, cost, now, admitted int64) ratelimit.Dec
 		d.Remaining = max(0, f.rate-s.count) // a reload can lower the rate below the count
 		return s, ok
 	})
-	return d
+	if err != nil {
+		return ratelimit.Decision{}, err
+	}
+	return d, nil
 }
 
 // Sweep drops keys whose window has ended.
@@ -101,7 +105,7 @@ func NewSlidingWindow(clock ratelimit.Clock, rate int64, period time.Duration) *
 // window; Refund is the one that knows the admission's window.
 func (sw *SlidingWindow) Allow(_ context.Context, key string, cost int64) (ratelimit.Decision, error) {
 	now := sw.clock.Now().UnixNano()
-	return sw.allow(key, cost, now, now), nil
+	return sw.allow(key, cost, now, now)
 }
 
 // Refund reverses an admission of cost made at at: it returns what Allow with
@@ -109,15 +113,16 @@ func (sw *SlidingWindow) Allow(_ context.Context, key string, cost int64) (ratel
 // refund that crosses a window boundary is lost, which errs towards denying
 // (ADR-0017).
 func (sw *SlidingWindow) Refund(key string, cost int64, at time.Time) ratelimit.Decision {
-	return sw.allow(key, -cost, sw.clock.Now().UnixNano(), at.UnixNano())
+	d, _ := sw.allow(key, -cost, sw.clock.Now().UnixNano(), at.UnixNano()) // never adds key
+	return d
 }
 
 // allow is Allow at now, for an admission made at admitted if cost < 0.
-func (sw *SlidingWindow) allow(key string, cost, now, admitted int64) ratelimit.Decision {
+func (sw *SlidingWindow) allow(key string, cost, now, admitted int64) (ratelimit.Decision, error) {
 	start := now - now%sw.period
 	e := now - start
 	d := ratelimit.Decision{ResetAfter: time.Duration(sw.period - e)}
-	sw.state.update(key, func(s slidingState, ok bool) (slidingState, bool) {
+	err := sw.state.update(key, func(s slidingState, ok bool) (slidingState, bool) {
 		switch s.start {
 		case start:
 		case start - sw.period:
@@ -141,7 +146,10 @@ func (sw *SlidingWindow) allow(key string, cost, now, admitted int64) ratelimit.
 		d.Remaining = max(0, sw.rate-s.cur-weighted)
 		return s, ok
 	})
-	return d
+	if err != nil {
+		return ratelimit.Decision{}, err
+	}
+	return d, nil
 }
 
 // retryAfter is the time until cost would fit if nothing else were admitted,

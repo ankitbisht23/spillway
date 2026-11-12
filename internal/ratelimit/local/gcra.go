@@ -35,7 +35,7 @@ func (g *GCRA) Allow(_ context.Context, key string, cost int64) (ratelimit.Decis
 		return g.refund(key, -cost*g.t, now), nil
 	}
 	var d ratelimit.Decision
-	g.state.update(key, func(tat int64, ok bool) (int64, bool) {
+	err := g.state.update(key, func(tat int64, ok bool) (int64, bool) {
 		base := max(tat, now)
 		next := base + cost*g.t
 		if next-now <= g.tau {
@@ -47,6 +47,9 @@ func (g *GCRA) Allow(_ context.Context, key string, cost int64) (ratelimit.Decis
 		d.RetryAfter = time.Duration(next - g.tau - now)
 		return tat, ok
 	})
+	if err != nil {
+		return ratelimit.Decision{}, err
+	}
 	return d, nil
 }
 
@@ -63,7 +66,7 @@ func (g *GCRA) Refund(key string, cost int64, at time.Time) ratelimit.Decision {
 // refund moves key's TAT back by back ns.
 func (g *GCRA) refund(key string, back, now int64) ratelimit.Decision {
 	var d ratelimit.Decision
-	g.state.update(key, func(tat int64, ok bool) (int64, bool) {
+	_ = g.state.update(key, func(tat int64, ok bool) (int64, bool) { // never adds key
 		tat -= back
 		d = g.decision(tat, now)
 		d.Allowed = true

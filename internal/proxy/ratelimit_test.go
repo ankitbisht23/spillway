@@ -497,6 +497,42 @@ policies: [{name: per-ip, level: global, match: {routes: ['*']}, key_template: '
 	}
 }
 
+// TestRateLimitKeyCap: once a limiter's shard is full, a request whose key
+// is new to it skips that limit: allowed, with no decision and no header
+// item, and counted in gw_ratelimit_key_cap_skips_total. Keys in other
+// shards are still limited (ADR-0021, U1).
+func TestRateLimitKeyCap(t *testing.T) {
+	u := newUpstream(t, "orders")
+	g := newGateway(t, newResolver(u), oneUpstream(u)+`
+policies: [{name: per-key, level: global, match: {routes: ['*']}, key_template: '{header:X-K}', algorithm: gcra, limits: [{rate: 1, period: 1m}], local: true}]
+`)
+	l := g.limiter(t, "per-key", config.GCRA, time.Minute)
+	shard := ratelimit.Key("new")[0] % 64
+	for i := 0; ; i++ {
+		if _, err := l.Allow(t.Context(), string([]byte{shard, byte(i), byte(i >> 8)}), 1); err != nil {
+			break // the shard is full
+		}
+	}
+	other := "other"
+	for ratelimit.Key(other)[0]%64 == shard {
+		other += "x"
+	}
+	for i, want := range []struct {
+		key    string
+		status int
+	}{{"new", 200}, {"new", 200}, {other, 200}, {other, 429}} {
+		got := g.send(t, http.MethodGet, "/", http.Header{"X-K": {want.key}})
+		if got.status != want.status {
+			t.Errorf("request %d (X-K %s): %d, want %d", i+1, want.key, got.status, want.status)
+		}
+		if limited := got.header.Get("RateLimit") != ""; limited != (want.key == other) {
+			t.Errorf("request %d (X-K %s): RateLimit %q", i+1, want.key, got.header.Get("RateLimit"))
+		}
+	}
+	hasMetrics(t, g, `gw_ratelimit_key_cap_skips_total{policy="per-key"} 2`,
+		`gw_ratelimit_decisions_total{decision="allow",mode="enforce",policy="per-key"} 1`)
+}
+
 // TestRateLimitConcurrencyRelease: a concurrency slot is held while its
 // request runs and released exactly once when it completes, times out or
 // loses its client, with no goroutine left behind (RL-02). Another holder
