@@ -333,7 +333,8 @@ func TestShedPathFull(t *testing.T) {
 	if d := time.Since(start); d > shedDeadline/2 {
 		t.Skipf("opening %d connections took %v", maxShedding, d)
 	}
-	if got, err := firstLine(t, addr); got != "" || !errors.Is(err, syscall.ECONNRESET) {
+	// A write after the reset arrived fails with EPIPE instead.
+	if got, err := firstLine(t, addr); got != "" || !errors.Is(err, syscall.ECONNRESET) && !errors.Is(err, syscall.EPIPE) {
 		t.Errorf("past the shed path: got %q, %v; want a reset", got, err)
 	}
 	if v := metricOf(t, metrics, shedSeries); v != "257" {
