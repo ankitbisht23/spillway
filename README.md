@@ -2,7 +2,7 @@
 
 A horizontally scalable API gateway in Go with a Redis-backed distributed rate limiter, a Postgres-backed control plane and a React admin UI.
 
-Status: M0 (foundations), M1 (proxy core), M2 (local rate limiting) and M3 (distributed rate limiting) are done; M4 (resilience) is next.
+Status: M0 (foundations), M1 (proxy core), M2 (local rate limiting), M3 (distributed rate limiting) and M4 (resilience) are done; M5 (control plane and auth) is next.
 
 - [Requirements and build plan](docs/design.md)
 - [Prerequisites and setup](docs/setup.md)
@@ -34,6 +34,15 @@ Redis failure behaviour (NFR-13, [Chaos scenarios](docs/design.md#chaos-scenario
 The failover window runs from the kill to the gateway's first Redis decision for the killed primary's keys. In a typical run (5.47 s): the gateway's health checks open the dead node's breaker after 0.35 s; the surviving primaries mark it failed after 4.57 s (`cluster-node-timeout` plus the gossip that reaches a majority); its replica wins the election after 5.38 s (a rank-0 delay of 0.5–1 s); and the gateway, which reloads its slot map every 200 ms while a breaker is open, decides in Redis 0.05–0.09 s after that (0.22 s in another run). Almost all of the window is Redis Cluster's own failure detection and election, so a shorter `cluster-node-timeout` is the lever for a shorter window.
 
 Stalls of the host and of the Docker Desktop VM can still fail a run. The full-outage line is 10 ms, the 5 ms budget plus a 5 ms slack for those stalls (ADR-0027), with no count allowance: one check over 10 ms fails the run; the script also prints how many checks ended within 5 ms and within 7 ms. The killed-primary rules have no tolerance. In the killed-primary FAILs, gateway-1's access log shows stalls of 5–15 ms in which every in-flight request slowed down at once, Redis-decided ones included; the few calls to a surviving primary that overran the 5 ms budget then failed open, as RL-23 says they should. A check that fails is reported as failed; the scripts never run it again (ADR-0027).
+
+Upstream endpoint failures (GW-08, GW-09, GW-12, GW-13, OB-02, [Chaos scenarios](docs/design.md#chaos-scenarios), ADR-0030, ADR-0031), measured on the same laptop with `make verify-m4`: gateway-1 with one upstream of three endpoints (`p2c`, health checks every 1 s, default outlier detection, breaker and retry budget, 3 attempts per request), 500 rps for 40 s, the fault on the third endpoint after 10 s.
+
+| Scenario | Injected | Measured | Result |
+| --- | --- | --- | --- |
+| Endpoint returns 5xx | `upstream-fault` answers 503 to everything | the endpoint out of rotation within the first scrape after the fault (1.0 s); 5,001/5,001 requests in the 10 s from the fault answered 2xx; 5 retries, all within budget (930 allowed in the tightest window); each retried request's trace in Tempo with one span per attempt; the breaker stays closed | PASS in 3 of 3 runs on the M4 exit branch |
+| Endpoint refuses connections | `upstream-fault` closes its listener and connections | the same, with connect errors retried: 5,001/5,001 answered 2xx, 5 retries | PASS in 3 of 3 runs |
+
+With one endpoint of three failing, outlier ejection after 5 consecutive failures removes it, and each of those failed attempts is retried on another endpoint, so no client sees the failure. The breaker opens only when most attempts to an upstream fail, which one bad endpoint of three never causes (ADR-0031).
 
 ## Licence
 
