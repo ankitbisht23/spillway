@@ -357,3 +357,72 @@ routes:
 		}
 	}
 }
+
+// TestStalledBodyFreesPlaces: a client that stops sending its body holds
+// its request only until the route's idle or total timeout, not until the
+// server's read timeout: the handler returns and frees its in-flight place
+// and its place in the upstream's max_concurrent, so others get through
+// (GW-11, GW-14, GW-26, ADR-0033).
+func TestStalledBodyFreesPlaces(t *testing.T) {
+	for _, tt := range []struct{ name, route string }{
+		{"idle", "timeouts: {idle: 200ms, total: 30s}"},
+		{"total", "timeouts: {total: 300ms}"},
+		{"idle, buffered for retries", "timeouts: {idle: 200ms, total: 30s}, retry: {attempts: 2}"},
+		{"total, buffered for retries", "timeouts: {total: 300ms}, retry: {attempts: 2}"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			u := serveUpstream(t, "u", func(w http.ResponseWriter, r *http.Request) {
+				_, _ = io.Copy(io.Discard, r.Body)
+				_, _ = io.WriteString(w, "ok")
+			})
+			g := newGateway(t, newResolver(u), fmt.Sprintf(`
+upstreams: [{name: u, endpoints: [{address: 'u:%s'}], circuit: {max_concurrent: 2}}]
+routes: [{name: r, upstream: u, match: {path_prefix: /}, %s}]
+`, u.port(), tt.route))
+			for range 2 {
+				conn := dial(t, g.Listener.Addr().String())
+				_, _ = io.WriteString(conn, "PUT / HTTP/1.1\r\nHost: x\r\nContent-Length: 100\r\n\r\n0123456789")
+			}
+			waitFor(t, "the stalled requests in flight", func() bool { return g.h.InFlight() == 2 })
+			waitFor(t, "the stalled requests' places freed", func() bool { return g.h.InFlight() == 0 })
+			if a := g.answer(t, "/"); a.status != http.StatusOK {
+				t.Errorf("after the stalled requests: %+v, want 200", a)
+			}
+		})
+	}
+}
+
+// TestStalledBodyFreesPlacesHTTP2: the same for an HTTP/2 stream whose
+// client stops sending its body (ADR-0033).
+func TestStalledBodyFreesPlacesHTTP2(t *testing.T) {
+	u := serveUpstream(t, "u", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		_, _ = io.WriteString(w, "ok")
+	})
+	g := newGateway(t, newResolver(u), fmt.Sprintf(`
+upstreams: [{name: u, endpoints: [{address: 'u:%s'}], circuit: {max_concurrent: 1}}]
+routes: [{name: r, upstream: u, match: {path_prefix: /}, timeouts: {idle: 200ms, total: 30s}}]
+`, u.port()))
+	g.Close()
+	g.Server = httptest.NewUnstartedServer(g.h)
+	g.EnableHTTP2 = true
+	g.StartTLS()
+	t.Cleanup(g.Close)
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { _ = pw.Close() })
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPut, g.URL+"/", pr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		if resp, err := g.Client().Do(req); err == nil {
+			_ = resp.Body.Close()
+		}
+	}()
+	_, _ = io.WriteString(pw, "0123456789") // then nothing
+	waitFor(t, "the stalled stream in flight", func() bool { return g.h.InFlight() == 1 })
+	waitFor(t, "the stalled stream's places freed", func() bool { return g.h.InFlight() == 0 })
+	if f := fetch(t, g.Client(), g.URL+"/"); f.proto != "HTTP/2.0" || f.answer.status != http.StatusOK {
+		t.Errorf("after the stalled stream: %s %+v, want HTTP/2 and 200", f.proto, f.answer)
+	}
+}

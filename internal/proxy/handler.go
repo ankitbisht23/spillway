@@ -258,6 +258,7 @@ func (h *Handler) serve(w *responseRecorder, r *http.Request, body *countingBody
 		defer idle.Stop()
 		r.Body = idleBody{r.Body, idle}
 	}
+	defer unblockBody(ctx, w, body, r.ContentLength)()
 	r = r.WithContext(ctx)
 
 	// Retries (GW-12): a body is buffered for them only when the route

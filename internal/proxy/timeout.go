@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/http"
+	"sync"
 	"time"
 )
 
@@ -40,4 +42,32 @@ func (b idleBody) Read(p []byte) (int, error) {
 		b.idle.Reset(b.idle.timeout)
 	}
 	return n, err
+}
+
+// unblockBody makes the client's body reads fail at once when ctx ends
+// while the body is still arriving: when the route's total or idle timeout
+// ends a request whose client has stopped sending its body (ADR-0033).
+// Otherwise Go's transport waits for the body read it started, and the
+// handler, with its in-flight place and its place in the upstream's
+// max_concurrent, would last until the server's read timeout. stop must be
+// called before the handler returns; w is not touched after it.
+func unblockBody(ctx context.Context, w http.ResponseWriter, body *countingBody, length int64) (stop func()) {
+	if length == 0 {
+		return func() {}
+	}
+	var mu sync.Mutex
+	stopped := false
+	after := context.AfterFunc(ctx, func() {
+		mu.Lock()
+		defer mu.Unlock()
+		if !stopped && !body.ended.Load() {
+			_ = http.NewResponseController(w).SetReadDeadline(time.Now())
+		}
+	})
+	return func() {
+		after()
+		mu.Lock()
+		stopped = true
+		mu.Unlock()
+	}
 }

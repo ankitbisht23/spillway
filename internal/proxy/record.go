@@ -76,13 +76,17 @@ type countingBody struct {
 	io.ReadCloser
 	n      atomic.Int64
 	broken atomic.Bool
+	ended  atomic.Bool // a read returned an error, io.EOF included
 }
 
 func (b *countingBody) Read(p []byte) (int, error) {
 	n, err := b.ReadCloser.Read(p)
 	b.n.Add(int64(n))
-	if err != nil && !errors.Is(err, io.EOF) {
-		b.broken.Store(true)
+	if err != nil {
+		b.ended.Store(true)
+		if !errors.Is(err, io.EOF) {
+			b.broken.Store(true)
+		}
 	}
 	return n, err
 }
