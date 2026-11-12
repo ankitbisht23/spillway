@@ -39,7 +39,7 @@ type Route struct {
 	Timeouts        Timeouts
 	HSTS            string // Strict-Transport-Security value for TLS responses; empty means none
 	Cost            int64  // cost units each request deducts (RL-07)
-	Retry           Retry
+	Retry           Retry  // attempts, and whether every method retries (GW-12)
 	strip           int    // leading path segments that strip_prefix removes
 }
 
