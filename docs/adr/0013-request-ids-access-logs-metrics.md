@@ -1,6 +1,6 @@
 # 0013. Request IDs, access logs and request metrics
 
-- **Status:** Accepted
+- **Status:** Accepted; trace context passthrough and the access log's trace ID source superseded by [ADR-0030](0030-resilience-model.md)
 - **Date:** 2026-11-04
 - **Requirement IDs:** GW-02, GW-22, OB-01, OB-03
 

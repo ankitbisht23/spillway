@@ -1,6 +1,6 @@
 # 0010. Admin port and the gateway in compose
 
-- **Status:** Accepted
+- **Status:** Accepted; shutdown superseded by [ADR-0030](0030-resilience-model.md)
 - **Date:** 2026-11-04
 - **Requirement IDs:** GW-24, GW-25, OB-07, SEC-02, SEC-06
 
