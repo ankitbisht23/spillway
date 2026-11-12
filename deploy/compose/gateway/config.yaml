@@ -24,6 +24,13 @@ routes:
   - name: shared
     match: { path_prefix: /anything/shared }
     upstream: httpbin
+  # Up to 3 attempts per request (GW-12), each a span in Tempo (OB-02):
+  # GET /retry/status/503 makes three.
+  - name: retry
+    match: { path_prefix: /retry }
+    strip_prefix: /retry
+    upstream: httpbin
+    retry: { attempts: 3 }
   - name: default
     match: { path_prefix: / }
     upstream: httpbin

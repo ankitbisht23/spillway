@@ -196,9 +196,11 @@ func TestGatewayTLS(t *testing.T) {
 }
 
 // TestAccessLogInLoki sends a request with its own request ID and trace
-// context through gateway-1, checks the upstream got both unchanged, and finds
-// the request's access log line in Loki, which gets it from the gateway
-// through the OTel Collector (GW-22, OB-03).
+// context through gateway-1, checks the upstream got the request ID
+// unchanged and the trace continued (the same trace ID, sampled, with the
+// gateway's attempt span as the parent, OB-02), and finds the request's
+// access log line in Loki, which gets it from the gateway through the OTel
+// Collector (GW-22, OB-03).
 func TestAccessLogInLoki(t *testing.T) {
 	id := "itest-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 	const traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
@@ -221,8 +223,12 @@ func TestAccessLogInLoki(t *testing.T) {
 	if got := resp.Header.Get("X-Request-Id"); resp.StatusCode != http.StatusOK || got != id {
 		t.Fatalf("GET :8000/headers = %d with request ID %q, want 200 with %q", resp.StatusCode, got, id)
 	}
-	if h := echoed.Headers; strings.Join(h["X-Request-Id"], ",") != id || strings.Join(h["Traceparent"], ",") != traceparent {
-		t.Errorf("upstream got X-Request-Id %q and traceparent %q, want %q and %q", h["X-Request-Id"], h["Traceparent"], id, traceparent)
+	h := echoed.Headers
+	if strings.Join(h["X-Request-Id"], ",") != id {
+		t.Errorf("upstream got X-Request-Id %q, want %q", h["X-Request-Id"], id)
+	}
+	if tp := strings.Split(strings.Join(h["Traceparent"], ","), "-"); len(tp) != 4 || tp[1] != "4bf92f3577b34da6a3ce929d0e0e4736" || tp[2] == "00f067aa0ba902b7" || tp[3] != "01" {
+		t.Errorf("upstream got traceparent %q, want the client's trace, sampled, under a span of the gateway's", h["Traceparent"])
 	}
 
 	// The gateway exports logs every second and the Collector batches them,

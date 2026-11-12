@@ -1,0 +1,31 @@
+# Collector for test/load/bench.sh (OB-02, D6, ADR-0030): the gateway
+# head-samples 1% of traces and exports them, with its 1% of access logs, to
+# this Collector, which drops everything. No tail sampling: the benchmark
+# pays for span and log export, not for storage.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  batch: {}
+
+exporters:
+  nop: {}
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [nop]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [nop]
