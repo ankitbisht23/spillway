@@ -5,7 +5,7 @@
 -- layout are part of v1: changing either is a v2 script and key prefix (RL-29).
 --
 -- ARGV: cost, then per key: level, mode, algorithm, rate, period_ms, burst;
--- refunds add admitted_us (0: the current window).
+-- refunds add admitted_us (0: the current window and time).
 -- Reply: allowed, denying_level, denying_limit, remaining, reset_after_ms,
 -- retry_after_ms, shadow_would_deny, now_us, then per key: allowed_i,
 -- remaining_i, reset_after_ms_i, retry_after_ms_i.
@@ -181,13 +181,20 @@ local function write(l, c)
 end
 
 -- give_back reverses an admission of c > 0 made at admitted_us. It never
--- goes below empty, and a missing (or wrong-typed) key stays as it is.
+-- goes below empty, and a missing (or wrong-typed) key stays as it is. GCRA
+-- gives back c·T less the time since admitted_us: an admission that found
+-- the key idle raised the TAT from its own time, and the requests admitted
+-- since may have used that much of its room (ADR-0028).
 local function give_back(l, c)
   l.ok, l.retry = true, 0
   if l.alg == 'gcra' then
     l.s = now
     if l.tat then
-      local tat = l.tat - c * l.t
+      local back = c * l.t
+      if admitted > 0 then
+        back = math.max(0, back - math.max(0, now - admitted))
+      end
+      local tat = l.tat - back
       if tat <= now then
         redis.call('DEL', l.key)
       else

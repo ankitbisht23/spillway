@@ -76,8 +76,9 @@ type redisCall struct {
 // for; it is never sent (RL-22).
 var errBudgetSpent = errors.New("redis time budget spent before the call")
 
-// refunder is a window limiter, whose refund is lost if it crosses a window
-// boundary since the admission (ADR-0017).
+// refunder is a limiter whose refund depends on when the admission was made:
+// a window limiter's is lost if it crosses a window boundary (ADR-0017), and
+// GCRA gives back less the longer ago it was (ADR-0028).
 type refunder interface {
 	Refund(key string, cost int64, at time.Time) ratelimit.Decision
 }

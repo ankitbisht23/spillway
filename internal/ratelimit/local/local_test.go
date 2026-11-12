@@ -296,6 +296,33 @@ func TestSlidingWindowSweep(t *testing.T) {
 	}
 }
 
+// TestGCRARefund: a refund gives back cost·T less the time since the
+// admission (ADR-0028). The review's sequence at 10/s, burst 2 (T = 100 ms):
+// A finds the key idle, B comes 10 ms later, A is refunded; giving back all
+// of A's 100 ms would then admit C at once and D 100 ms after A, three in a
+// 90 ms window where the bound is 2.9.
+func TestGCRARefund(t *testing.T) {
+	clock := ratelimit.NewFakeClock(base)
+	g := NewGCRA(clock, 10, time.Second, 2)
+	k := ratelimit.Key("k")
+	a := clock.Now()
+	take(g, k, 1)
+	clock.Advance(10 * ms)
+	take(g, k, 1) // B: TAT 200 ms after A
+	clock.Advance(2 * ms)
+	// 12 ms after A: 88 ms back, so the TAT is 112 ms after A.
+	if d := g.Refund(k, 1, a); d != allow(1, 100*ms) {
+		t.Fatalf("refund of A = %+v, want %+v", d, allow(1, 100*ms))
+	}
+	if !take(g, k, 1).Allowed { // C, 12 ms after A
+		t.Fatal("C denied")
+	}
+	clock.Advance(88 * ms)
+	if d := take(g, k, 1); d.Allowed || d.RetryAfter != 12*ms {
+		t.Fatalf("D 100 ms after A = %+v, want a deny with RetryAfter 12ms: B, C and D would be 3 in 90 ms", d)
+	}
+}
+
 // TestWindowRefund: a refund lands in the window of the admission it
 // reverses, and is lost if another request has since moved the key into the
 // next window, where it would erase that request's admission (ADR-0017).

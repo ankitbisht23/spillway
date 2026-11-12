@@ -303,7 +303,9 @@ func (c *Client) Call(ctx context.Context, cost int64, limits []Limit) (Result, 
 }
 
 // Refund reverses an earlier Call's deduction of cost on the limits it wrote.
-// admittedUS is that Call's NowUS; 0 refunds from the current window.
+// admittedUS is that Call's NowUS: GCRA gives back cost·T less the time since
+// then (ADR-0028), a sliding window takes it from the window it fell in. 0
+// refunds as of now: all of cost·T, from the current window.
 func (c *Client) Refund(ctx context.Context, cost, admittedUS int64, limits []Limit) (Result, error) {
 	return c.run(ctx, append(encode(-cost, limits), admittedUS), limits)
 }
