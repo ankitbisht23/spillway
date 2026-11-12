@@ -404,14 +404,16 @@ func TestScriptRefund(t *testing.T) {
 		t.Errorf("a refund of an empty key wrote %s = %s", a.Key, got)
 	}
 
-	// A partial refund moves the TAT back by cost·T and keeps the TTL.
+	// A partial refund moves the TAT back by cost·T less the time since the
+	// admission (ADR-0028) and keeps the TTL.
 	m := newGCRAModel(a)
 	scriptCall(t, c, 2, a)
 	r2 := scriptCall(t, c, 2, a)
 	tat, _ := strconv.ParseInt(getKey(t, rdb, a.Key), 10, 64)
-	scriptRefund(t, c, 1, r2.NowUS, a)
-	if got := getKey(t, rdb, a.Key); got != strconv.FormatInt(tat-m.t, 10) {
-		t.Errorf("TAT after refunding 1 = %s, want %d", got, tat-m.t)
+	res = scriptRefund(t, c, 1, r2.NowUS, a)
+	want := tat - max(0, m.t-(res.NowUS-r2.NowUS))
+	if got := getKey(t, rdb, a.Key); got != strconv.FormatInt(want, 10) {
+		t.Errorf("TAT after refunding 1 = %s, want %d", got, want)
 	}
 	checkTTL(t, rdb, a)
 
@@ -437,6 +439,37 @@ func TestScriptRefund(t *testing.T) {
 		t.Errorf("after refunding an old admission and 5 of cur's 2: %v, want prev 0, cur 0", got)
 	}
 	checkTTL(t, rdb, w)
+}
+
+// TestScriptRefundBound replays the review's sequence (ADR-0028) at 10/s,
+// burst 2 (T = 100 ms): A finds the key idle, B comes 10 ms later, then A is
+// refunded as the gateway does after a later call denies. The admissions
+// that follow, with B, must stay within burst + w·rate/period for every
+// window w; giving back all of A's 100 ms would admit three in about 90 ms.
+func TestScriptRefundBound(t *testing.T) {
+	_, c, _ := scriptEnv(t)
+	l := gcraLimit(redis.GlobalKey(scriptName("refund-bound"), time.Second, redis.Digest("k")), "global", true, 10, time.Second, 2)
+	a := scriptCall(t, c, 1, l)
+	time.Sleep(10 * time.Millisecond)
+	b := scriptCall(t, c, 1, l)
+	if !a.Allowed || !b.Allowed {
+		t.Fatalf("A allowed %v, B allowed %v; want both", a.Allowed, b.Allowed)
+	}
+	scriptRefund(t, c, 1, a.NowUS, l)
+	admitted := []int64{b.NowUS}
+	for end := time.Now().Add(300 * time.Millisecond); time.Now().Before(end); time.Sleep(time.Millisecond) {
+		if r := scriptCall(t, c, 1, l); r.Allowed {
+			admitted = append(admitted, r.NowUS)
+		}
+	}
+	periodUS := l.Period.Microseconds()
+	for i, from := range admitted {
+		for j, to := range admitted[i:] {
+			if n, w := int64(j+1), to-from; n*periodUS > l.Burst*periodUS+w*l.Rate {
+				t.Fatalf("%d admissions in a %d µs window, bound %d + w·%d/%v (admitted at %v)", n, w, l.Burst, l.Rate, l.Period, admitted)
+			}
+		}
+	}
 }
 
 // TestScriptWrongType checks that a key left with the other algorithm's type

@@ -57,6 +57,7 @@ func TestParseFlags(t *testing.T) {
 // the third scrape on, and counts every request as a Redis timeout.
 type fakeGateway struct {
 	admitAll, noHeader bool
+	cut                bool // cut the body of every admission but the probes'
 
 	mu       sync.Mutex
 	tat      map[string]int64
@@ -82,6 +83,9 @@ func (f *fakeGateway) start(t *testing.T) gateway {
 		}
 		if !ok {
 			w.WriteHeader(http.StatusTooManyRequests)
+		} else if f.cut && !strings.HasPrefix(r.Header.Get(keyHeader), "probe-") {
+			w.Header().Set("Content-Length", "2")
+			_, _ = io.WriteString(w, "x") // the client reads an unexpected EOF
 		}
 	}))
 	admin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -146,8 +150,9 @@ func TestRun(t *testing.T) {
 	}
 }
 
-// TestRunFails: an over-admitting gateway and one whose admissions carry no
-// decision time each FAIL the run.
+// TestRunFails: an over-admitting gateway, one whose admissions carry no
+// decision time and one whose answers the harness cannot read each FAIL the
+// run.
 func TestRunFails(t *testing.T) {
 	// Boundary at 2 s: 200 within about 20 ms around the 1 s mark, against
 	// 110 for a 100 ms window. How many more, and in which window, depends
@@ -165,6 +170,14 @@ func TestRunFails(t *testing.T) {
 	r, _, code, _ = harnessRun(t, options{keys: 1, duration: time.Second, gateways: []gateway{noHeader.start(t)}, patterns: []string{"uniform"}})
 	if p := r.Patterns[0]; code != 1 || p.Pass || p.FailureModeAdmissions == 0 || p.FailureModeAdmissions != p.Status.OK || p.MaxOverAdmission.Count != 0 {
 		t.Errorf("no decision times: exit code %d, %+v", code, p)
+	}
+
+	// Admissions whose answers are lost are not judged, so they fail the
+	// run (ADR-0028).
+	cut := &fakeGateway{cut: true}
+	r, _, code, _ = harnessRun(t, options{keys: 1, duration: time.Second, gateways: []gateway{cut.start(t)}, patterns: []string{"uniform"}})
+	if p := r.Patterns[0]; code != 1 || p.Pass || p.Status.NoAnswer == 0 || p.MaxOverAdmission.Count != 0 || p.FailureModeAdmissions != 0 {
+		t.Errorf("answers cut short: exit code %d, %+v", code, p)
 	}
 }
 

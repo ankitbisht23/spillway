@@ -292,9 +292,9 @@ func (pol *Policy) compileLimits(ls []*configpb.Limit, replicas int64) error {
 		if l.GetRate() < 1 || l.GetRate() > maxQuantity {
 			return fmt.Errorf("limits[%d].rate: %d is not 1 to %d", i, l.GetRate(), maxQuantity)
 		}
-		lim := Limit{Rate: max(1, l.GetRate()/replicas)}
+		lim := Limit{Rate: l.GetRate()}
 		if pol.Algorithm == Concurrency {
-			pol.Limits = append(pol.Limits, lim)
+			pol.Limits = append(pol.Limits, lim.PerReplica(replicas))
 			continue
 		}
 		d, err := time.ParseDuration(l.GetPeriod())
@@ -310,7 +310,7 @@ func (pol *Policy) compileLimits(ls []*configpb.Limit, replicas int64) error {
 			if l.GetBurst() != 0 {
 				return fmt.Errorf("limits[%d].burst: only gcra has a burst", i)
 			}
-			pol.Limits = append(pol.Limits, lim)
+			pol.Limits = append(pol.Limits, lim.PerReplica(replicas))
 			continue
 		}
 		burst := l.GetBurst()
@@ -322,7 +322,8 @@ func (pol *Policy) compileLimits(ls []*configpb.Limit, replicas int64) error {
 		case burst < 1 || burst > maxQuantity:
 			return fmt.Errorf("limits[%d].burst: %d is not 1 to %d", i, burst, maxQuantity)
 		}
-		lim.Burst = max(1, burst/replicas)
+		lim.Burst = burst
+		lim = lim.PerReplica(replicas)
 		// τ = T·burst, with T = period/rate rounded up as the limiter does.
 		if t := (int64(d) + lim.Rate - 1) / lim.Rate; lim.Burst > int64(maxPeriod)/t {
 			return fmt.Errorf("limits[%d].burst: %d per replica at %d per %v is more than %v of burst tolerance", i, lim.Burst, lim.Rate, d, maxPeriod)

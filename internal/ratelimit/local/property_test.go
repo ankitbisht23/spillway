@@ -2,6 +2,7 @@ package local
 
 import (
 	"runtime"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -15,6 +16,11 @@ import (
 // Property tests: each algorithm against its own bound (design Testing,
 // Property) for any arrival pattern. go test -run Property runs them all.
 
+// refunder is a limiter whose refunds know when the admission was made.
+type refunder interface {
+	Refund(key string, cost int64, at time.Time) ratelimit.Decision
+}
+
 type arrival struct {
 	key  int
 	at   int64 // Unix ns
@@ -23,9 +29,11 @@ type arrival struct {
 
 // drive runs an arbitrary arrival pattern over three keys against the limiter
 // newLimiter returns, sweeping at random points, and returns the admitted
-// arrivals in time order. After some denies of a cost up to capacity it checks
-// that RetryAfter is exact: the same request is still denied 1 ns before it
-// and admitted at it.
+// arrivals in time order. If the limiter has a Refund, it refunds random
+// earlier admissions at random points, as the gateway does when a later limit
+// denies, and leaves them out of the result. After some denies of a cost up
+// to capacity it checks that RetryAfter is exact: the same request is still
+// denied 1 ns before it and admitted at it.
 func drive(t *rapid.T, period time.Duration, capacity int64, newLimiter func(ratelimit.Clock) (ratelimit.Limiter, func())) []arrival {
 	clock := ratelimit.NewFakeClock(base.Add(time.Duration(rapid.Int64Range(0, int64(period)-1).Draw(t, "offset"))))
 	l, sweep := newLimiter(clock)
@@ -48,6 +56,12 @@ func drive(t *rapid.T, period time.Duration, capacity int64, newLimiter func(rat
 		clock.Advance(time.Duration(gap.Draw(t, "gap")))
 		if rapid.IntRange(0, 9).Draw(t, "sweep") == 0 {
 			sweep()
+		}
+		if r, ok := l.(refunder); ok && len(admitted) > 0 && rapid.IntRange(0, 3).Draw(t, "refund") == 0 {
+			i := rapid.IntRange(0, len(admitted)-1).Draw(t, "refunded")
+			a := admitted[i]
+			r.Refund(keys[a.key], a.cost, time.Unix(0, a.at))
+			admitted = slices.Delete(admitted, i, i+1)
 		}
 		a := arrival{
 			key:  rapid.IntRange(0, len(keys)-1).Draw(t, "key"),
@@ -75,7 +89,8 @@ func drive(t *rapid.T, period time.Duration, capacity int64, newLimiter func(rat
 	return admitted
 }
 
-// TestPropertyGCRA: admitted in any closed window w ≤ burst + w·rate/period.
+// TestPropertyGCRA: admitted in any closed window w ≤ burst + w·rate/period,
+// refunded admissions left out.
 func TestPropertyGCRA(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		rate := rapid.Int64Range(1, 20).Draw(t, "rate")

@@ -403,8 +403,9 @@ type overAdmitted struct {
 
 // summarize checks one pattern's outcomes. It passes when no key's
 // admissions exceed the bound, at least 99% of the scheduled requests were
-// sent, and every 2xx carried a decision time (ADR-0021); 503s are
-// reported, not judged.
+// sent, every 2xx carried a decision time (ADR-0021), and every sent request
+// got a 2xx, 429 or 503: one with no answer or another status may have been
+// admitted unseen (ADR-0028). 503s are reported, not judged.
 func summarize(pattern string, keys []string, arrivals []arrival, out []outcome, d time.Duration) patternResult {
 	r := patternResult{Pattern: pattern, Keys: len(keys), LimitRPS: float64(policy.rate) / policy.period.Seconds(), RedisErrors: map[string]int64{}}
 	admitted := make([][]int64, len(keys))
@@ -448,7 +449,8 @@ func summarize(pattern string, keys []string, arrivals []arrival, out []outcome,
 		slices.Sort(latencies)
 		r.P99LatencyUS = latencies[(len(latencies)*99+99)/100-1]
 	}
-	r.Pass = r.MaxOverAdmission.Count == 0 && r.Requests.Sent*100 >= r.Requests.Scheduled*99 && r.FailureModeAdmissions == 0
+	r.Pass = r.MaxOverAdmission.Count == 0 && r.Requests.Sent*100 >= r.Requests.Scheduled*99 && r.FailureModeAdmissions == 0 &&
+		r.Status.Other == 0 && r.Status.NoAnswer == 0
 	return r
 }
 

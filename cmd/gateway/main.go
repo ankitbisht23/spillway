@@ -163,6 +163,8 @@ func serve(ctx context.Context, s settings, log *slog.Logger) error {
 		_ = admin.Close()
 	}
 	addrs := []any{"admin", aln.Addr().String()}
+	// Read before Serve starts: it sets an empty TLSConfig when there is none.
+	tlsOn := srv.TLSConfig != nil
 	if s.httpAddr != "" {
 		ln, err := lc.Listen(ctx, "tcp", s.httpAddr)
 		if err != nil {
@@ -172,7 +174,7 @@ func serve(ctx context.Context, s settings, log *slog.Logger) error {
 		go func() { errc <- srv.Serve(ln) }()
 		addrs = append(addrs, "http", ln.Addr().String())
 	}
-	if srv.TLSConfig != nil {
+	if tlsOn {
 		ln, err := lc.Listen(ctx, "tcp", s.tlsAddr)
 		if err != nil {
 			closeAll()

@@ -426,9 +426,9 @@ policies: [{name: ip, level: global, match: {routes: ['*']}, key_template: '{ip}
 	}
 }
 
-// TestRateLimitMethodCase: policies see the method upper-cased, so a
-// lower-case POST on a route that takes any method meets the POST limits and
-// shares the {method} bucket (ADR-0020).
+// TestRateLimitMethodCase: a method that is not all upper case is answered
+// 400 before any policy (ADR-0029, which leaves ADR-0020's upper-casing
+// nothing to do), so it neither skips nor spends the POST limits.
 func TestRateLimitMethodCase(t *testing.T) {
 	u := newUpstream(t, "orders")
 	g := newGateway(t, newResolver(u), oneUpstream(u)+`
@@ -437,7 +437,7 @@ policies: [{name: writes, level: global, match: {routes: ['*'], methods: [POST]}
 	for i, want := range []struct {
 		method string
 		status int
-	}{{"POST", 200}, {"post", 429}, {"Post", 429}, {"pOST", 429}, {"GET", 200}} {
+	}{{"POST", 200}, {"post", 400}, {"Post", 400}, {"pOST", 400}, {"POST", 429}, {"GET", 200}} {
 		if got := g.send(t, want.method, "/", nil); got.status != want.status {
 			t.Errorf("request %d (%s): %d, want %d", i+1, want.method, got.status, want.status)
 		}
@@ -446,7 +446,8 @@ policies: [{name: writes, level: global, match: {routes: ['*'], methods: [POST]}
 
 // TestRateLimitClientIP: {ip} is the X-Forwarded-For client only when the
 // peer is a trusted proxy; otherwise a spoofed X-Forwarded-For gets no bucket
-// of its own (SEC-05). The test client's peer is 127.0.0.1.
+// of its own (SEC-05). An IPv6 client's {ip} is its /64. The test client's
+// peer is 127.0.0.1.
 func TestRateLimitClientIP(t *testing.T) {
 	policy := `
 policies: [{name: per-ip, level: global, match: {routes: ['*']}, key_template: '{ip}', algorithm: fixed_window, limits: [{rate: 1, period: 1m}], local: true}]
@@ -475,6 +476,11 @@ policies: [{name: per-ip, level: global, match: {routes: ['*']}, key_template: '
 			{"203.0.113.4", 429},
 			{"", 200},          // no header: the peer
 			{"not-an-ip", 429}, // malformed: the peer
+			{"::ffff:203.0.113.9", 200},
+			{"203.0.113.9", 429}, // IPv4-mapped is IPv4
+			{"2001:db8:1:2::1", 200},
+			{"2001:db8:1:2:ffff::7", 429}, // IPv6 is limited per /64 (ADR-0021, U2)
+			{"2001:db8:1:3::1", 200},
 		}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -495,6 +501,42 @@ policies: [{name: per-ip, level: global, match: {routes: ['*']}, key_template: '
 			}
 		})
 	}
+}
+
+// TestRateLimitKeyCap: once a limiter's shard is full, a request whose key
+// is new to it skips that limit: allowed, with no decision and no header
+// item, and counted in gw_ratelimit_key_cap_skips_total. Keys in other
+// shards are still limited (ADR-0021, U1).
+func TestRateLimitKeyCap(t *testing.T) {
+	u := newUpstream(t, "orders")
+	g := newGateway(t, newResolver(u), oneUpstream(u)+`
+policies: [{name: per-key, level: global, match: {routes: ['*']}, key_template: '{header:X-K}', algorithm: gcra, limits: [{rate: 1, period: 1m}], local: true}]
+`)
+	l := g.limiter(t, "per-key", config.GCRA, time.Minute)
+	shard := ratelimit.Key("new")[0] % 64
+	for i := 0; ; i++ {
+		if _, err := l.Allow(t.Context(), string([]byte{shard})+strconv.Itoa(i), 1); err != nil {
+			break // the shard is full
+		}
+	}
+	other := "other"
+	for ratelimit.Key(other)[0]%64 == shard {
+		other += "x"
+	}
+	for i, want := range []struct {
+		key    string
+		status int
+	}{{"new", 200}, {"new", 200}, {other, 200}, {other, 429}} {
+		got := g.send(t, http.MethodGet, "/", http.Header{"X-K": {want.key}})
+		if got.status != want.status {
+			t.Errorf("request %d (X-K %s): %d, want %d", i+1, want.key, got.status, want.status)
+		}
+		if limited := got.header.Get("RateLimit") != ""; limited != (want.key == other) {
+			t.Errorf("request %d (X-K %s): RateLimit %q", i+1, want.key, got.header.Get("RateLimit"))
+		}
+	}
+	hasMetrics(t, g, `gw_ratelimit_key_cap_skips_total{policy="per-key"} 2`,
+		`gw_ratelimit_decisions_total{decision="allow",mode="enforce",policy="per-key"} 1`)
 }
 
 // TestRateLimitConcurrencyRelease: a concurrency slot is held while its

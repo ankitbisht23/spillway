@@ -76,8 +76,9 @@ type redisCall struct {
 // for; it is never sent (RL-22).
 var errBudgetSpent = errors.New("redis time budget spent before the call")
 
-// refunder is a window limiter, whose refund is lost if it crosses a window
-// boundary since the admission (ADR-0017).
+// refunder is a limiter whose refund depends on when the admission was made:
+// a window limiter's is lost if it crosses a window boundary (ADR-0017), and
+// GCRA gives back less the longer ago it was (ADR-0028).
 type refunder interface {
 	Refund(key string, cost int64, at time.Time) ratelimit.Decision
 }
@@ -92,9 +93,20 @@ func newLimits(s *config.Snapshot, route *config.Route, registry *local.Registry
 		values: config.KeyValues{Route: route.Name, Method: strings.ToUpper(r.Method), Header: r.Header},
 	}
 	if ip.IsValid() && len(s.Policies) > 0 {
-		l.values.IP = ip.String() // invalid only if the peer address did not parse: {ip} stays unfilled
+		l.values.IP = ipKey(ip) // invalid only if the peer address did not parse: {ip} stays unfilled
 	}
 	return l
+}
+
+// ipKey is {ip} for a client IP: an IPv4 address in full, an IPv6 one as its
+// /64, the smallest block one subscriber is normally given, so a client
+// cannot get a fresh bucket per address (ADR-0021, U2). ClientIP has already
+// made an IPv4-mapped address IPv4.
+func ipKey(ip netip.Addr) string {
+	if ip.Is4() {
+		return ip.String()
+	}
+	return netip.PrefixFrom(ip, 64).Masked().String()
 }
 
 // identify fills the identity placeholders for phase 2 from the request's
@@ -137,8 +149,12 @@ func (l *limits) check(identity bool) bool {
 			if limiter == nil {
 				continue // removed by a reload since this request's snapshot
 			}
+			d, err := limiter.Allow(l.r.Context(), key, l.cost) // local limiters fail only with ErrKeyCap
+			if err != nil {
+				l.rec.KeyCapSkip(p.Name) // a new key in a full limiter: the limit is skipped (ADR-0021, U1)
+				continue
+			}
 			applied = true
-			d, _ := limiter.Allow(l.r.Context(), key, l.cost) // local limiters never fail
 			l.checks = append(l.checks, check{policy: p, limit: lim, limiter: limiter, key: key, d: d, at: at, held: d.Allowed})
 			if !d.Allowed {
 				decision = "deny"
@@ -257,11 +273,15 @@ func (l *limits) failed(c *redisCall, err error) bool {
 				if limiter == nil {
 					continue // removed by a reload since this request's snapshot
 				}
-				applied = true
 				// Keyed like the Redis key, so a tenant's degraded state is
 				// its own as in Redis.
 				key := ratelimit.Key(c.limits[k].Key)
-				d, _ := limiter.Allow(l.r.Context(), key, l.cost) // local limiters never fail
+				d, err := limiter.Allow(l.r.Context(), key, l.cost) // local limiters fail only with ErrKeyCap
+				if err != nil {
+					l.rec.KeyCapSkip(p.Name) // a new key in a full limiter: the limit is skipped (ADR-0021, U1)
+					continue
+				}
+				applied = true
 				l.checks = append(l.checks, check{policy: p, limit: c.conf[k].PerReplica(l.replicas), limiter: limiter, key: key, d: d, at: at, held: d.Allowed})
 				if !d.Allowed {
 					decision = "deny"

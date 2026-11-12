@@ -26,18 +26,18 @@ func NewConcurrency(limit int64) *Concurrency {
 // Allow implements ratelimit.Limiter; a negative cost is a Release.
 // ResetAfter and RetryAfter are always 0.
 func (c *Concurrency) Allow(_ context.Context, key string, cost int64) (ratelimit.Decision, error) {
-	return c.take(key, cost), nil
+	return c.take(key, cost)
 }
 
 // Release gives back cost units admitted earlier. It never takes a count
 // below 0, and a key whose count reaches 0 is removed.
 func (c *Concurrency) Release(key string, cost int64) {
-	c.take(key, -cost)
+	_, _ = c.take(key, -cost) // never adds key
 }
 
-func (c *Concurrency) take(key string, cost int64) ratelimit.Decision {
+func (c *Concurrency) take(key string, cost int64) (ratelimit.Decision, error) {
 	var d ratelimit.Decision
-	c.state.update(key, func(n int64, _ bool) (int64, bool) {
+	err := c.state.update(key, func(n int64, _ bool) (int64, bool) {
 		switch {
 		case cost < 0:
 			n = max(0, n+cost)
@@ -49,5 +49,8 @@ func (c *Concurrency) take(key string, cost int64) ratelimit.Decision {
 		d.Remaining = max(0, c.limit-n) // a reload can lower the max below the count
 		return n, n > 0
 	})
-	return d
+	if err != nil {
+		return ratelimit.Decision{}, err
+	}
+	return d, nil
 }

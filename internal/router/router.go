@@ -19,7 +19,7 @@ import (
 // returns the index of the winning route in that list.
 type Route struct {
 	Host     string        // exact host, case-insensitive, without a port; "" matches any host
-	Methods  []string      // empty matches any method
+	Methods  []string      // upper case; empty matches any method
 	Path     string        // a clean path; a segment ":name" matches any non-empty segment
 	Prefix   bool          // also match every path below Path, on segment boundaries
 	Headers  []HeaderMatch // all must match
@@ -150,6 +150,10 @@ func compile(index int, rt Route) (*entry, []string, error) {
 	for _, m := range rt.Methods {
 		if !isToken(m) {
 			return nil, nil, fmt.Errorf("method %q is not a valid HTTP method", m)
+		}
+		if m != strings.ToUpper(m) {
+			// The gateway answers such methods 400 (ADR-0029).
+			return nil, nil, fmt.Errorf("method %q is not upper case, such as GET", m)
 		}
 	}
 	if len(rt.Methods) > 0 {

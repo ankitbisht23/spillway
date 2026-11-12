@@ -87,6 +87,7 @@ type Recorder struct {
 	checks     *prometheus.HistogramVec
 	redis      *prometheus.CounterVec
 	refunds    prometheus.Counter
+	keyCap     *prometheus.CounterVec
 
 	mu      sync.Mutex // a tenant rotation never runs between labelling and observing
 	tenants *tenantCapper
@@ -129,12 +130,16 @@ func NewRecorder(reg prometheus.Registerer, log *slog.Logger, sampleRate float64
 			Name: "gw_ratelimit_refund_failures_total",
 			Help: "Redis refunds that failed; each leaves at most a request's cost held until the limit's state decays.",
 		}),
+		keyCap: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "gw_ratelimit_key_cap_skips_total",
+			Help: "Limits of in-memory limiters skipped for a request because its key was new and the limiter held its cap of keys.",
+		}, []string{"policy"}),
 		tenants: newTenantCapper(maxTenants),
 	}
 	for _, k := range redisErrorKinds {
 		rec.redis.WithLabelValues(k) // every kind is exported from the start, at 0
 	}
-	reg.MustRegister(rec.requests, rec.duration, rec.upstream, rec.decisions, rec.checks, rec.redis, rec.refunds)
+	reg.MustRegister(rec.requests, rec.duration, rec.upstream, rec.decisions, rec.checks, rec.redis, rec.refunds, rec.keyCap)
 	return rec
 }
 
@@ -193,6 +198,12 @@ func (rec *Recorder) RedisError(kind string) {
 // RefundFailure records a Redis refund that failed (ADR-0021).
 func (rec *Recorder) RefundFailure() {
 	rec.refunds.Inc()
+}
+
+// KeyCapSkip records a limit of policy that a request skipped because its
+// in-memory limiter was full (ADR-0021, U1).
+func (rec *Recorder) KeyCapSkip(policy string) {
+	rec.keyCap.WithLabelValues(policy).Inc()
 }
 
 // UpstreamAttempt records how long one attempt at an upstream took.
