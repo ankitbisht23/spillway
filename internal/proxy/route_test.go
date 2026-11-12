@@ -422,7 +422,7 @@ routes: [{name: r, upstream: u, match: {path_prefix: /}, timeouts: {idle: 200ms,
 	_, _ = io.WriteString(pw, "0123456789") // then nothing
 	waitFor(t, "the stalled stream in flight", func() bool { return g.h.InFlight() == 1 })
 	waitFor(t, "the stalled stream's places freed", func() bool { return g.h.InFlight() == 0 })
-	if f := fetch(t, g.Client(), g.URL+"/"); f.proto != "HTTP/2.0" || f.answer.status != http.StatusOK {
+	if f := fetch(t, g.Client(), g.URL+"/"); f.proto != "HTTP/2.0" || f.status != http.StatusOK {
 		t.Errorf("after the stalled stream: %s %+v, want HTTP/2 and 200", f.proto, f.answer)
 	}
 }
