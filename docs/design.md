@@ -654,10 +654,10 @@ Exit (`make verify-m3`): GCRA in strict mode shows zero over-admission at 3 repl
 
 ### M4 Resilience · est. 2 weeks
 
-- [ ] Active health checks and outlier ejection; breaker and outlier state in registries that survive reloads (GW-08, GW-09, GW-29)
+- [x] Active health checks and outlier ejection; breaker and outlier state in registries that survive reloads (GW-08, GW-09, GW-29)
 - [x] Round robin, P2C least-request, consistent hash (GW-07)
 - [x] Retries with backoff; retry budget on the upstream (`retry_budget`: 20% of requests over 10 s, floor 3/s); deadline propagation (GW-12, GW-13, GW-15)
-- [ ] Circuit breaker per upstream with `min_requests` and `half_open_probes`; graceful shutdown (GW-14, GW-23)
+- [x] Circuit breaker per upstream with `min_requests` and `half_open_probes`; graceful shutdown (GW-14, GW-23)
 - [ ] Connection and in-flight caps with fast load shedding (GW-26)
 - [ ] OTel tracing with a span per stage over OTLP: 100% at the gateway plus Collector tail sampling in dev and demo, a fixed head ratio for benchmarks (OB-02)
 
