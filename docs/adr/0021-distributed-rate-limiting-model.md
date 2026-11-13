@@ -1,6 +1,6 @@
 # 0021. Distributed rate limiting model
 
-- **Status:** Accepted; GCRA emission interval formula superseded by [ADR-0023](0023-gcra-emission-interval-in-whole-microseconds.md); "nothing is loaded at start" superseded by [ADR-0024](0024-redis-limiter-warm-up.md); breaker rule superseded by [ADR-0025](0025-health-check-driven-redis-breakers.md); full-outage budget line and NFR-04 run voiding superseded by [ADR-0027](0027-tolerance-for-host-stalls-in-the-m3-exit-check.md); GCRA refund maths superseded and accuracy PASS rule extended by [ADR-0028](0028-conservative-gcra-refunds.md)
+- **Status:** Accepted; GCRA emission interval formula superseded by [ADR-0023](0023-gcra-emission-interval-in-whole-microseconds.md); "nothing is loaded at start" superseded by [ADR-0024](0024-redis-limiter-warm-up.md); breaker rule superseded by [ADR-0025](0025-health-check-driven-redis-breakers.md); full-outage budget line and NFR-04 run voiding superseded by [ADR-0027](0027-tolerance-for-host-stalls-in-the-m3-exit-check.md); GCRA refund maths superseded and accuracy PASS rule extended by [ADR-0028](0028-conservative-gcra-refunds.md); killed-primary "failure modes only in window" rule extended by [ADR-0034](0034-user-decisions-after-the-m4-review.md)
 - **Date:** 2026-11-10
 - **Requirement IDs:** RL-01, RL-03 – RL-07, RL-11 – RL-17, RL-22 – RL-27, RL-29 – RL-31, GW-01, GW-24, GW-29, OB-01, OB-03, NFR-03, NFR-04, NFR-06, NFR-13
 
