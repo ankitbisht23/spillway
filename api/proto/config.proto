@@ -17,6 +17,8 @@ message Config {
   RateLimitSettings ratelimit = 4;
   // Rate limiting policies, evaluated in this order (RL-03, ADR-0017).
   repeated Policy policies = 5;
+  // Plans give consumers default limits per policy (RL-08, ADR-0041).
+  repeated Plan plans = 6;
 }
 
 // Upstream is a cluster of endpoints that routes send traffic to (GW-06).
@@ -43,6 +45,8 @@ message Upstream {
   // Limits the upstream's retries (GW-13); unset means the defaults
   // (ADR-0030).
   RetryBudget retry_budget = 8;
+  // Assigned by the control plane (ADR-0036); 0 in static mode.
+  int64 id = 9;
 }
 
 // RetryBudget grants a retry while the retries granted over the last 10 s,
@@ -130,6 +134,12 @@ message Endpoint {
   // host:port, unique within the upstream. DNS names are re-resolved on an
   // interval (GW-06).
   string address = 1;
+  // Assigned by the control plane (ADR-0036); 0 in static mode.
+  int64 id = 2;
+  // A draining endpoint gets no new requests; requests already sent to it
+  // finish (ADR-0005, ADR-0038). An upstream whose endpoints all drain
+  // answers 503.
+  bool draining = 3;
 }
 
 // Route matches requests and sends them to an upstream (GW-01).
@@ -164,6 +174,10 @@ message Route {
   int64 cost = 13;
   // Retries (GW-12); unset means one attempt, no retry.
   Retry retry = 14;
+  // Assigned by the control plane (ADR-0036); 0 in static mode.
+  int64 id = 15;
+  // none, api_key, jwt or either (GW-20, ADR-0039); unset means none.
+  string auth_mode = 16;
 }
 
 // Retry sets how many attempts a route's requests get (GW-12, GW-13,
@@ -262,6 +276,28 @@ message Policy {
   // Redis policies only: fail_open, fail_closed or degraded; unset means
   // fail_open (RL-23).
   string failure_mode = 9;
+  // Assigned by the control plane (ADR-0036); 0 in static mode.
+  int64 id = 10;
+  // Takes the limits from the consumer's plan instead of limits (RL-08,
+  // ADR-0041).
+  bool from_plan = 11;
+}
+
+// Plan sets default limits per policy for the consumers on it (RL-08,
+// ADR-0041).
+message Plan {
+  // Assigned by the control plane (ADR-0036); 0 in static mode.
+  int64 id = 1;
+  // Unique; 1-64 characters from [A-Za-z0-9._-].
+  string name = 2;
+  repeated PlanLimits default_limits = 3;
+}
+
+// PlanLimits replaces one policy's limits for a plan's consumers.
+message PlanLimits {
+  // The policy's name.
+  string policy = 1;
+  repeated Limit limits = 2;
 }
 
 // PolicyMatch is the requests a policy applies to.

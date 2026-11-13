@@ -88,37 +88,16 @@ func Compile(c *configpb.Config) (*Snapshot, error) {
 		if r.GetName() == "" {
 			return nil, errors.New("route: name is required")
 		}
-		if r.GetName() == "none" {
-			return nil, errors.New(`route "none": the name is reserved for requests no route matches (OB-01)`)
-		}
 		if names[r.GetName()] {
 			return nil, fmt.Errorf("route %q: defined twice", r.GetName())
 		}
 		names[r.GetName()] = true
-		up := s.Upstreams[r.GetUpstream()]
-		if up == nil {
-			return nil, fmt.Errorf("route %q: upstream %q is not defined", r.GetName(), r.GetUpstream())
-		}
-		m := r.GetMatch()
-		if (m.GetPath() == "") == (m.GetPathPrefix() == "") {
-			return nil, fmt.Errorf("route %q: set exactly one of match.path and match.path_prefix", r.GetName())
-		}
-		rr := router.Route{
-			Host:     m.GetHost(),
-			Methods:  m.GetMethods(),
-			Path:     m.GetPath() + m.GetPathPrefix(),
-			Prefix:   m.GetPathPrefix() != "",
-			Priority: int(r.GetPriority()),
-		}
-		if !heads[headKey(m)] {
-			rr.Methods = withHead(rr.Methods)
-		}
-		for _, h := range m.GetHeaders() {
-			rr.Headers = append(rr.Headers, router.HeaderMatch{Name: h.GetName(), Exact: h.GetExact(), Regex: h.GetRegex()})
-		}
-		route := Route{Name: r.GetName(), Upstream: up}
-		if err := route.compileTransforms(r, rr.Path); err != nil {
+		route, rr, err := compileRoute(r, heads)
+		if err != nil {
 			return nil, fmt.Errorf("route %q: %w", r.GetName(), err)
+		}
+		if route.Upstream = s.Upstreams[r.GetUpstream()]; route.Upstream == nil {
+			return nil, fmt.Errorf("route %q: upstream %q is not defined", r.GetName(), r.GetUpstream())
 		}
 		routes = append(routes, rr)
 		s.Routes = append(s.Routes, route)
@@ -137,7 +116,50 @@ func Compile(c *configpb.Config) (*Snapshot, error) {
 	if s.Policies, err = compilePolicies(c, s.Routes, s.Replicas); err != nil {
 		return nil, err
 	}
+	if err := compilePlans(c.GetPlans()); err != nil {
+		return nil, err
+	}
 	return s, nil
+}
+
+// compileRoute checks the rules of r that concern r alone, everything but
+// its upstream, and builds its router entry; heads is explicitHead of the
+// config's routes.
+func compileRoute(r *configpb.Route, heads map[string]bool) (Route, router.Route, error) {
+	if r.GetName() == "none" {
+		return Route{}, router.Route{}, errors.New(`the name is reserved for requests no route matches (OB-01)`)
+	}
+	m := r.GetMatch()
+	if (m.GetPath() == "") == (m.GetPathPrefix() == "") {
+		return Route{}, router.Route{}, errors.New("set exactly one of match.path and match.path_prefix")
+	}
+	rr := router.Route{
+		Host:     m.GetHost(),
+		Methods:  m.GetMethods(),
+		Path:     m.GetPath() + m.GetPathPrefix(),
+		Prefix:   m.GetPathPrefix() != "",
+		Priority: int(r.GetPriority()),
+	}
+	if !heads[headKey(m)] {
+		rr.Methods = withHead(rr.Methods)
+	}
+	for _, h := range m.GetHeaders() {
+		rr.Headers = append(rr.Headers, router.HeaderMatch{Name: h.GetName(), Exact: h.GetExact(), Regex: h.GetRegex()})
+	}
+	route := Route{Name: r.GetName()}
+	if err := route.compileTransforms(r, rr.Path); err != nil {
+		return Route{}, router.Route{}, err
+	}
+	switch mode := r.GetAuthMode(); mode {
+	case "", AuthNone:
+	case AuthAPIKey, AuthJWT, AuthEither:
+		// Interim until the jwt task (ADR-0035): nothing half-built can be
+		// published.
+		return Route{}, router.Route{}, fmt.Errorf("auth_mode %q is not supported until M5's jwt task", mode)
+	default:
+		return Route{}, router.Route{}, fmt.Errorf("auth_mode %q: want none, api_key, jwt or either", mode)
+	}
+	return route, rr, nil
 }
 
 func compileUpstream(u *configpb.Upstream) (*Upstream, error) {
@@ -150,6 +172,9 @@ func compileUpstream(u *configpb.Upstream) (*Upstream, error) {
 	up := &Upstream{Name: u.GetName()}
 	seen := map[string]bool{}
 	for _, e := range u.GetEndpoints() {
+		// A draining endpoint is checked like the others and gets no new
+		// requests (ADR-0038); with every endpoint draining, the upstream has
+		// no usable address and answers 503 (ADR-0008).
 		addr := e.GetAddress()
 		host, port, err := net.SplitHostPort(addr)
 		if err != nil || host == "" {
@@ -162,7 +187,9 @@ func compileUpstream(u *configpb.Upstream) (*Upstream, error) {
 			return nil, fmt.Errorf("endpoint %q: listed twice", addr)
 		}
 		seen[addr] = true
-		up.Endpoints = append(up.Endpoints, addr)
+		if !e.GetDraining() {
+			up.Endpoints = append(up.Endpoints, addr)
+		}
 	}
 	var err error
 	if up.LB, up.HashOn, err = compileLB(u.GetLb(), u.GetHashOn()); err != nil {

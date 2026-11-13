@@ -178,6 +178,12 @@ func TestRejects(t *testing.T) {
 		{"negative attempts", route("retry: {attempts: -1}"), `route "r": retry.attempts: want 1 to 5`},
 		{"too many attempts", route("retry: {attempts: 6}"), "retry.attempts: want 1 to 5"},
 		{"unknown retry field", route("retry: {on: [503]}"), `unknown field "on"`},
+		{"unknown auth_mode", route("auth_mode: basic"), `route "r": auth_mode "basic": want none, api_key, jwt or either`},
+		{"auth_mode before the jwt task", route("auth_mode: jwt"), `auth_mode "jwt" is not supported until M5's jwt task`},
+		{"auth_mode api_key before the jwt task", route("auth_mode: api_key"), "is not supported until"},
+		{"plan with default_limits before the plans task", "plans: [{name: free, default_limits: [{policy: p, limits: [{rate: 1, period: 1s}]}]}]", `plan "free": default_limits are not supported until M5's plans task`},
+		{"plan without a name", "plans: [{}]", `plan "": name must be`},
+		{"plan twice", "plans: [{name: free}, {name: free}]", `plan "free": defined twice`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -22,6 +22,12 @@ const (
 	Shadow  = "shadow"
 	Off     = "off"
 
+	// Route auth modes (GW-20, ADR-0039).
+	AuthNone   = "none"
+	AuthAPIKey = "api_key"
+	AuthJWT    = "jwt"
+	AuthEither = "either"
+
 	FailOpen   = "fail_open"
 	FailClosed = "fail_closed"
 	Degraded   = "degraded"
@@ -161,8 +167,13 @@ func compilePolicies(c *configpb.Config, routes []Route, replicas int64) ([]Poli
 
 func compilePolicy(p *configpb.Policy, replicas int64, routes []Route) (Policy, error) {
 	pol := Policy{Name: p.GetName(), Level: p.GetLevel(), Algorithm: p.GetAlgorithm(), Mode: p.GetMode()}
-	if len(pol.Name) > 64 || strings.ContainsFunc(pol.Name, notNameChar) {
+	if !ValidName(pol.Name) {
 		return pol, errors.New("name must be 1-64 characters from A-Z, a-z, 0-9, '.', '_' and '-'")
+	}
+	if p.GetFromPlan() {
+		// Interim until the plans task (ADR-0035): nothing half-built can be
+		// published.
+		return pol, errors.New("from_plan is not supported until M5's plans task")
 	}
 	if !levels[pol.Level] {
 		return pol, fmt.Errorf("level %q: want global, tenant, consumer or route", pol.Level)
@@ -330,6 +341,40 @@ func (pol *Policy) compileLimits(ls []*configpb.Limit, replicas int64) error {
 			return fmt.Errorf("limits[%d].burst: %d per replica at %d per %v is more than %v of burst tolerance", i, lim.Burst, lim.Rate, d, maxPeriod)
 		}
 		pol.Limits = append(pol.Limits, lim)
+	}
+	return nil
+}
+
+// ValidName reports whether name is 1-64 characters from A-Z, a-z, 0-9, '.',
+// '_' and '-', the rule for policy, plan and control-plane entity names
+// (ADR-0017, ADR-0036).
+func ValidName(name string) bool {
+	return name != "" && len(name) <= 64 && !strings.ContainsFunc(name, notNameChar)
+}
+
+// compilePlans checks the plans of a config (RL-08, ADR-0041).
+func compilePlans(plans []*configpb.Plan) error {
+	names := map[string]bool{}
+	for _, p := range plans {
+		if err := compilePlan(p); err != nil {
+			return fmt.Errorf("plan %q: %w", p.GetName(), err)
+		}
+		if names[p.GetName()] {
+			return fmt.Errorf("plan %q: defined twice", p.GetName())
+		}
+		names[p.GetName()] = true
+	}
+	return nil
+}
+
+func compilePlan(p *configpb.Plan) error {
+	if !ValidName(p.GetName()) {
+		return errors.New("name must be 1-64 characters from A-Z, a-z, 0-9, '.', '_' and '-'")
+	}
+	if len(p.GetDefaultLimits()) > 0 {
+		// Interim until the plans task (ADR-0035): a plan without limits
+		// changes nothing, so tenants can name one meanwhile.
+		return errors.New("default_limits are not supported until M5's plans task")
 	}
 	return nil
 }
