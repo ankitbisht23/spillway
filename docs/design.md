@@ -264,7 +264,7 @@ Postgres holds every config and identity entity; the control plane validates and
 
 - **CP-10** (M5) REST + JSON under `/api/v1`, OpenAPI-first: `api/openapi.yaml` is checked in, Go server stubs (oapi-codegen) and the UI client are generated from it, and `oasdiff` in CI guards it; the UI is its first-party client.
 - **CP-11** (M5) Humans log in through Keycloak only (OIDC; “local accounts” are Keycloak users, GitHub brokered in the demo); service tokens are Keycloak confidential clients (client credentials). The control plane stores no passwords.
-- **CP-12** (M5) RBAC: admin (everything), operator (policies, overrides, consumers, keys), viewer (read-only).
+- **CP-12** (M5) RBAC with five global roles, each able to read everything except the audit log: viewer (read only), editor (config working set and import), publisher (publish and rollback), key-admin (consumers, API keys, overrides and access lists), admin (everything, including tenants and the audit log).
 - **CP-13** (M5) Every mutation writes an audit record: actor, action, entity, before/after diff, timestamp, change note.
 - **CP-14** (M5) Optimistic concurrency: updates require `If-Match` with the entity version.
 
