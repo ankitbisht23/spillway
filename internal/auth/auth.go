@@ -169,7 +169,8 @@ func (v *Verifier) Ready() bool { return v.keys.Load() != nil }
 // Verify checks a compact JWS token (ADR-0039): RS256 or ES256 with a kid
 // and no crit header, signed by a fitting key of the JWKS with that kid, iss
 // the issuer exactly, aud containing the audience, exp present and not
-// passed, nbf not in the future (both with Leeway). iat is not checked.
+// passed, nbf not in the future (both with Leeway), sub present and not
+// empty. iat is not checked.
 func (v *Verifier) Verify(ctx context.Context, token string) (*Claims, error) {
 	sig, kid, alg, err := parse(token)
 	if err != nil {
@@ -265,7 +266,7 @@ func (v *Verifier) claims(payload []byte) (*Claims, error) {
 		return nil, ErrInvalid
 	case !hasAudience(c.Audience, v.cfg.Audience):
 		return nil, ErrInvalid
-	case c.Expiry == nil:
+	case c.Expiry == nil, c.Subject == "":
 		return nil, ErrInvalid
 	}
 	exp, err := unixTime(*c.Expiry)

@@ -230,6 +230,8 @@ func TestVerifyRejects(t *testing.T) {
 		"issuer with a slash":      sign(t, jose.RS256, k.rsa, "rsa-1", with(func(m map[string]any) { m["iss"] = issuer + "/" }), nil),
 		"no audience":              sign(t, jose.RS256, k.rsa, "rsa-1", with(func(m map[string]any) { delete(m, "aud") }), nil),
 		"other audience":           sign(t, jose.RS256, k.rsa, "rsa-1", with(func(m map[string]any) { m["aud"] = "spillway-gateway" }), nil),
+		"no sub":                   sign(t, jose.RS256, k.rsa, "rsa-1", with(func(m map[string]any) { delete(m, "sub") }), nil),
+		"empty sub":                sign(t, jose.RS256, k.rsa, "rsa-1", with(func(m map[string]any) { m["sub"] = "" }), nil),
 		"no exp":                   sign(t, jose.RS256, k.rsa, "rsa-1", with(func(m map[string]any) { delete(m, "exp") }), nil),
 		"expired past the leeway":  sign(t, jose.RS256, k.rsa, "rsa-1", with(func(m map[string]any) { m["exp"] = c.unix(-61 * time.Second) }), nil),
 		"nbf past the leeway":      sign(t, jose.RS256, k.rsa, "rsa-1", with(func(m map[string]any) { m["nbf"] = c.unix(62 * time.Second) }), nil),

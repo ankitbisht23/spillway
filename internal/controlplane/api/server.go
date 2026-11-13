@@ -66,12 +66,14 @@ func New(st *store.Store, allowed Allowlist, resolver Resolver, authn Authentica
 
 // Handler returns the API's HTTP handler; it serves BasePath and answers 404
 // elsewhere. Each operation's path and method go through guard first
-// (ADR-0040); other requests reach only the 404.
+// (ADR-0040); other requests reach only the 404, never the body reader or
+// the generated server.
 func (s *Server) Handler() http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	notFound := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, &apiError{http.StatusNotFound, apiv1.ErrorCodeNotFound, "no such path", nil})
 	})
+	mux := http.NewServeMux()
+	mux.Handle("/", notFound)
 	strict := apiv1.NewStrictHandlerWithOptions(s, []apiv1.StrictMiddlewareFunc{strictBody}, apiv1.StrictHTTPServerOptions{
 		RequestErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) {
 			s.writeError(w, r, invalid("body: "+jsonMessage(err)))
@@ -81,7 +83,7 @@ func (s *Server) Handler() http.Handler {
 	apiv1.HandlerWithOptions(strict, apiv1.StdHTTPServerOptions{BaseURL: BasePath, BaseRouter: mux, ErrorHandlerFunc: s.paramError})
 	api := s.readBody(mux)
 	guarded := http.NewServeMux()
-	guarded.Handle("/", api)
+	guarded.Handle("/", notFound)
 	for pattern, op := range operations() {
 		guarded.Handle(pattern, s.guard(op, api))
 	}

@@ -165,6 +165,7 @@ func TestAuthenticationAnswers(t *testing.T) {
 		{"viewer, no If-Match", "DELETE", "/api/v1/tenants/1", "", []string{"Authorization", "Bearer " + token("viewer")}, 403, "needs one of the roles admin", ""},
 		{"viewer, not JSON", "POST", "/api/v1/routes", "x", []string{"Authorization", "Bearer " + token("viewer"), "Content-Type", "text/plain"}, 403, "needs one of the roles editor, admin", ""},
 		{"no token, unknown path", "GET", "/api/v1/nope", "", []string{"Authorization", ""}, 404, "no such path", ""},
+		{"no token, wrong method, not JSON", "PATCH", "/api/v1/routes/1", "x", []string{"Authorization", "", "Content-Type", "text/plain"}, 404, "no such path", ""},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			a := do(t, h, tt.method, tt.path, tt.body, tt.header...)
