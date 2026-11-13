@@ -87,8 +87,8 @@ services:
   # Control plane (CP-10, CP-19, ADR-0036). The one-shot migrate applies the
   # schema migrations as the owner role and sets the app role's password,
   # then exits 0; the control plane starts after it, as the app role. Its
-  # REST API has no authentication until M5's rbac-audit task, so it is
-  # published on 127.0.0.1 only (SEC-02, ADR-0035).
+  # REST API needs Keycloak bearer tokens and roles (CP-11, CP-12, ADR-0040)
+  # and is published on 127.0.0.1 only (SEC-02).
   migrate:
     <<: &controlplane
       build: { context: ., target: controlplane }
@@ -111,9 +111,18 @@ services:
       SPILLWAY_CP_HTTP_ADDR: ":8080"
       SPILLWAY_CP_ADMIN_ADDR: ":8081" # all interfaces in the container; published on 127.0.0.1 only
       SPILLWAY_CP_ALLOWED_NETWORKS: 172.29.0.0/16 # the gateways' allow-list (SEC-06)
+      # Bearer tokens (CP-11, ADR-0040): the browser-facing issuer, keys
+      # fetched inside the network (ADR-0004); http:// needs dev mode (SEC-04).
+      SPILLWAY_CP_OIDC_ISSUER: http://localhost:8180/auth/realms/spillway
+      SPILLWAY_CP_OIDC_JWKS_URL: http://keycloak:8080/auth/realms/spillway/protocol/openid-connect/certs
+      SPILLWAY_CP_OIDC_AUDIENCE: spillway-controlplane
+      SPILLWAY_CP_DEV_MODE: "true"
     ports: ["127.0.0.1:8080:8080", "127.0.0.1:8081:8081"]
     depends_on:
       migrate: { condition: service_completed_successfully }
+      # Not needed to start (readiness never waits for the keys), but its
+      # first key fetch then succeeds instead of being retried 30 s later.
+      keycloak: { condition: service_healthy }
     healthcheck:
       test: ["CMD", "/controlplane", "healthcheck"]
       interval: 2s

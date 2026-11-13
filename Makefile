@@ -125,7 +125,8 @@ lint-proto: tool-buf tool-protoc-gen-go
 	else echo "buf breaking: origin/main has no buf.yaml yet, skipped"; fi
 
 # internal/gen/apiv1 matches what api/openapi.yaml generates; no breaking
-# change against origin/main (oasdiff, CP-10), skipped while main has no spec.
+# change against origin/main (oasdiff, CP-10), skipped while main has no spec,
+# except the user-approved ones that api/oasdiff-ignore.txt lists.
 lint-api: tool-oapi-codegen tool-oasdiff
 	@cfg=$$(mktemp) && out=$$(mktemp) && trap 'rm -f "$$cfg" "$$out"' EXIT && \
 	sed "s#^output: .*#output: $$out#" api/oapi-codegen.yaml > "$$cfg" && \
@@ -133,7 +134,7 @@ lint-api: tool-oapi-codegen tool-oasdiff
 	cmp -s "$$out" internal/gen/apiv1/apiv1.gen.go || { echo "internal/gen/apiv1 is stale: run make api"; exit 1; }
 	@if git cat-file -e origin/main:api/openapi.yaml 2>/dev/null; then \
 		base=$$(mktemp) && trap 'rm -f "$$base"' EXIT && git show origin/main:api/openapi.yaml > "$$base" && \
-		$(BIN)/oasdiff breaking --fail-on ERR "$$base" api/openapi.yaml; \
+		$(BIN)/oasdiff breaking --fail-on ERR --err-ignore api/oasdiff-ignore.txt "$$base" api/openapi.yaml; \
 	else echo "oasdiff breaking: origin/main has no api/openapi.yaml yet, skipped"; fi
 
 # internal/controlplane/store/db matches what the queries and migrations

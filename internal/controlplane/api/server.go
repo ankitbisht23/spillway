@@ -3,10 +3,10 @@
 // JSON errors, strict request bodies, ETags and If-Match (CP-14), and cursor
 // pages.
 //
-// Until the rbac-audit task the API has no authentication: compose publishes
-// it on 127.0.0.1 only (ADR-0035). Every operation passes through the strict
-// middleware chain with its operation ID, where RBAC goes (ADR-0040), and
-// every change through one store transaction, where its audit record goes.
+// Every operation needs a bearer token holding one of the roles the spec
+// lists for it, checked in one place before the request is read (CP-11,
+// CP-12, SEC-08, ADR-0040), and every change runs in one store transaction
+// with its audit record (CP-13).
 package api
 
 import (
@@ -46,6 +46,7 @@ type Server struct {
 	store    *store.Store
 	allowed  Allowlist
 	resolver Resolver
+	auth     Authenticator
 	log      *slog.Logger
 }
 
@@ -58,18 +59,21 @@ type Allowlist interface {
 var _ apiv1.StrictServerInterface = (*Server)(nil)
 
 // New returns a server over st; upstream endpoints must be in allowed
-// (SEC-06).
-func New(st *store.Store, allowed Allowlist, resolver Resolver, log *slog.Logger) *Server {
-	return &Server{store: st, allowed: allowed, resolver: resolver, log: log}
+// (SEC-06), and callers are authenticated by authn (CP-11).
+func New(st *store.Store, allowed Allowlist, resolver Resolver, authn Authenticator, log *slog.Logger) *Server {
+	return &Server{store: st, allowed: allowed, resolver: resolver, auth: authn, log: log}
 }
 
 // Handler returns the API's HTTP handler; it serves BasePath and answers 404
-// elsewhere.
+// elsewhere. Each operation's path and method go through guard first
+// (ADR-0040); other requests reach only the 404, never the body reader or
+// the generated server.
 func (s *Server) Handler() http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	notFound := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, &apiError{http.StatusNotFound, apiv1.ErrorCodeNotFound, "no such path", nil})
 	})
+	mux := http.NewServeMux()
+	mux.Handle("/", notFound)
 	strict := apiv1.NewStrictHandlerWithOptions(s, []apiv1.StrictMiddlewareFunc{strictBody}, apiv1.StrictHTTPServerOptions{
 		RequestErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) {
 			s.writeError(w, r, invalid("body: "+jsonMessage(err)))
@@ -77,7 +81,13 @@ func (s *Server) Handler() http.Handler {
 		ResponseErrorHandlerFunc: s.writeError,
 	})
 	apiv1.HandlerWithOptions(strict, apiv1.StdHTTPServerOptions{BaseURL: BasePath, BaseRouter: mux, ErrorHandlerFunc: s.paramError})
-	return requestID(s.readBody(mux))
+	api := s.readBody(mux)
+	guarded := http.NewServeMux()
+	guarded.Handle("/", notFound)
+	for pattern, op := range operations() {
+		guarded.Handle(pattern, s.guard(op, api))
+	}
+	return requestID(guarded)
 }
 
 type requestIDKey struct{}

@@ -120,3 +120,17 @@ WHERE id = @id RETURNING *;
 -- name: DeleteOverride :execrows
 -- overrides_pkey.
 DELETE FROM overrides WHERE id = @id;
+
+-- name: ConsumerDependents :many
+-- What deleting a consumer cascades to, for its audit record (ADR-0040):
+-- api_keys_consumer_id, overrides_consumer_policy, and access_lists_consumer
+-- and access_lists_key (skip scans past their leading action column).
+SELECT 'api_key'::text AS kind, k.id FROM api_keys k WHERE k.consumer_id = @consumer_id::bigint
+UNION ALL
+SELECT 'override'::text, o.id FROM overrides o WHERE o.consumer_id = @consumer_id::bigint
+UNION ALL
+SELECT 'access_list'::text, a.id FROM access_lists a WHERE a.consumer_id = @consumer_id::bigint
+UNION ALL
+SELECT 'access_list'::text, a.id FROM access_lists a
+WHERE a.api_key_id = ANY(ARRAY(SELECT k.id FROM api_keys k WHERE k.consumer_id = @consumer_id::bigint))
+ORDER BY 1, 2;

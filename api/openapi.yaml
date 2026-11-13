@@ -9,8 +9,11 @@
 # and updated_at; unknown fields are 400; bodies over 1 MiB are 413; GET of
 # an entity answers ETag "<version>", and PUT, DELETE and drain require
 # If-Match with it (428 when missing, 412 when stale); lists are cursor
-# pages. Every operation lists the roles allowed to call it in
-# x-spillway-roles (ADR-0040).
+# pages. Every operation needs a Keycloak access token (Authorization:
+# Bearer, CP-11) and lists the roles allowed to call it in x-spillway-roles,
+# which the server enforces before it reads the request: no or a bad token is
+# 401, a token without a listed role 403 (CP-12, SEC-08, ADR-0040). Every
+# successful mutation writes an audit record (CP-13).
 openapi: 3.0.3
 info:
   title: Spillway control plane
@@ -21,11 +24,15 @@ info:
     overrides, access lists) apply at once with a new identity version.
 servers:
   - url: /api/v1
+security:
+  - bearer: []
 tags:
   - name: config
     description: The config working set (CP-02)
   - name: identity
     description: Identity, applied at once (CP-20)
+  - name: audit
+    description: The audit log (CP-13)
 paths:
   /upstreams:
     get:
@@ -917,7 +924,54 @@ paths:
         '412': { $ref: '#/components/responses/PreconditionFailed' }
         '428': { $ref: '#/components/responses/PreconditionRequired' }
         default: { $ref: '#/components/responses/Error' }
+  /audit:
+    get:
+      operationId: listAudit
+      tags: [audit]
+      summary: List audit records, newest first (CP-13)
+      x-spillway-roles: [admin]
+      parameters:
+        - $ref: '#/components/parameters/PageLimit'
+        - $ref: '#/components/parameters/PageCursor'
+        - name: entity
+          in: query
+          description: Only records of this entity type, such as route, endpoint drains included under upstream.
+          schema: { type: string }
+        - name: entity_id
+          in: query
+          description: With entity, only the records of this entity.
+          schema: { type: string }
+        - name: actor_sub
+          in: query
+          description: Only the records of this actor, a token's sub.
+          schema: { type: string }
+        - name: since
+          in: query
+          description: Only records at or after this time.
+          schema: { type: string, format: date-time }
+        - name: until
+          in: query
+          description: Only records before this time.
+          schema: { type: string, format: date-time }
+      responses:
+        '200':
+          description: A page of audit records
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuditList' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        default: { $ref: '#/components/responses/Error' }
 components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >-
+        A Keycloak access token for the audience spillway-controlplane, of a
+        user or of a confidential client's service account (CP-11). Its
+        realm_access.roles name the caller's roles: viewer, editor,
+        publisher, key-admin, admin (CP-12).
   parameters:
     Id:
       name: id
@@ -1020,7 +1074,10 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
     Error:
-      description: Any other error (internal, unavailable)
+      description: >-
+        Any other error: no or a bad bearer token (unauthenticated, 401, with
+        WWW-Authenticate), a token without a role the operation lists
+        (forbidden, 403), internal, unavailable
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
@@ -1321,6 +1378,47 @@ components:
         version: { type: integer, format: int64, readOnly: true }
         created_at: { type: string, format: date-time, readOnly: true }
         updated_at: { type: string, format: date-time, readOnly: true }
+
+    # The audit log (CP-13, ADR-0040).
+    AuditRecord:
+      type: object
+      required: [id, at, actor, action, entity, entity_id, diff, note, request_id, config_version, identity_version]
+      properties:
+        id: { type: integer, format: int64 }
+        at: { type: string, format: date-time }
+        actor: { $ref: '#/components/schemas/AuditActor' }
+        action: { type: string, description: '<entity>.<verb>, such as route.create, endpoint.drain or access_list.delete.' }
+        entity: { type: string }
+        entity_id: { type: string, nullable: true }
+        diff:
+          type: object
+          additionalProperties: true
+          description: >-
+            {"before": …, "after": …} in the entity's REST representation;
+            before is null on create, after on delete, and a delete that
+            cascades adds removed, the IDs it removed by kind. Never a key,
+            its hash, a token or a password.
+        note: { type: string, nullable: true }
+        request_id: { type: string, description: The change's X-Request-Id. }
+        config_version: { type: integer, format: int64, nullable: true, description: The config version the change made. }
+        identity_version: { type: integer, format: int64, nullable: true, description: The identity version the change made. }
+    AuditActor:
+      type: object
+      required: [sub, name, roles]
+      properties:
+        sub: { type: string, description: The token's sub. }
+        name: { type: string, description: The token's preferred_username. }
+        roles:
+          type: array
+          items: { type: string }
+    AuditList:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/AuditRecord' }
+        next_cursor: { type: string, nullable: true }
 
     # Pages (UI-06): next_cursor is null on the last page.
     UpstreamList:

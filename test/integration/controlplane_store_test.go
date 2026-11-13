@@ -303,35 +303,36 @@ func TestControlPlaneVersions(t *testing.T) {
 	if revision() != 1 || identity() != 1 {
 		t.Fatalf("seeded revision %d, identity version %d; want 1 and 1", revision(), identity())
 	}
-	plan, err := st.CreateConfig(ctx, store.Plans, store.ConfigInput{Name: "free", Spec: []byte("{}")})
+	a := testAudit()
+	plan, err := st.CreateConfig(ctx, a, store.Plans, store.ConfigInput{Name: "free", Spec: []byte("{}")})
 	if err != nil || plan.Version != 2 || revision() != 2 {
 		t.Fatalf("plan version %d, revision %d, %v; want 2", plan.Version, revision(), err)
 	}
-	if _, err := st.CreateConfig(ctx, store.Plans, store.ConfigInput{Name: "free", Spec: []byte("{}")}); !isConflict(err) {
+	if _, err := st.CreateConfig(ctx, a, store.Plans, store.ConfigInput{Name: "free", Spec: []byte("{}")}); !isConflict(err) {
 		t.Errorf("a second plan named free: %v, want a conflict", err)
 	}
-	if _, err := st.UpdateConfig(ctx, store.Plans, plan.ID, 1, store.ConfigInput{Name: "free", Spec: []byte("{}")}); !isPrecondition(err, 2) {
+	if _, err := st.UpdateConfig(ctx, a, store.Plans, plan.ID, 1, store.ConfigInput{Name: "free", Spec: []byte("{}")}); !isPrecondition(err, 2) {
 		t.Errorf("a stale If-Match: %v, want a precondition error naming version 2", err)
 	}
 	if revision() != 2 {
 		t.Errorf("failed edits bumped the revision to %d", revision())
 	}
-	if err := st.DeleteConfig(ctx, store.Plans, plan.ID, 2); err != nil || revision() != 3 {
+	if err := st.DeleteConfig(ctx, a, store.Plans, plan.ID, 2); err != nil || revision() != 3 {
 		t.Errorf("delete: %v, revision %d", err, revision())
 	}
 	if _, err := st.GetConfig(ctx, store.Plans, plan.ID); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("deleted plan: %v", err)
 	}
 
-	if _, err := st.CreateTenant(ctx, tenantParams("acme", 1)); err == nil || identity() != 1 {
+	if _, err := st.CreateTenant(ctx, a, tenantParams("acme", 1)); err == nil || identity() != 1 {
 		t.Errorf("a tenant before any published config: %v, identity version %d; want a refusal at 1", err, identity())
 	}
 	publish(t, owner, `{"plans": [{"id": 7, "name": "free"}], "policies": [{"id": 9, "name": "p"}]}`)
-	tenant, err := st.CreateTenant(ctx, tenantParams("acme", 7))
+	tenant, err := st.CreateTenant(ctx, a, tenantParams("acme", 7))
 	if err != nil || tenant.Version != 2 || identity() != 2 {
 		t.Fatalf("tenant version %d, identity version %d, %v; want 2", tenant.Version, identity(), err)
 	}
-	if _, err := st.CreateTenant(ctx, tenantParams("other", 8)); err == nil || !strings.Contains(err.Error(), "plan 8 is not in the published config version 1") {
+	if _, err := st.CreateTenant(ctx, a, tenantParams("other", 8)); err == nil || !strings.Contains(err.Error(), "plan 8 is not in the published config version 1") {
 		t.Errorf("a tenant on an unpublished plan: %v", err)
 	}
 	if identity() != 2 {
@@ -356,6 +357,11 @@ func isConflict(err error) bool {
 func isPrecondition(err error, current int64) bool {
 	e, ok := errors.AsType[*store.PreconditionError](err)
 	return ok && e.Current == current
+}
+
+// testAudit is an audit context for changes made through the store.
+func testAudit() store.Audit {
+	return store.Audit{Actor: store.Actor{Sub: "test", Name: "test", Roles: []string{"admin"}}, RequestID: "test", Show: func(r any) (any, error) { return r, nil }}
 }
 
 func tenantParams(name string, plan int64) db.CreateTenantParams {

@@ -1,6 +1,6 @@
 # 0040. Control-plane security: mTLS, OIDC, RBAC, audit and secrets
 
-- **Status:** Accepted
+- **Status:** Accepted; where RBAC is enforced (the strict-server middleware) superseded by [ADR-0043](0043-rbac-and-audit-implementation.md)
 - **Date:** 2026-11-13
 - **Requirement IDs:** SEC-02, SEC-04, SEC-08, SEC-09, CP-11 – CP-13, CP-22, UI-04, UI-08
 

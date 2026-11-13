@@ -20,10 +20,17 @@ import (
 	"github.com/ankitbisht23/spillway/internal/proxy"
 )
 
-// cpClient calls a control plane's REST API.
+// cpClient calls a control plane's REST API with a bearer token.
 type cpClient struct {
-	t    *testing.T
-	base string // up to and without /api/v1
+	t     *testing.T
+	base  string // up to and without /api/v1
+	token string // none when empty
+}
+
+// as is c calling with token.
+func (c cpClient) as(token string) cpClient {
+	c.token = token
+	return c
 }
 
 type cpAnswer struct {
@@ -65,6 +72,9 @@ func (c cpClient) call(method, path string, body any, header ...string) cpAnswer
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
 	for i := 0; i+1 < len(header); i += 2 {
 		req.Header.Set(header[i], header[i+1])
 	}
@@ -91,17 +101,27 @@ func (c cpClient) must(want int, method, path string, body any, header ...string
 }
 
 // newControlPlane serves the API over a fresh, migrated database as the app
-// role, and returns a client and the database's name.
+// role, and returns a client with an admin token and the database's name.
 func newControlPlane(t *testing.T) (cpClient, string) {
+	t.Helper()
+	c, iss, db := startControlPlane(t, io.Discard)
+	return c.as(iss.token(t, "admin-1", "test-admin", "admin")), db
+}
+
+// startControlPlane serves the API over a fresh, migrated database as the
+// app role, with bearer tokens from a test issuer, logging to log. It
+// returns a client without a token, the issuer and the database's name.
+func startControlPlane(t *testing.T, log io.Writer) (cpClient, *testIssuer, string) {
 	t.Helper()
 	db := migratedDatabase(t)
 	allowed, err := proxy.ParseAllowlist("172.29.0.0/16")
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(api.New(openStore(t, db), allowed, net.DefaultResolver, slog.New(slog.NewJSONHandler(io.Discard, nil))).Handler())
+	iss := newTestIssuer(t)
+	srv := httptest.NewServer(api.New(openStore(t, db), allowed, net.DefaultResolver, api.OIDC{Verifier: iss.verifier(t)}, slog.New(slog.NewJSONHandler(log, nil))).Handler())
 	t.Cleanup(srv.Close)
-	return cpClient{t, srv.URL}, db
+	return cpClient{t: t, base: srv.URL}, iss, db
 }
 
 // TestControlPlaneConfigCRUD checks the config working set's REST API on
@@ -343,14 +363,15 @@ func TestControlPlaneIdentityCRUD(t *testing.T) {
 	c.must(204, "DELETE", tenPath, nil, "If-Match", `"4"`)
 }
 
-// TestComposeControlPlane checks the compose stack's control plane (CP-19):
-// migrate ran before it, it answers on 127.0.0.1:8080 as the app role, and
-// its admin port is ready.
+// TestComposeControlPlane checks the compose stack's control plane (CP-19,
+// CP-11): migrate ran before it, it answers on 127.0.0.1:8080 as the app
+// role to the spillway-ci client's service token, and its admin port is
+// ready.
 func TestComposeControlPlane(t *testing.T) {
 	if status, _ := get(t, "http://127.0.0.1:8081/readyz"); status != 200 {
 		t.Fatalf("admin /readyz: %d", status)
 	}
-	c := cpClient{t, "http://127.0.0.1:8080"}
+	c := composeControlPlane(t).as(keycloakToken(t, "client_credentials", "spillway-ci", ""))
 	name := "it-" + strings.ToLower(strings.ReplaceAll(t.Name(), "/", "-")) + fmt.Sprint(time.Now().UnixNano()%1e6)
 	var p apiv1.Plan
 	created := c.must(201, "POST", "/plans", map[string]any{"name": name})

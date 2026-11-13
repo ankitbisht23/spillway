@@ -243,10 +243,14 @@ Local development needs no signup: the agent runs Keycloak in Docker as the sing
 
 The agent commits a realm import (`deploy/compose/keycloak/realm.json`) containing:
 
-- realm `spillway`, with roles `admin`, `operator`, `viewer` (CP-12)
-- client `admin-ui`: public, authorization code + PKCE, redirect URIs for the Vite dev server and the embedded UI on the control plane (ports in `docs/ports.md`); the demo hostname is added in M8
-- client `gateway-tests`: confidential, client-credentials, for minting test JWTs (GW-18)
-- one test user per role, with obviously fake dev-only passwords (Step 8)
+- realm `spillway`, with roles `viewer`, `editor`, `publisher`, `key-admin`, `admin` (CP-12, ADR-0040)
+- client `admin-ui`: public, authorization code + PKCE, redirect URIs for the Vite dev server and the embedded UI on the control plane (ports in `docs/ports.md`), tokens for the audience `spillway-controlplane`; the demo hostname is added in M8
+- client `spillway-ci`: confidential, client-credentials, whose service account holds `admin`, for `make verify-m5` and the integration tests (CP-11)
+- client `rbac-tests`: confidential, dev only, logs the test users in with their passwords so the RBAC tests get each role's token (ADR-0043)
+- client `gateway-tests`: confidential, client-credentials, for minting test JWTs for the audience `spillway-gateway` (GW-18)
+- one test user per role (`test-viewer` … `test-admin`), with fixed IDs and obviously fake dev-only passwords (Step 8)
+
+Keycloak imports the realm only when it does not have it yet: after a change to `realm.json`, run `docker compose up -d --force-recreate keycloak` (or `docker compose down -v`).
 
 People log in through Keycloak only, and service tokens come from Keycloak confidential clients using client credentials, like `gateway-tests`; the control plane stores no passwords (CP-11).
 
@@ -382,7 +386,7 @@ Secrets live in three places only: your password manager (source of truth), an u
 
 | Secret | Comes from | Stored in | Needed by |
 | --- | --- | --- | --- |
-| Local dev passwords and client secret (Postgres, Keycloak admin, test users, `gateway-tests`) | Agent generates | `.env.example` and the realm import; obviously fake values, allowlisted in `.gitleaks.toml` | M0 |
+| Local dev passwords and client secrets (Postgres, Keycloak admin, test users, `gateway-tests`, `spillway-ci`, `rbac-tests`) | Agent generates | `.env.example` and the realm import; obviously fake values, allowlisted in `.gitleaks.toml` | M0 |
 | `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET` | GitHub OAuth app (Step 4) | Password manager, `.env.demo` or k8s secret | M8, optional |
 | `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `KEYCLOAK_ADMIN_PASSWORD` (public demo) | You generate | Password manager, `.env.demo` or k8s secret | M8, optional |
 | `CLOUDFLARE_TUNNEL_TOKEN` | Cloudflare (Step 7) | `.env.demo` or k8s secret | M8, optional |
