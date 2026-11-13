@@ -13,7 +13,8 @@
 # The caller defines result, check, $failed and loadgen <url> <rate>
 # <warm-up> <duration> as m2.sh does, and for the gateway runs:
 #   counts                         prints gateway-1's counters, one line each
-#   judge <before> <after> <sent>  prints "<0 = pass> <failed answers it
+#   judge <before> <after> <sent> <loadgen result>
+#                                  prints "<0 = pass> <failed answers it
 #                                  accounts for> <what it saw>"
 # shellcheck shell=bash
 
@@ -45,7 +46,7 @@ added_latency() {
 		before=$(counts)
 		out=$(loadgen http://gateway-1:8000/bytes/1024 "$rate" "$warmup" "$duration")
 		sent=$(jq -r '.requests.sent // 0' <<<"$out" 2>/dev/null)
-		read -r ok excused j < <(judge "$before" "$(counts)" "${sent:-0}")
+		read -r ok excused j < <(judge "$before" "$(counts)" "${sent:-0}" "$out")
 		if runline "gateway-1, $label, run $i" "$out" "; $j" "${ok:-1}" "${excused:-0}"; then g50+=("$p50") g99+=("$p99"); else valid=0; fi
 	done
 	if [ "$valid" -eq 0 ]; then

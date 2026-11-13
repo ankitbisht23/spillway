@@ -35,7 +35,7 @@ type Handler struct {
 	pools    *Registry
 	limiters *local.Registry
 	redis    Redis
-	devMode  bool                              // Spillway-Decision-Time on Redis-decided responses (ADR-0021) and Spillway-Attempts (ADR-0030)
+	devMode  bool                              // Spillway-Decision-Time on Redis-decided responses (ADR-0021), Spillway-Redis-Error (ADR-0034) and Spillway-Attempts (ADR-0030)
 	jitter   func(time.Duration) time.Duration // draws a retry's backoff in [0, n) (GW-12)
 	tracer   trace.Tracer                      // nil when tracing is off (OB-02)
 	rec      *telemetry.Recorder
@@ -193,7 +193,7 @@ func (h *Handler) serve(w *responseRecorder, r *http.Request, body *countingBody
 	}
 	w.rateLimitPolicy, w.rateLimit = lim.headers()
 	if h.devMode {
-		w.decisionTime = lim.decisionTime()
+		w.decisionTime, w.redisErrors = lim.decisionTime(), lim.redisErrors()
 	}
 	if lim.unavailable {
 		// Redis failed for an enforce fail_closed policy (RL-23); Retry-After

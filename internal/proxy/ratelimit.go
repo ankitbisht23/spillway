@@ -49,6 +49,7 @@ type limits struct {
 	calls    []*redisCall // the Redis calls that answered, in order
 	denied   bool         // an enforce limit denied the request
 	failures bool         // a Redis call failed or was not sent for lack of budget
+	errKinds []string     // the failed calls' error kinds, in order
 	// unavailable: Redis failed for an enforce fail_closed policy, so the
 	// request is answered 503 (RL-23).
 	unavailable bool
@@ -254,6 +255,7 @@ func (l *limits) failed(c *redisCall, err error) bool {
 	l.failures = true
 	kind, node := errorKind(err)
 	l.rec.RedisError(kind)
+	l.errKinds = append(l.errKinds, kind)
 	// Debug: during an outage every request fails; the metric and the
 	// breaker's transition logs carry it.
 	l.log.Debug("redis limiter call failed; failure modes apply", "kind", kind, "node", node, "request_id", l.q.ID)
@@ -323,6 +325,15 @@ func (l *limits) decisionTime() string {
 	}
 	return strconv.FormatInt(l.calls[len(l.calls)-1].nowUS, 10)
 }
+
+// redisErrorHeader carries, in dev mode, the kinds of the request's failed
+// Redis calls (ADR-0034).
+const redisErrorHeader = "Spillway-Redis-Error"
+
+// redisErrors is the Spillway-Redis-Error value: the error kind of each of
+// the request's Redis calls that failed or was not sent for lack of budget
+// (timeout), in order, comma-separated; "" if none (ADR-0034).
+func (l *limits) redisErrors() string { return strings.Join(l.errKinds, ",") }
 
 // errorKind returns a limiter error's kind and node.
 func errorKind(err error) (kind, node string) {
