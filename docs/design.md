@@ -391,18 +391,20 @@ T &= \text{period} / \text{rate}, \qquad \tau = T \cdot \text{burst} \\
 | --- | --- |
 | `config_versions` | id, published\_at, published\_by, note, working\_set\_revision, snapshot (jsonb, protojson config section) |
 | `config_working_set` | revision (bumped by every config edit; publish’s `If-Match`), updated\_at |
-| `routes` | id, name, priority, match (jsonb), upstream\_id, strip\_prefix, transforms (jsonb), size\_limits, auth\_mode, timeouts, retry (attempts), cost, version |
-| `upstreams` / `endpoints` | id, name, lb, health\_check, circuit, retry\_budget, version / id, upstream\_id, address, weight, draining |
-| `policies` | id, name, level, match, key\_template, limits (jsonb), from\_plan, algorithm, mode, failure\_mode, lease\_k, version |
-| `plans` | id, name, default\_limits (jsonb, keyed by policy), quotas (jsonb: daily, monthly), version |
+| `routes` | id, name, spec (jsonb: the proto message's fields), version |
+| `upstreams` / `endpoints` | id, name, spec (jsonb: the proto message's fields), version / id, upstream\_id, address, draining |
+| `policies` | id, name, spec (jsonb: the proto message's fields), version |
+| `plans` | id, name, spec (jsonb: the proto message's fields), version |
+| `identity_state` | version, changed\_at |
 | `tenants` / `consumers` | id, name, plan\_id, status, version / id, tenant\_id, name, plan\_id (null = the tenant’s plan), status, version |
-| `api_keys` | id, consumer\_id, prefix, hash, created\_at, expires\_at, revoked\_at |
+| `api_keys` | id, consumer\_id, prefix, hash, created\_at, expires\_at, revoked\_at, rotated\_from, version |
 | `access_lists` | id, action (allow, deny), subject\_type (key, consumer, cidr), subject, note, created\_at, version |
 | `overrides` | id, consumer\_id, policy\_id (null for a quota override), limits, quotas, starts\_at, ends\_at (a burst grant has an end), version |
 | `quota_usage` | consumer\_id, period, used (written as `GREATEST(used, $n)`), flushed\_at |
-| `replicas` | id, config\_version, identity\_version, last\_heartbeat\_at |
-| `heavy_hitters` | window\_start, policy\_id, key\_digest, consumer\_id, denied, shadow\_denied (pruned after 7 days) |
-| `audit_log` | id, actor, action, entity, entity\_id, diff (jsonb), note, at |
+| `replicas` | id, config\_version, identity\_version, schema version, watch\_connected, last\_heartbeat\_at, last\_synced\_at, rejected\_config\_version, rejected\_reason |
+| `replica_versions` | replica\_id, stream, version, first\_reported\_at |
+| `heavy_hitters` | window\_start, policy\_id, key\_digest, consumer\_id, api\_key\_id, denied, shadow\_denied (pruned after 7 days) |
+| `audit_log` | id, actor, actor roles, action, entity, entity\_id, diff (jsonb), note, request\_id, config\_version, identity\_version, at |
 
 The identity version is a Postgres sequence, bumped in the same transaction as each identity change. Every mutable entity table has a `version` column for `If-Match` (CP-14).
 
@@ -665,8 +667,8 @@ Exit (`make verify-m4`): with one of three endpoints failing, ≥ 99% of request
 
 ### M5 Control plane and auth · est. 3 weeks
 
-- [ ] Postgres schema; CRUD admin API, OpenAPI-first (`api/openapi.yaml`, oapi-codegen server stubs, `oasdiff` in CI), incl. tenants, access lists, key listing and endpoint drain (CP-01, CP-10, CP-14)
-- [ ] Migrations as a separate `controlplane migrate` step: compose runs it before the API, Helm as a pre-install/pre-upgrade Job; expand, then contract (CP-19)
+- [x] Postgres schema; CRUD admin API, OpenAPI-first (`api/openapi.yaml`, oapi-codegen server stubs, `oasdiff` in CI), incl. tenants, access lists, key listing and endpoint drain (CP-01, CP-10, CP-14)
+- [x] Migrations as a separate `controlplane migrate` step: compose runs it before the API, Helm as a pre-install/pre-upgrade Job; expand, then contract (CP-19)
 - [ ] YAML import and export through the API (CP-05)
 - [ ] Validate, publish with a change note and `If-Match` on the working-set revision, version, rollback (config only); upstream allow-list checked in API validation (CP-02–CP-04, SEC-06)
 - [ ] Identity changes applied immediately with their own version, audited, never rolled back, and sent on the Watch stream as separate messages (CP-20)
