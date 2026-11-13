@@ -31,9 +31,10 @@ import (
 // compose image, started once for the package; each test gets its own
 // database (ADR-0036).
 
+// Dev-only passwords of the testcontainer's roles.
 const (
-	pgOwnerPassword = "dev-only-not-secret"
-	pgAppPassword   = "app-dev-only-not-secret"
+	pgOwnerPassword = "dev-only-not-secret"     //nolint:gosec // G101: dev-only
+	pgAppPassword   = "app-dev-only-not-secret" //nolint:gosec // G101: dev-only
 )
 
 var pgServer struct {
@@ -151,7 +152,9 @@ func TestControlPlaneMigrate(t *testing.T) {
 	results := make([][]int64, 2)
 	errs := make([]error, 2)
 	for i := range 2 {
-		wg.Go(func() { results[i], errs[i] = store.Migrate(ctx, pgURL(t, "spillway", db2), pgOwnerPassword, pgAppPassword) })
+		wg.Go(func() {
+			results[i], errs[i] = store.Migrate(ctx, pgURL(t, "spillway", db2), pgOwnerPassword, pgAppPassword)
+		})
 	}
 	wg.Wait()
 	if errs[0] != nil || errs[1] != nil || len(results[0])+len(results[1]) != int(store.SchemaVersion()) {
@@ -251,7 +254,7 @@ func sqlcQueries(t *testing.T) map[string]string {
 	out := map[string]string{}
 	fset := token.NewFileSet()
 	for _, f := range files {
-		src, err := os.ReadFile(f)
+		src, err := os.ReadFile(f) //nolint:gosec // G304: a generated file of this repo
 		if err != nil {
 			t.Fatal(err)
 		}

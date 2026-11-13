@@ -58,7 +58,7 @@ func TestMigrationsExpandOnly(t *testing.T) {
 // TestScramVerifier checks the verifier against RFC 7677's construction, so
 // Postgres accepts the password it was made from (ADR-0040).
 func TestScramVerifier(t *testing.T) {
-	const password = "dev-only-not-secret"
+	const password = "dev-only-not-secret" //nolint:gosec // G101: a dev-only value
 	v, err := scramVerifier(password)
 	if err != nil {
 		t.Fatal(err)
