@@ -34,6 +34,10 @@ jobs:
         run: make lint-go
       - name: buf lint, generated code, buf breaking (CP-21)
         run: make lint-proto
+      - name: OpenAPI: generated code, oasdiff breaking (CP-10)
+        run: make lint-api
+      - name: sqlc generated code (CP-01)
+        run: make lint-sql
       - name: Unit tests and fuzz smoke
         run: make test FUZZTIME=10s
       - name: govulncheck
@@ -83,18 +87,19 @@ jobs:
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Build linux/amd64 and linux/arm64
         run: |
-          for target in gateway loadgen accuracy chaos; do
+          for target in gateway controlplane loadgen accuracy chaos; do
             docker buildx build --target "$target" --platform linux/amd64,linux/arm64 --build-arg VERSION=${{ github.sha }} .
           done
       - name: Runs as non-root with a read-only root filesystem (SEC-10)
         run: |
-          for target in gateway loadgen accuracy chaos; do
+          for target in gateway controlplane loadgen accuracy chaos; do
             docker buildx build --target "$target" --build-arg VERSION=${{ github.sha }} --load -t "spillway-${target}:ci" .
             user=$(docker image inspect "spillway-${target}:ci" --format '{{.Config.User}}')
             echo "$target user=$user"
             test "$user" = 65532:65532
           done
           docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges spillway-gateway:ci version
+          docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges spillway-controlplane:ci version
           docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges spillway-loadgen:ci -h
           docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges spillway-accuracy:ci -h
           docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges spillway-chaos:ci -h

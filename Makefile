@@ -11,7 +11,7 @@ FUZZTIME ?= 5s
 # Committed dev defaults first, then local overrides if present (ADR-0004).
 COMPOSE := docker compose --env-file .env.example $(if $(wildcard .env.local),--env-file .env.local)
 
-.PHONY: tools hooks certs dev test fuzz test-integration proto lint lint-go lint-web lint-proto bench verify-m0 verify-m0-stack verify-m1 verify-m1-reload verify-m2 verify-m2-shadow verify-m3 verify-m4 accuracy chaos-redis-outage chaos-redis-primary
+.PHONY: tools hooks certs dev test fuzz test-integration proto api sqlc lint lint-go lint-web lint-proto lint-api lint-sql bench verify-m0 verify-m0-stack verify-m1 verify-m1-reload verify-m2 verify-m2-shadow verify-m3 verify-m4 accuracy chaos-redis-outage chaos-redis-primary
 
 # Host-run processes and tests reach Redis Cluster nodes through this map
 # (ADR-0004). Set only here, never in compose or .env files.
@@ -94,7 +94,17 @@ test-integration: dev
 proto: tool-buf tool-protoc-gen-go
 	PATH="$(BIN):$$PATH" $(BIN)/buf generate
 
-lint: lint-go lint-web lint-proto
+# REST server stubs from api/openapi.yaml into internal/gen/apiv1 (CP-10,
+# ADR-0036); committed, like internal/gen/configpb.
+api: tool-oapi-codegen
+	$(BIN)/oapi-codegen -config api/oapi-codegen.yaml api/openapi.yaml
+
+# The control plane's sqlc queries into internal/controlplane/store/db
+# (ADR-0036); committed.
+sqlc: tool-sqlc
+	cd internal/controlplane/store && $(BIN)/sqlc generate
+
+lint: lint-go lint-web lint-proto lint-api lint-sql
 
 lint-go: tool-golangci-lint
 	$(BIN)/golangci-lint run ./...
@@ -109,10 +119,27 @@ lint-proto: tool-buf tool-protoc-gen-go
 	$(BIN)/buf lint
 	@tmp=$$(mktemp -d) && trap 'rm -rf "$$tmp"' EXIT && \
 	PATH="$(BIN):$$PATH" $(BIN)/buf generate -o "$$tmp" && \
-	diff -r "$$tmp/internal/gen" internal/gen || { echo "internal/gen is stale: run make proto"; exit 1; }
+	diff -r "$$tmp/internal/gen/configpb" internal/gen/configpb || { echo "internal/gen/configpb is stale: run make proto"; exit 1; }
 	@if git cat-file -e origin/main:buf.yaml 2>/dev/null; then \
 		$(BIN)/buf breaking --against '.git#ref=origin/main'; \
 	else echo "buf breaking: origin/main has no buf.yaml yet, skipped"; fi
+
+# internal/gen/apiv1 matches what api/openapi.yaml generates; no breaking
+# change against origin/main (oasdiff, CP-10), skipped while main has no spec.
+lint-api: tool-oapi-codegen tool-oasdiff
+	@cfg=$$(mktemp) && out=$$(mktemp) && trap 'rm -f "$$cfg" "$$out"' EXIT && \
+	sed "s#^output: .*#output: $$out#" api/oapi-codegen.yaml > "$$cfg" && \
+	$(BIN)/oapi-codegen -config "$$cfg" api/openapi.yaml && \
+	cmp -s "$$out" internal/gen/apiv1/apiv1.gen.go || { echo "internal/gen/apiv1 is stale: run make api"; exit 1; }
+	@if git cat-file -e origin/main:api/openapi.yaml 2>/dev/null; then \
+		base=$$(mktemp) && trap 'rm -f "$$base"' EXIT && git show origin/main:api/openapi.yaml > "$$base" && \
+		$(BIN)/oasdiff breaking --fail-on ERR "$$base" api/openapi.yaml; \
+	else echo "oasdiff breaking: origin/main has no api/openapi.yaml yet, skipped"; fi
+
+# internal/controlplane/store/db matches what the queries and migrations
+# generate.
+lint-sql: tool-sqlc
+	@cd internal/controlplane/store && $(BIN)/sqlc diff >/dev/null || { echo "internal/controlplane/store/db is stale: run make sqlc"; exit 1; }
 
 bench:
 	go test -run '^$$' -bench . -benchmem ./...

@@ -1,0 +1,11 @@
+# oapi-codegen v2.8.2 (make tools): api/openapi.yaml into internal/gen/apiv1
+# (CP-10, ADR-0036): models, a net/http server on Go's ServeMux, the strict
+# server interface and the embedded spec. make api regenerates it; make
+# lint-api checks it is up to date.
+package: apiv1
+output: internal/gen/apiv1/apiv1.gen.go
+generate:
+  models: true
+  std-http-server: true
+  strict-server: true
+  embedded-spec: true
