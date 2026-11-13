@@ -924,6 +924,146 @@ paths:
         '412': { $ref: '#/components/responses/PreconditionFailed' }
         '428': { $ref: '#/components/responses/PreconditionRequired' }
         default: { $ref: '#/components/responses/Error' }
+  /config/validate:
+    post:
+      operationId: validateConfig
+      tags: [config]
+      summary: >-
+        Validate the config working set as a publish would (CP-03, SEC-06) and
+        preview it against the latest published version (UI-02). Validation
+        errors are data: the answer is 200 either way, and its ETag is the
+        working-set revision that publish's If-Match carries (CP-02)
+      x-spillway-roles: [viewer, editor, publisher, key-admin, admin]
+      responses:
+        '200':
+          description: The validation result and the preview
+          headers:
+            ETag: { $ref: '#/components/headers/RevisionETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConfigValidation' }
+        default: { $ref: '#/components/responses/Error' }
+  /config/publish:
+    post:
+      operationId: publishConfig
+      tags: [config]
+      summary: >-
+        Publish the config working set as a new config version with a change
+        note, if it is still at the revision the preview showed (CP-02); the
+        working set must pass validation (CP-03)
+      x-spillway-roles: [publisher, admin]
+      parameters:
+        - $ref: '#/components/parameters/RevisionIfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ChangeNote' }
+      responses:
+        '200':
+          description: The new config version
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConfigVersion' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409':
+          description: Nothing to publish, the working set has not changed since the latest version (conflict)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '412': { $ref: '#/components/responses/RevisionPreconditionFailed' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/ConfigValidationFailed' }
+        '428': { $ref: '#/components/responses/PreconditionRequired' }
+        default: { $ref: '#/components/responses/Error' }
+  /config/versions:
+    get:
+      operationId: listConfigVersions
+      tags: [config]
+      summary: List published config versions, newest first (CP-02)
+      x-spillway-roles: [viewer, editor, publisher, key-admin, admin]
+      parameters:
+        - $ref: '#/components/parameters/PageLimit'
+        - $ref: '#/components/parameters/PageCursor'
+      responses:
+        '200':
+          description: A page of config versions, without their snapshots
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConfigVersionList' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        default: { $ref: '#/components/responses/Error' }
+  /config/versions/{v}:
+    parameters:
+      - $ref: '#/components/parameters/ConfigVersionNumber'
+    get:
+      operationId: getConfigVersion
+      tags: [config]
+      summary: Read a published config version with its snapshot (CP-02)
+      x-spillway-roles: [viewer, editor, publisher, key-admin, admin]
+      responses:
+        '200':
+          description: The config version
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConfigVersion' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        default: { $ref: '#/components/responses/Error' }
+  /config/versions/{v}/diff:
+    parameters:
+      - $ref: '#/components/parameters/ConfigVersionNumber'
+    get:
+      operationId: diffConfigVersion
+      tags: [config]
+      summary: The changes from another published version to this one (UI-06)
+      x-spillway-roles: [viewer, editor, publisher, key-admin, admin]
+      parameters:
+        - name: against
+          in: query
+          description: The version to compare with; default v-1. 0 is the empty config before the first version.
+          schema: { type: integer, format: int64, minimum: 0 }
+      responses:
+        '200':
+          description: The changes and a unified diff
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConfigDiff' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        default: { $ref: '#/components/responses/Error' }
+  /config/versions/{v}/rollback:
+    parameters:
+      - $ref: '#/components/parameters/ConfigVersionNumber'
+    post:
+      operationId: rollbackConfig
+      tags: [config]
+      summary: >-
+        Publish a copy of an earlier config version as a new version and reset
+        the config working set to it (CP-04); identity is never rolled back
+        (CP-20), and a rollback that identity still refers past is refused
+      x-spillway-roles: [publisher, admin]
+      parameters:
+        - $ref: '#/components/parameters/RevisionIfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ChangeNote' }
+      responses:
+        '200':
+          description: The new config version
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConfigVersion' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '412': { $ref: '#/components/responses/RevisionPreconditionFailed' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/ConfigValidationFailed' }
+        '428': { $ref: '#/components/responses/PreconditionRequired' }
+        default: { $ref: '#/components/responses/Error' }
   /audit:
     get:
       operationId: listAudit
@@ -1025,12 +1165,30 @@ components:
       required: true
       description: The entity's ETag, as its GET answered it (CP-14). Missing is 428; any other value than the current one is 412.
       schema: { type: string }
+    RevisionIfMatch:
+      name: If-Match
+      in: header
+      required: true
+      description: >-
+        The config working-set revision as a strong ETag, "<revision>", as
+        validate answered it (CP-02). Missing is 428; any other value than
+        the current revision is 412.
+      schema: { type: string }
+    ConfigVersionNumber:
+      name: v
+      in: path
+      required: true
+      description: The config version.
+      schema: { type: integer, format: int64 }
   headers:
     ETag:
       description: The entity's version as a strong ETag, "<version>" (CP-14).
       schema: { type: string }
     Location:
       description: The created entity's URL.
+      schema: { type: string }
+    RevisionETag:
+      description: The config working-set revision as a strong ETag, "<revision>" (CP-02).
       schema: { type: string }
   responses:
     BadRequest:
@@ -1070,6 +1228,21 @@ components:
           schema: { $ref: '#/components/schemas/Error' }
     PreconditionRequired:
       description: If-Match is missing (precondition_required)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    RevisionPreconditionFailed:
+      description: >-
+        If-Match is not the current working-set revision, which details
+        carries: the working set changed since the preview (precondition_failed)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    ConfigValidationFailed:
+      description: >-
+        The note is missing or too long, the config fails validation (CP-03,
+        SEC-06), with one detail per error, or a rollback's snapshot cannot be
+        read by this schema (validation_failed)
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
@@ -1378,6 +1551,83 @@ components:
         version: { type: integer, format: int64, readOnly: true }
         created_at: { type: string, format: date-time, readOnly: true }
         updated_at: { type: string, format: date-time, readOnly: true }
+
+    # Publish, versions and rollback (CP-02 - CP-04, ADR-0037).
+    ChangeNote:
+      type: object
+      additionalProperties: false
+      required: [note]
+      properties:
+        note: { type: string, minLength: 1, maxLength: 2000, description: 'What the change is for; stored with the version and in the audit log (UI-02).' }
+    ConfigVersion:
+      type: object
+      additionalProperties: false
+      required: [version, published_at, published_by, note, kind, rollback_of, working_set_revision, schema_version]
+      properties:
+        version: { type: integer, format: int64 }
+        published_at: { type: string, format: date-time }
+        published_by: { type: string, description: The publisher's token sub. }
+        note: { type: string }
+        kind: { type: string, enum: [publish, rollback] }
+        rollback_of: { type: integer, format: int64, nullable: true, description: 'For a rollback, the version it copies.' }
+        working_set_revision: { type: integer, format: int64, description: The working-set revision the version was published from. }
+        schema_version: { $ref: '#/components/schemas/SchemaVersion' }
+        snapshot:
+          type: object
+          additionalProperties: true
+          description: >-
+            Only when one version is read: the published config, config.proto's
+            Config message with proto field names (CP-21), its version and every
+            entity's id included; 64-bit integers are JSON numbers.
+    SchemaVersion:
+      type: object
+      additionalProperties: false
+      required: [major, minor]
+      description: The snapshot schema version (CP-18).
+      properties:
+        major: { type: integer, format: int32 }
+        minor: { type: integer, format: int32 }
+    ConfigVersionList:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/ConfigVersion' }
+        next_cursor: { type: string, nullable: true }
+    ConfigChange:
+      type: object
+      required: [entity, id, name, change]
+      description: A config entity added, removed or changed; entities are matched by id, so a rename is a change.
+      properties:
+        entity: { type: string, enum: [upstream, route, policy, plan] }
+        id: { type: integer, format: int64 }
+        name: { type: string, description: The name after the change; before it for a removal. }
+        change: { type: string, enum: [added, removed, changed] }
+    ConfigValidation:
+      type: object
+      required: [working_set_revision, base_version, valid, errors, changes, diff]
+      properties:
+        working_set_revision: { type: integer, format: int64, description: What publish's If-Match carries. }
+        base_version: { type: integer, format: int64, nullable: true, description: The latest published version; null before the first. }
+        valid: { type: boolean }
+        errors:
+          type: array
+          items: { $ref: '#/components/schemas/ErrorDetail' }
+        changes:
+          type: array
+          items: { $ref: '#/components/schemas/ConfigChange' }
+        diff: { type: string, description: A unified diff of the canonical YAML from base_version to the working set; empty when nothing changed. }
+    ConfigDiff:
+      type: object
+      required: [from_version, to_version, changes, diff]
+      properties:
+        from_version: { type: integer, format: int64 }
+        to_version: { type: integer, format: int64 }
+        changes:
+          type: array
+          items: { $ref: '#/components/schemas/ConfigChange' }
+        diff: { type: string, description: A unified diff of the canonical YAML of the two versions. }
 
     # The audit log (CP-13, ADR-0040).
     AuditRecord:
