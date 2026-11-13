@@ -10,7 +10,11 @@
 // decision when it is a 2xx without it. It passes when every request for a
 // key on a surviving primary is a Redis decision, the killed primary's keys
 // get failure-mode decisions only between the kill and their first Redis
-// decision after it, and that failover window is at most -max-window.
+// decision after it, and that failover window is at most -max-window. The
+// killed primary's keys' failure-mode decisions outside the window are
+// excused when they are one host-stall burst (ADR-0034): every one carries
+// Spillway-Redis-Error: timeout, and they all fall within -max-burst, from
+// the earliest one's due time to the latest one's answer.
 // Docker records the exit up to about a millisecond after the process died,
 // so a failure-mode decision is early only when it came before the sender
 // asked for the kill. It prints its report as JSON on stdout and one
@@ -53,6 +57,7 @@ import (
 const (
 	keyHeader          = "X-Chaos-Key"            // the policy's key_template is {header:X-Chaos-Key}
 	decisionTimeHeader = "Spillway-Decision-Time" // dev mode only (ADR-0021)
+	redisErrorHeader   = "Spillway-Redis-Error"   // dev mode only (ADR-0034)
 	maxInFlight        = 1000                     // a request due while this many are in flight is dropped
 	// The policy of test/chaos/primary.yaml, which names its Redis keys.
 	policyName   = "chaos-primary"
@@ -81,6 +86,7 @@ type options struct {
 	duration      time.Duration
 	killAfter     time.Duration
 	maxWindow     time.Duration
+	maxBurst      time.Duration
 	configVersion int
 	timeout       time.Duration
 	// shards reads the cluster's shards; from -redis, or set by tests.
@@ -100,6 +106,7 @@ func parseFlags(args []string, stderr io.Writer) (options, error) {
 	fs.DurationVar(&o.duration, "duration", 40*time.Second, "length of the run")
 	fs.DurationVar(&o.killAfter, "kill-after", 10*time.Second, "when to ask for the kill, from the start of the run")
 	fs.DurationVar(&o.maxWindow, "max-window", 10*time.Second, "longest failover window that passes")
+	fs.DurationVar(&o.maxBurst, "max-burst", time.Second, "longest burst of Redis timeouts outside the window that is excused (ADR-0034)")
 	fs.IntVar(&o.configVersion, "config-version", 42, "version of test/chaos/primary.yaml, which the gateway must run first")
 	fs.DurationVar(&o.timeout, "timeout", 2*time.Second, "per-request timeout")
 	if err := fs.Parse(args); err != nil {
@@ -117,6 +124,8 @@ func parseFlags(args []string, stderr io.Writer) (options, error) {
 		err = errors.New("-kill-after: must be positive and shorter than -duration")
 	case o.maxWindow <= 0:
 		err = errors.New("-max-window: must be positive")
+	case o.maxBurst <= 0:
+		err = errors.New("-max-burst: must be positive")
 	case o.timeout <= 0:
 		err = errors.New("-timeout: must be positive")
 	}
@@ -178,9 +187,9 @@ func runWith(ctx context.Context, o options, stdin io.Reader, stdout, stderr io.
 	if err != nil {
 		return fail(err)
 	}
-	r := analyze(keys, arrivals, out, time.UnixMicro(requested.Load()), kill, o.maxWindow)
+	r := analyze(keys, arrivals, out, time.UnixMicro(requested.Load()), kill, o.maxWindow, o.maxBurst)
 	r.KilledNode, r.KillTime, r.Hardware = shards[killed].primary, kill.UTC().Format(time.RFC3339Nano), hardware.Read()
-	for _, l := range r.lines(o.maxWindow) {
+	for _, l := range r.lines(o.maxWindow, o.maxBurst) {
 		_, _ = fmt.Fprintln(stderr, l)
 	}
 	enc := json.NewEncoder(stdout)
@@ -288,7 +297,8 @@ type outcome struct {
 	due, done  time.Time
 	status     int // 0: no answer
 	decided    bool
-	decisionUS int64 // Spillway-Decision-Time, if decided
+	decisionUS int64  // Spillway-Decision-Time, if decided
+	redisError string // Spillway-Redis-Error: the failed Redis calls' kinds
 }
 
 // drive sends arrivals from 100 ms from now, calls kill at killAfter from
@@ -351,7 +361,7 @@ func (c *sender) send(ctx context.Context, key string, o *outcome) {
 	if _, err := io.Copy(io.Discard, resp.Body); err != nil {
 		return
 	}
-	o.status, o.done = resp.StatusCode, time.Now()
+	o.status, o.done, o.redisError = resp.StatusCode, time.Now(), resp.Header.Get(redisErrorHeader)
 	if v := resp.Header.Get(decisionTimeHeader); v != "" {
 		o.decisionUS, err = strconv.ParseInt(v, 10, 64)
 		o.decided = err == nil
@@ -449,6 +459,8 @@ type report struct {
 	// them, with times from the kill.
 	OutsideWindow  int64    `json:"failure_mode_outside_window"`
 	OutsideSamples []string `json:"failure_mode_outside_window_samples,omitempty"`
+	// When there are any, whether they are one excused burst (ADR-0034).
+	OutsideBurst *burst `json:"outside_window_burst,omitempty"`
 	// The first few failure-mode decisions for keys on the surviving
 	// primaries, with times from the kill.
 	SurvivingSamples []string `json:"surviving_failure_mode_samples,omitempty"`
@@ -482,6 +494,19 @@ type classCounts struct {
 	Other       int64 `json:"other"`
 }
 
+// burst is the killed primary's keys' failure-mode decisions outside their
+// window, from the earliest one's due time to the latest one's answer, in
+// ms from the kill; Excused when they all came from Redis timeouts and span
+// at most -max-burst (ADR-0034).
+type burst struct {
+	Count    int64   `json:"count"`
+	FromMS   float64 `json:"from_ms"`
+	ToMS     float64 `json:"to_ms"`
+	SpanMS   float64 `json:"span_ms"`
+	Timeouts bool    `json:"all_timeouts"`
+	Excused  bool    `json:"excused"`
+}
+
 type windowRange struct {
 	Min float64 `json:"min"`
 	Max float64 `json:"max"`
@@ -489,7 +514,7 @@ type windowRange struct {
 
 // analyze checks the outcomes of a run whose kill was requested at
 // requested and recorded at kill.
-func analyze(keys []key, arrivals []arrival, out []outcome, requested, kill time.Time, maxWindow time.Duration) report {
+func analyze(keys []key, arrivals []arrival, out []outcome, requested, kill time.Time, maxWindow, maxBurst time.Duration) report {
 	var r report
 	killUS := kill.UnixMicro()
 	// end[k]: the decision time of key k's first Redis decision after the
@@ -526,6 +551,15 @@ func analyze(keys []key, arrivals []arrival, out []outcome, requested, kill time
 			}
 			if keys[k].killed && (o.done.Before(requested) || end[k] != 0 && o.due.UnixMicro() > end[k]) {
 				r.OutsideWindow++
+				from, to := float64(o.due.UnixMicro()-killUS)/1000, float64(o.done.UnixMicro()-killUS)/1000
+				if b := r.OutsideBurst; b == nil {
+					r.OutsideBurst = &burst{FromMS: from, ToMS: to, Timeouts: true}
+				} else {
+					b.FromMS, b.ToMS = min(b.FromMS, from), max(b.ToMS, to)
+				}
+				b := r.OutsideBurst
+				b.Count++
+				b.Timeouts = b.Timeouts && allTimeouts(o.redisError)
 				if len(r.OutsideSamples) < 5 {
 					r.OutsideSamples = append(r.OutsideSamples, fmt.Sprintf("key %s sent at %+.1f ms, answered at %+.1f ms, window end %+.1f ms",
 						keys[k].name, float64(o.due.UnixMicro()-killUS)/1000, float64(o.done.UnixMicro()-killUS)/1000, float64(end[k]-killUS)/1000))
@@ -550,16 +584,40 @@ func analyze(keys []key, arrivals []arrival, out []outcome, requested, kill time
 	if len(windows) > 0 {
 		r.WindowMS = windowRange{slices.Min(windows), slices.Max(windows)}
 	}
+	if b := r.OutsideBurst; b != nil {
+		b.SpanMS = b.ToMS - b.FromMS
+		b.Excused = b.Timeouts && b.SpanMS <= float64(maxBurst.Microseconds())/1000
+	}
 	r.Pass = r.Requests.Sent*100 >= r.Requests.Scheduled*99 &&
 		r.Surviving.FailureMode+r.Surviving.Other == 0 &&
-		r.Killed.Other == 0 && r.OutsideWindow == 0 &&
+		r.Killed.Other == 0 && r.inWindow() &&
 		r.Keys.Killed > 0 && r.Recovered == r.Keys.Killed && r.WindowMS.Max <= float64(maxWindow.Milliseconds())
 	return r
 }
 
+// allTimeouts reports whether a Spillway-Redis-Error value names only
+// timeouts, and at least one.
+func allTimeouts(v string) bool {
+	if v == "" {
+		return false
+	}
+	for kind := range strings.SplitSeq(v, ",") {
+		if kind != "timeout" {
+			return false
+		}
+	}
+	return true
+}
+
+// inWindow reports whether the killed primary's keys got failure-mode
+// decisions only in their window, or outside it only in one excused burst.
+func (r report) inWindow() bool {
+	return r.OutsideWindow == 0 || r.OutsideBurst != nil && r.OutsideBurst.Excused
+}
+
 // lines are r's checks, one PASS/FAIL line each, in the verify scripts'
 // format.
-func (r report) lines(maxWindow time.Duration) []string {
+func (r report) lines(maxWindow, maxBurst time.Duration) []string {
 	line := func(ok bool, check, measured string) string {
 		verdict := "FAIL"
 		if ok {
@@ -576,10 +634,24 @@ func (r report) lines(maxWindow time.Duration) []string {
 			fmt.Sprintf("%d/%d sent", r.Requests.Sent, r.Requests.Scheduled)),
 		line(r.Surviving.FailureMode+r.Surviving.Other == 0, "surviving primaries' keys: Redis decisions",
 			fmt.Sprintf("%d keys: %d Redis decisions, %d failure-mode, %d other", r.Keys.Surviving, r.Surviving.Redis, r.Surviving.FailureMode, r.Surviving.Other)),
-		line(r.Killed.Other == 0 && r.OutsideWindow == 0, "killed primary: failure modes only in window",
-			fmt.Sprintf("%d keys: %d Redis decisions, %d failure-mode (first %+.1f ms from the kill, %d outside the window), %d other",
-				r.Keys.Killed, r.Killed.Redis, r.Killed.FailureMode, r.FirstFailureModeMS, r.OutsideWindow, r.Killed.Other)),
+		line(r.Killed.Other == 0 && r.inWindow(), "killed primary: failure modes only in window",
+			fmt.Sprintf("%d keys: %d Redis decisions, %d failure-mode (first %+.1f ms from the kill, %d outside the window%s), %d other",
+				r.Keys.Killed, r.Killed.Redis, r.Killed.FailureMode, r.FirstFailureModeMS, r.OutsideWindow, r.OutsideBurst.describe(maxBurst), r.Killed.Other)),
 		line(r.Keys.Killed > 0 && r.Recovered == r.Keys.Killed && r.WindowMS.Max <= float64(maxWindow.Milliseconds()),
 			fmt.Sprintf("failover window <= %s", maxWindow), window),
 	}
+}
+
+// describe is the killed-primary line's note on the decisions outside the
+// window: "" for none.
+func (b *burst) describe(maxBurst time.Duration) string {
+	switch {
+	case b == nil:
+		return ""
+	case b.Excused:
+		return fmt.Sprintf(": in one burst of timeouts, %+.1f – %+.1f ms from the kill, %.1f ms, excused (ADR-0034)", b.FromMS, b.ToMS, b.SpanMS)
+	case !b.Timeouts:
+		return ": not excused: not all Redis timeouts (ADR-0034)"
+	}
+	return fmt.Sprintf(": not excused: %+.1f – %+.1f ms from the kill, %.1f ms > %s (ADR-0034)", b.FromMS, b.ToMS, b.SpanMS, maxBurst)
 }

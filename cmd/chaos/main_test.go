@@ -27,7 +27,7 @@ func TestParseFlags(t *testing.T) {
 		t.Fatal(err)
 	}
 	if o.url != "http://gateway-1:8000/anything/chaos" || o.metrics != "http://gateway-1:8001/metrics" || o.keys != 30 || o.rate != 20 ||
-		o.duration != 40*time.Second || o.killAfter != 10*time.Second || o.maxWindow != 10*time.Second || o.configVersion != 42 {
+		o.duration != 40*time.Second || o.killAfter != 10*time.Second || o.maxWindow != 10*time.Second || o.maxBurst != time.Second || o.configVersion != 42 {
 		t.Errorf("options = %+v", o)
 	}
 	for _, tt := range []struct {
@@ -39,6 +39,7 @@ func TestParseFlags(t *testing.T) {
 		{[]string{"-kill-after", "0s"}, "-kill-after"},
 		{[]string{"-kill-after", "40s"}, "-kill-after"},
 		{[]string{"-max-window", "0s"}, "-max-window"},
+		{[]string{"-max-burst", "0s"}, "-max-burst"},
 		{[]string{"-timeout", "0s"}, "-timeout"},
 		{[]string{"extra"}, "unexpected arguments"},
 	} {
@@ -131,6 +132,12 @@ func TestAnalyze(t *testing.T) {
 	f := func(k int, ms int64) step {
 		return step{arrival{key: k}, outcome{sent: true, due: at(ms), done: at(ms + 5), status: 200}}
 	}
+	// ft is f with the gateway's Spillway-Redis-Error, kinds.
+	ft := func(k int, ms int64, kinds string) step {
+		s := f(k, ms)
+		s.o.redisError = kinds
+		return s
+	}
 	for _, tt := range []struct {
 		name   string
 		steps  []step
@@ -144,6 +151,14 @@ func TestAnalyze(t *testing.T) {
 		{"failure mode before the recorded exit", []step{r(0, -100), f(1, -8), r(1, 4200)}, true, 4200}, // answered at -3 ms: Docker records the exit late
 		{"never recovers", []step{r(0, -100), r(1, -100), f(1, 100), f(1, 20000)}, false, 0},
 		{"window too long", []step{r(0, -100), r(1, -100), f(1, 100), r(1, 10500)}, false, 10500},
+		// One burst of Redis timeouts outside the window is excused (ADR-0034).
+		{"timeout before the kill request", []step{r(0, -100), ft(1, -5000, "timeout"), r(1, 4200)}, true, 4200},
+		{"burst after the window", []step{r(0, -100), f(1, 100), r(1, 4200), ft(1, 9000, "timeout"), ft(1, 9500, "timeout,timeout"), ft(1, 9995, "timeout")}, true, 4200},
+		{"two bursts", []step{r(0, -100), ft(1, -5000, "timeout"), r(1, 4200), ft(1, 9000, "timeout")}, false, 4200},
+		{"burst too long", []step{r(0, -100), r(1, 4200), ft(1, 9000, "timeout"), ft(1, 9996, "timeout")}, false, 4200},
+		{"conn error outside the window", []step{r(0, -100), r(1, 4200), ft(1, 9000, "conn")}, false, 4200},
+		{"timeout and conn", []step{r(0, -100), r(1, 4200), ft(1, 9000, "timeout,conn")}, false, 4200},
+		{"burst on a surviving key", []step{r(0, -100), ft(0, -5000, "timeout"), r(1, 4200)}, false, 4200},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			var a []arrival
@@ -151,26 +166,29 @@ func TestAnalyze(t *testing.T) {
 			for _, s := range tt.steps {
 				a, o = append(a, s.a), append(o, s.o)
 			}
-			rep := analyze(keys, a, o, at(-300), kill, 10*time.Second)
+			rep := analyze(keys, a, o, at(-300), kill, 10*time.Second, time.Second)
 			if rep.Pass != tt.pass || rep.WindowMS.Max != tt.window {
 				t.Errorf("pass %v, window %v ms; want %v, %v ms; report %+v", rep.Pass, rep.WindowMS.Max, tt.pass, tt.window, rep)
 			}
 			if int64(len(rep.SurvivingSamples)) != rep.Surviving.FailureMode {
 				t.Errorf("%d surviving samples for %d failure-mode decisions: %q", len(rep.SurvivingSamples), rep.Surviving.FailureMode, rep.SurvivingSamples)
 			}
-			lines := rep.lines(10 * time.Second)
+			lines := rep.lines(10*time.Second, time.Second)
 			if failed := slices.ContainsFunc(lines, func(l string) bool { return strings.HasPrefix(l, "FAIL") }); failed == tt.pass {
 				t.Errorf("lines disagree with pass %v:\n%s", tt.pass, strings.Join(lines, "\n"))
+			}
+			if excused := strings.Contains(lines[2], ", excused (ADR-0034)"); excused != (tt.pass && rep.OutsideWindow > 0) {
+				t.Errorf("killed-primary line says excused %v, want %v: %s", excused, tt.pass && rep.OutsideWindow > 0, lines[2])
 			}
 		})
 	}
 	// A request answered with neither a decision nor a 2xx.
-	rep := analyze(keys, []arrival{{key: 1}, {key: 1}}, []outcome{{sent: true, status: 502}, {sent: true, done: at(4200), status: 200, decided: true, decisionUS: us(4200)}}, at(-300), kill, 10*time.Second)
+	rep := analyze(keys, []arrival{{key: 1}, {key: 1}}, []outcome{{sent: true, status: 502}, {sent: true, done: at(4200), status: 200, decided: true, decisionUS: us(4200)}}, at(-300), kill, 10*time.Second, time.Second)
 	if rep.Pass || rep.Killed.Other != 1 {
 		t.Errorf("an unanswered request passed: %+v", rep)
 	}
 	// Too many dropped.
-	rep = analyze(keys, []arrival{{key: 0}, {key: 1}}, []outcome{{}, {sent: true, status: 200, decided: true, decisionUS: us(100)}}, at(-300), kill, 10*time.Second)
+	rep = analyze(keys, []arrival{{key: 0}, {key: 1}}, []outcome{{}, {sent: true, status: 200, decided: true, decisionUS: us(100)}}, at(-300), kill, 10*time.Second, time.Second)
 	if rep.Pass || rep.Requests.Dropped != 1 {
 		t.Errorf("a run that sent half its schedule passed: %+v", rep)
 	}
