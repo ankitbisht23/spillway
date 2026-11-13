@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
+	"github.com/ankitbisht23/spillway/internal/auth"
 	"github.com/ankitbisht23/spillway/internal/proxy"
 )
 
@@ -18,6 +20,12 @@ type settings struct {
 	httpAddr         string          // SPILLWAY_CP_HTTP_ADDR: REST listener, default :8080
 	adminAddr        string          // SPILLWAY_CP_ADMIN_ADDR: /metrics, pprof, /healthz, /readyz, default 127.0.0.1:8081 (SEC-02)
 	allow            proxy.Allowlist // SPILLWAY_CP_ALLOWED_NETWORKS: upstream allow-list, the gateways' (SEC-06)
+
+	// Bearer tokens (CP-11, ADR-0040)
+	oidcIssuer   string // SPILLWAY_CP_OIDC_ISSUER: the browser-facing issuer every token's iss must equal
+	oidcJWKSURL  string // SPILLWAY_CP_OIDC_JWKS_URL: where the issuer's keys are fetched (in-network in dev, ADR-0004)
+	oidcAudience string // SPILLWAY_CP_OIDC_AUDIENCE: a value every token's aud must contain, default spillway-controlplane
+	devMode      bool   // SPILLWAY_CP_DEV_MODE: accept http:// issuer and JWKS URLs (SEC-04), default false
 }
 
 // migrateSettings are what `controlplane migrate` needs (CP-19).
@@ -48,6 +56,18 @@ func loadSettings(getenv func(string) string) (settings, error) {
 	}
 	if s.allow, err = proxy.ParseAllowlist(nets); err != nil {
 		return s, fmt.Errorf("SPILLWAY_CP_ALLOWED_NETWORKS: %w", err)
+	}
+	if v := getenv("SPILLWAY_CP_DEV_MODE"); v != "" {
+		if s.devMode, err = strconv.ParseBool(v); err != nil {
+			return s, fmt.Errorf("SPILLWAY_CP_DEV_MODE: %q is not true or false", v)
+		}
+	}
+	s.oidcIssuer, s.oidcJWKSURL = getenv("SPILLWAY_CP_OIDC_ISSUER"), getenv("SPILLWAY_CP_OIDC_JWKS_URL")
+	s.oidcAudience = cmp.Or(getenv("SPILLWAY_CP_OIDC_AUDIENCE"), "spillway-controlplane")
+	for name, u := range map[string]string{"SPILLWAY_CP_OIDC_ISSUER": s.oidcIssuer, "SPILLWAY_CP_OIDC_JWKS_URL": s.oidcJWKSURL} {
+		if err := auth.CheckURL(u, s.devMode); err != nil {
+			return s, fmt.Errorf("%s: %w", name, err)
+		}
 	}
 	return s, nil
 }

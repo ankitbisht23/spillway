@@ -44,7 +44,8 @@ func (f fakeResolver) LookupNetIP(_ context.Context, _, host string) ([]netip.Ad
 
 // newHandler is the API without a store: a request that reaches the store
 // panics, which handler turns into a 599 answer, so these tests see every
-// answer the API gives before it touches Postgres.
+// answer the API gives before it touches Postgres. Callers authenticate
+// with fakeAuth's tokens.
 func newHandler(t *testing.T, log io.Writer) http.Handler {
 	t.Helper()
 	allowed, err := proxy.ParseAllowlist("172.29.0.0/16")
@@ -56,7 +57,7 @@ func newHandler(t *testing.T, log io.Writer) http.Handler {
 		"metadata":   {netip.MustParseAddr("172.29.0.11"), netip.MustParseAddr("169.254.169.254")},
 		"outside":    {netip.MustParseAddr("10.1.2.3")},
 	}
-	h := New(nil, allowed, res, slog.New(slog.NewJSONHandler(log, nil))).Handler()
+	h := New(nil, allowed, res, fakeAuth{}, slog.New(slog.NewJSONHandler(log, nil))).Handler()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if recover() != nil {
@@ -73,14 +74,20 @@ type answer struct {
 	err    apiv1.Error
 }
 
+// do sends a request as admin, unless header sets Authorization (an empty
+// value sends none).
 func do(t *testing.T, h http.Handler, method, path, body string, header ...string) answer {
 	t.Helper()
 	req := httptest.NewRequestWithContext(t.Context(), method, path, strings.NewReader(body))
 	if body != "" {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	req.Header.Set("Authorization", "Bearer "+token("admin"))
 	for i := 0; i+1 < len(header); i += 2 {
 		req.Header.Set(header[i], header[i+1])
+		if header[i+1] == "" {
+			req.Header.Del(header[i])
+		}
 	}
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)

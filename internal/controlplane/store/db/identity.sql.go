@@ -29,6 +29,46 @@ func (q *Queries) BumpIdentityVersion(ctx context.Context) (int64, error) {
 	return version, err
 }
 
+const consumerDependents = `-- name: ConsumerDependents :many
+SELECT 'api_key'::text AS kind, k.id FROM api_keys k WHERE k.consumer_id = $1::bigint
+UNION ALL
+SELECT 'override'::text, o.id FROM overrides o WHERE o.consumer_id = $1::bigint
+UNION ALL
+SELECT 'access_list'::text, a.id FROM access_lists a WHERE a.consumer_id = $1::bigint
+UNION ALL
+SELECT 'access_list'::text, a.id FROM access_lists a
+WHERE a.api_key_id = ANY(ARRAY(SELECT k.id FROM api_keys k WHERE k.consumer_id = $1::bigint))
+ORDER BY 1, 2
+`
+
+type ConsumerDependentsRow struct {
+	Kind string
+	ID   int64
+}
+
+// What deleting a consumer cascades to, for its audit record (ADR-0040):
+// api_keys_consumer_id, overrides_consumer_policy, and access_lists_consumer
+// and access_lists_key (skip scans past their leading action column).
+func (q *Queries) ConsumerDependents(ctx context.Context, consumerID int64) ([]ConsumerDependentsRow, error) {
+	rows, err := q.db.Query(ctx, consumerDependents, consumerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ConsumerDependentsRow
+	for rows.Next() {
+		var i ConsumerDependentsRow
+		if err := rows.Scan(&i.Kind, &i.ID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const createAccessList = `-- name: CreateAccessList :one
 INSERT INTO access_lists (action, subject_type, api_key_id, consumer_id, cidr, note, version)
 VALUES ($1, $2, $3, $4, $5, $6, $7)

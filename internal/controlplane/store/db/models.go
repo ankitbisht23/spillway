@@ -35,6 +35,22 @@ type ApiKey struct {
 	UpdatedAt   time.Time
 }
 
+type AuditLog struct {
+	ID              int64
+	At              time.Time
+	ActorSub        string
+	ActorName       string
+	ActorRoles      []string
+	Action          string
+	Entity          string
+	EntityID        *string
+	Diff            []byte
+	Note            *string
+	RequestID       string
+	ConfigVersion   *int64
+	IdentityVersion *int64
+}
+
 type ConfigVersion struct {
 	Version            int64
 	PublishedAt        time.Time

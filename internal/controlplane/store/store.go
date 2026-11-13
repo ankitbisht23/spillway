@@ -2,7 +2,7 @@
 // the embedded goose migrations, the sqlc queries in db, and the
 // transactions every change runs in. Config edits run under the working-set
 // revision's row lock and identity changes under the identity version's
-// (ADR-0037), each in one transaction.
+// (ADR-0037), each in one transaction with its audit record (CP-13).
 package store
 
 import (
@@ -135,8 +135,8 @@ func (s *Store) inTx(ctx context.Context, fn func(q *db.Queries) error) error {
 
 // inConfigTx runs a config edit (ADR-0037): it bumps the working-set
 // revision first, which serializes config writers, and fn writes rows with
-// that revision as their version. Every config edit goes through here, and
-// so will its audit record (ADR-0040).
+// that revision as their version and the edit's audit record (ADR-0040).
+// Every config edit goes through here.
 func (s *Store) inConfigTx(ctx context.Context, fn func(q *db.Queries, revision int64) error) error {
 	return s.inTx(ctx, func(q *db.Queries) error {
 		rev, err := q.BumpRevision(ctx, nil)
@@ -149,9 +149,9 @@ func (s *Store) inConfigTx(ctx context.Context, fn func(q *db.Queries, revision 
 
 // inIdentityTx runs an identity change (CP-20, ADR-0037): it bumps the
 // identity version first, whose row lock orders identity changes so that
-// versions follow commit order, and fn writes rows with that version. Every
-// identity change goes through here, and so will its audit record and
-// NOTIFY (ADR-0038, ADR-0040).
+// versions follow commit order, and fn writes rows with that version and the
+// change's audit record (ADR-0040). Every identity change goes through here,
+// and so will its NOTIFY (ADR-0038).
 func (s *Store) inIdentityTx(ctx context.Context, fn func(q *db.Queries, version int64) error) error {
 	return s.inTx(ctx, func(q *db.Queries) error {
 		v, err := q.BumpIdentityVersion(ctx)

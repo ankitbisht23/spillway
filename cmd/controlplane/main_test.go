@@ -15,26 +15,37 @@ func env(kv map[string]string) func(string) string {
 	return func(k string) string { return kv[k] }
 }
 
+// withOIDC adds the compose stack's bearer-token settings to kv.
+func withOIDC(kv map[string]string) map[string]string {
+	kv["SPILLWAY_CP_OIDC_ISSUER"] = "http://localhost:8180/auth/realms/spillway"
+	kv["SPILLWAY_CP_OIDC_JWKS_URL"] = "http://keycloak:8080/auth/realms/spillway/protocol/openid-connect/certs"
+	kv["SPILLWAY_CP_DEV_MODE"] = "true"
+	return kv
+}
+
 func TestLoadSettings(t *testing.T) {
-	s, err := loadSettings(env(map[string]string{
+	s, err := loadSettings(env(withOIDC(map[string]string{
 		"SPILLWAY_CP_DATABASE_URL":      "postgres://spillway_app@db:5432/spillway?sslmode=disable",
 		"SPILLWAY_CP_DATABASE_PASSWORD": secretValue,
 		"SPILLWAY_CP_ALLOWED_NETWORKS":  "172.29.0.0/16",
-	}))
+	})))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if s.httpAddr != ":8080" || s.adminAddr != "127.0.0.1:8081" || s.databasePassword != secretValue || len(s.allow) != 1 {
 		t.Errorf("settings = %+v", s)
 	}
+	if s.oidcAudience != "spillway-controlplane" || !s.devMode || s.oidcIssuer != "http://localhost:8180/auth/realms/spillway" {
+		t.Errorf("OIDC settings = %+v", s)
+	}
 }
 
 func TestSettingsErrors(t *testing.T) {
-	base := map[string]string{
+	base := withOIDC(map[string]string{
 		"SPILLWAY_CP_DATABASE_URL":      "postgres://spillway_app@db:5432/spillway",
 		"SPILLWAY_CP_DATABASE_PASSWORD": secretValue,
 		"SPILLWAY_CP_ALLOWED_NETWORKS":  "172.29.0.0/16",
-	}
+	})
 	with := func(k, v string) map[string]string {
 		m := map[string]string{}
 		for a, b := range base {
@@ -53,6 +64,10 @@ func TestSettingsErrors(t *testing.T) {
 		{"password and file", with("SPILLWAY_CP_DATABASE_PASSWORD_FILE", "/nope"), "not both"},
 		{"no allow-list", with("SPILLWAY_CP_ALLOWED_NETWORKS", ""), "SPILLWAY_CP_ALLOWED_NETWORKS is required"},
 		{"bad allow-list", with("SPILLWAY_CP_ALLOWED_NETWORKS", "nope"), "SPILLWAY_CP_ALLOWED_NETWORKS"},
+		{"no issuer", with("SPILLWAY_CP_OIDC_ISSUER", ""), "SPILLWAY_CP_OIDC_ISSUER: required"},
+		{"no JWKS URL", with("SPILLWAY_CP_OIDC_JWKS_URL", ""), "SPILLWAY_CP_OIDC_JWKS_URL: required"},
+		{"http:// without dev mode", with("SPILLWAY_CP_DEV_MODE", ""), "accepted only in dev mode (SEC-04)"},
+		{"dev mode not a bool", with("SPILLWAY_CP_DEV_MODE", "yes"), `SPILLWAY_CP_DEV_MODE: "yes" is not true or false`},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := loadSettings(env(tt.env))
@@ -109,18 +124,18 @@ func TestPasswordsNeverLogged(t *testing.T) {
 			}))
 		}, "127.0.0.1"},
 		{"serve, database down", func() error {
-			return serve(log, env(map[string]string{
+			return serve(log, env(withOIDC(map[string]string{
 				"SPILLWAY_CP_DATABASE_URL":      "postgres://spillway_app@127.0.0.1:1/spillway?sslmode=disable&connect_timeout=2",
 				"SPILLWAY_CP_DATABASE_PASSWORD": secretValue,
 				"SPILLWAY_CP_ALLOWED_NETWORKS":  "172.29.0.0/16",
-			}))
+			})))
 		}, "127.0.0.1"},
 		{"serve, password in the URL", func() error {
-			return serve(log, env(map[string]string{
+			return serve(log, env(withOIDC(map[string]string{
 				"SPILLWAY_CP_DATABASE_URL":      "postgres://spillway_app:" + ownerSecret + "@db/spillway",
 				"SPILLWAY_CP_DATABASE_PASSWORD": secretValue,
 				"SPILLWAY_CP_ALLOWED_NETWORKS":  "172.29.0.0/16",
-			}))
+			})))
 		}, "carries a password"},
 	}
 	for _, r := range runs {

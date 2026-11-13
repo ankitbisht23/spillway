@@ -127,13 +127,22 @@ func getConfig[T any](ctx context.Context, s *Server, k configKind, id int64) (T
 	return out, etag(r.Version), err
 }
 
+// showConfig is the REST form of a config row, as T, for audit records.
+func showConfig[T any](k configKind) func(any) (any, error) {
+	return showAs(func(r store.ConfigRow) (T, error) {
+		var out T
+		err := fromRow(r, k.newMsg(), &out)
+		return out, err
+	})
+}
+
 func createConfig[T any](ctx context.Context, s *Server, k configKind, body any) (T, *string, *string, error) {
 	var out T
 	in, err := s.parseConfig(ctx, k, body)
 	if err != nil {
 		return out, nil, nil, err
 	}
-	r, err := s.store.CreateConfig(ctx, k.kind, in)
+	r, err := s.store.CreateConfig(ctx, audit(ctx, showConfig[T](k)), k.kind, in)
 	if err != nil {
 		return out, nil, nil, err
 	}
@@ -147,7 +156,7 @@ func updateConfig[T any](ctx context.Context, s *Server, k configKind, id int64,
 	if err != nil {
 		return out, nil, err
 	}
-	r, err := s.store.UpdateConfig(ctx, k.kind, id, ifMatch(match), in)
+	r, err := s.store.UpdateConfig(ctx, audit(ctx, showConfig[T](k)), k.kind, id, ifMatch(match), in)
 	if err != nil {
 		return out, nil, err
 	}
@@ -190,14 +199,14 @@ func (s *Server) UpdateUpstream(ctx context.Context, req apiv1.UpdateUpstreamReq
 }
 
 func (s *Server) DeleteUpstream(ctx context.Context, req apiv1.DeleteUpstreamRequestObject) (apiv1.DeleteUpstreamResponseObject, error) {
-	if err := s.store.DeleteConfig(ctx, store.Upstreams, req.Id, ifMatch(req.Params.IfMatch)); err != nil {
+	if err := s.store.DeleteConfig(ctx, audit(ctx, showConfig[apiv1.Upstream](upstreams)), store.Upstreams, req.Id, ifMatch(req.Params.IfMatch)); err != nil {
 		return nil, err
 	}
 	return apiv1.DeleteUpstream204Response{}, nil
 }
 
 func (s *Server) DrainEndpoint(ctx context.Context, req apiv1.DrainEndpointRequestObject) (apiv1.DrainEndpointResponseObject, error) {
-	r, err := s.store.DrainEndpoint(ctx, req.Id, req.Eid, ifMatch(req.Params.IfMatch))
+	r, err := s.store.DrainEndpoint(ctx, audit(ctx, showConfig[apiv1.Upstream](upstreams)), req.Id, req.Eid, ifMatch(req.Params.IfMatch))
 	if err != nil {
 		return nil, err
 	}
@@ -243,7 +252,7 @@ func (s *Server) UpdateRoute(ctx context.Context, req apiv1.UpdateRouteRequestOb
 }
 
 func (s *Server) DeleteRoute(ctx context.Context, req apiv1.DeleteRouteRequestObject) (apiv1.DeleteRouteResponseObject, error) {
-	if err := s.store.DeleteConfig(ctx, store.Routes, req.Id, ifMatch(req.Params.IfMatch)); err != nil {
+	if err := s.store.DeleteConfig(ctx, audit(ctx, showConfig[apiv1.Route](routes)), store.Routes, req.Id, ifMatch(req.Params.IfMatch)); err != nil {
 		return nil, err
 	}
 	return apiv1.DeleteRoute204Response{}, nil
@@ -284,7 +293,7 @@ func (s *Server) UpdatePolicy(ctx context.Context, req apiv1.UpdatePolicyRequest
 }
 
 func (s *Server) DeletePolicy(ctx context.Context, req apiv1.DeletePolicyRequestObject) (apiv1.DeletePolicyResponseObject, error) {
-	if err := s.store.DeleteConfig(ctx, store.Policies, req.Id, ifMatch(req.Params.IfMatch)); err != nil {
+	if err := s.store.DeleteConfig(ctx, audit(ctx, showConfig[apiv1.Policy](policies)), store.Policies, req.Id, ifMatch(req.Params.IfMatch)); err != nil {
 		return nil, err
 	}
 	return apiv1.DeletePolicy204Response{}, nil
@@ -325,7 +334,7 @@ func (s *Server) UpdatePlan(ctx context.Context, req apiv1.UpdatePlanRequestObje
 }
 
 func (s *Server) DeletePlan(ctx context.Context, req apiv1.DeletePlanRequestObject) (apiv1.DeletePlanResponseObject, error) {
-	if err := s.store.DeleteConfig(ctx, store.Plans, req.Id, ifMatch(req.Params.IfMatch)); err != nil {
+	if err := s.store.DeleteConfig(ctx, audit(ctx, showConfig[apiv1.Plan](plans)), store.Plans, req.Id, ifMatch(req.Params.IfMatch)); err != nil {
 		return nil, err
 	}
 	return apiv1.DeletePlan204Response{}, nil

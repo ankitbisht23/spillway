@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ankitbisht23/spillway/internal/auth"
 	"github.com/ankitbisht23/spillway/internal/controlplane/api"
 	"github.com/ankitbisht23/spillway/internal/controlplane/store"
 	"github.com/ankitbisht23/spillway/internal/telemetry"
@@ -95,10 +96,18 @@ func serve(log *slog.Logger, getenv func(string) string) error {
 	}
 	defer st.Close()
 
+	verifier, err := auth.New(auth.Config{
+		Issuer: s.oidcIssuer, JWKSURL: s.oidcJWKSURL, Audience: s.oidcAudience, AllowHTTP: s.devMode, Log: log,
+	})
+	if err != nil {
+		return err
+	}
+	go verifier.Run(ctx) // readiness does not wait for the keys: until they come, tokens are 503 (ADR-0039)
+
 	var ready atomic.Bool
 	admin := telemetry.NewAdminServer(telemetry.NewRegistry(), ready.Load, log)
 	apiSrv := &http.Server{
-		Handler:           api.New(st, s.allow, net.DefaultResolver, log).Handler(),
+		Handler:           api.New(st, s.allow, net.DefaultResolver, api.OIDC{Verifier: verifier}, log).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,

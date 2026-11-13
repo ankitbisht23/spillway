@@ -20,6 +20,14 @@ import (
 // plans and policies they name are checked against the latest published
 // config by the store.
 
+// The REST form of identity rows, for audit records (CP-13).
+var (
+	showTenant     = showAs(func(t db.Tenant) (apiv1.Tenant, error) { return tenantOut(t), nil })
+	showConsumer   = showAs(func(c db.Consumer) (apiv1.Consumer, error) { return consumerOut(c), nil })
+	showAccessList = showAs(func(a db.AccessList) (apiv1.AccessListEntry, error) { return accessListOut(a), nil })
+	showOverride   = showAs(overrideOut)
+)
+
 const (
 	statusActive    = "active"
 	statusSuspended = "suspended"
@@ -89,7 +97,7 @@ func (s *Server) CreateTenant(ctx context.Context, req apiv1.CreateTenantRequest
 	if err != nil {
 		return nil, err
 	}
-	t, err := s.store.CreateTenant(ctx, in)
+	t, err := s.store.CreateTenant(ctx, audit(ctx, showTenant), in)
 	if err != nil {
 		return nil, err
 	}
@@ -101,7 +109,7 @@ func (s *Server) UpdateTenant(ctx context.Context, req apiv1.UpdateTenantRequest
 	if err != nil {
 		return nil, err
 	}
-	t, err := s.store.UpdateTenant(ctx, req.Id, ifMatch(req.Params.IfMatch), in)
+	t, err := s.store.UpdateTenant(ctx, audit(ctx, showTenant), req.Id, ifMatch(req.Params.IfMatch), in)
 	if err != nil {
 		return nil, err
 	}
@@ -109,7 +117,7 @@ func (s *Server) UpdateTenant(ctx context.Context, req apiv1.UpdateTenantRequest
 }
 
 func (s *Server) DeleteTenant(ctx context.Context, req apiv1.DeleteTenantRequestObject) (apiv1.DeleteTenantResponseObject, error) {
-	if err := s.store.DeleteTenant(ctx, req.Id, ifMatch(req.Params.IfMatch)); err != nil {
+	if err := s.store.DeleteTenant(ctx, audit(ctx, showTenant), req.Id, ifMatch(req.Params.IfMatch)); err != nil {
 		return nil, err
 	}
 	return apiv1.DeleteTenant204Response{}, nil
@@ -173,7 +181,7 @@ func (s *Server) CreateConsumer(ctx context.Context, req apiv1.CreateConsumerReq
 	if err != nil {
 		return nil, err
 	}
-	c, err := s.store.CreateConsumer(ctx, in)
+	c, err := s.store.CreateConsumer(ctx, audit(ctx, showConsumer), in)
 	if err != nil {
 		return nil, err
 	}
@@ -185,7 +193,7 @@ func (s *Server) UpdateConsumer(ctx context.Context, req apiv1.UpdateConsumerReq
 	if err != nil {
 		return nil, err
 	}
-	c, err := s.store.UpdateConsumer(ctx, req.Id, ifMatch(req.Params.IfMatch), in)
+	c, err := s.store.UpdateConsumer(ctx, audit(ctx, showConsumer), req.Id, ifMatch(req.Params.IfMatch), in)
 	if err != nil {
 		return nil, err
 	}
@@ -193,7 +201,7 @@ func (s *Server) UpdateConsumer(ctx context.Context, req apiv1.UpdateConsumerReq
 }
 
 func (s *Server) DeleteConsumer(ctx context.Context, req apiv1.DeleteConsumerRequestObject) (apiv1.DeleteConsumerResponseObject, error) {
-	if err := s.store.DeleteConsumer(ctx, req.Id, ifMatch(req.Params.IfMatch)); err != nil {
+	if err := s.store.DeleteConsumer(ctx, audit(ctx, showConsumer), req.Id, ifMatch(req.Params.IfMatch)); err != nil {
 		return nil, err
 	}
 	return apiv1.DeleteConsumer204Response{}, nil
@@ -301,7 +309,7 @@ func (s *Server) CreateAccessList(ctx context.Context, req apiv1.CreateAccessLis
 	if err != nil {
 		return nil, err
 	}
-	a, err := s.store.CreateAccessList(ctx, in)
+	a, err := s.store.CreateAccessList(ctx, audit(ctx, showAccessList), in)
 	if err != nil {
 		return nil, err
 	}
@@ -313,7 +321,7 @@ func (s *Server) UpdateAccessList(ctx context.Context, req apiv1.UpdateAccessLis
 	if err != nil {
 		return nil, err
 	}
-	a, err := s.store.UpdateAccessList(ctx, req.Id, ifMatch(req.Params.IfMatch), in)
+	a, err := s.store.UpdateAccessList(ctx, audit(ctx, showAccessList), req.Id, ifMatch(req.Params.IfMatch), in)
 	if err != nil {
 		return nil, err
 	}
@@ -321,7 +329,7 @@ func (s *Server) UpdateAccessList(ctx context.Context, req apiv1.UpdateAccessLis
 }
 
 func (s *Server) DeleteAccessList(ctx context.Context, req apiv1.DeleteAccessListRequestObject) (apiv1.DeleteAccessListResponseObject, error) {
-	if err := s.store.DeleteAccessList(ctx, req.Id, ifMatch(req.Params.IfMatch)); err != nil {
+	if err := s.store.DeleteAccessList(ctx, audit(ctx, showAccessList), req.Id, ifMatch(req.Params.IfMatch)); err != nil {
 		return nil, err
 	}
 	return apiv1.DeleteAccessList204Response{}, nil
@@ -431,7 +439,7 @@ func (s *Server) CreateOverride(ctx context.Context, req apiv1.CreateOverrideReq
 	if err != nil {
 		return nil, err
 	}
-	o, err := s.store.CreateOverride(ctx, in)
+	o, err := s.store.CreateOverride(ctx, audit(ctx, showOverride), in)
 	if err != nil {
 		return nil, err
 	}
@@ -447,7 +455,7 @@ func (s *Server) UpdateOverride(ctx context.Context, req apiv1.UpdateOverrideReq
 	if err != nil {
 		return nil, err
 	}
-	o, err := s.store.UpdateOverride(ctx, req.Id, ifMatch(req.Params.IfMatch), in)
+	o, err := s.store.UpdateOverride(ctx, audit(ctx, showOverride), req.Id, ifMatch(req.Params.IfMatch), in)
 	if err != nil {
 		return nil, err
 	}
@@ -459,7 +467,7 @@ func (s *Server) UpdateOverride(ctx context.Context, req apiv1.UpdateOverrideReq
 }
 
 func (s *Server) DeleteOverride(ctx context.Context, req apiv1.DeleteOverrideRequestObject) (apiv1.DeleteOverrideResponseObject, error) {
-	if err := s.store.DeleteOverride(ctx, req.Id, ifMatch(req.Params.IfMatch)); err != nil {
+	if err := s.store.DeleteOverride(ctx, audit(ctx, showOverride), req.Id, ifMatch(req.Params.IfMatch)); err != nil {
 		return nil, err
 	}
 	return apiv1.DeleteOverride204Response{}, nil

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"github.com/ankitbisht23/spillway/internal/controlplane/store/db"
@@ -75,6 +76,7 @@ func toRows[T configRows](rs []T, err error) ([]ConfigRow, error) {
 
 // table is one config table's queries.
 type table struct {
+	entity string // as in audit records
 	list   func(ctx context.Context, q *db.Queries, after int64, name *string, lim int32) ([]ConfigRow, error)
 	get    func(ctx context.Context, q *db.Queries, id int64) (ConfigRow, error)
 	create func(ctx context.Context, q *db.Queries, name string, spec []byte, version int64) (ConfigRow, error)
@@ -84,6 +86,7 @@ type table struct {
 
 var tables = map[Kind]table{
 	Upstreams: {
+		entity: "upstream",
 		list: func(ctx context.Context, q *db.Queries, after int64, name *string, lim int32) ([]ConfigRow, error) {
 			return toRows(q.ListUpstreams(ctx, db.ListUpstreamsParams{After: after, Name: name, Lim: lim}))
 		},
@@ -99,6 +102,7 @@ var tables = map[Kind]table{
 		delete: func(ctx context.Context, q *db.Queries, id int64) (int64, error) { return q.DeleteUpstream(ctx, id) },
 	},
 	Routes: {
+		entity: "route",
 		list: func(ctx context.Context, q *db.Queries, after int64, name *string, lim int32) ([]ConfigRow, error) {
 			return toRows(q.ListRoutes(ctx, db.ListRoutesParams{After: after, Name: name, Lim: lim}))
 		},
@@ -114,6 +118,7 @@ var tables = map[Kind]table{
 		delete: func(ctx context.Context, q *db.Queries, id int64) (int64, error) { return q.DeleteRoute(ctx, id) },
 	},
 	Policies: {
+		entity: "policy",
 		list: func(ctx context.Context, q *db.Queries, after int64, name *string, lim int32) ([]ConfigRow, error) {
 			return toRows(q.ListPolicies(ctx, db.ListPoliciesParams{After: after, Name: name, Lim: lim}))
 		},
@@ -129,6 +134,7 @@ var tables = map[Kind]table{
 		delete: func(ctx context.Context, q *db.Queries, id int64) (int64, error) { return q.DeletePolicy(ctx, id) },
 	},
 	Plans: {
+		entity: "plan",
 		list: func(ctx context.Context, q *db.Queries, after int64, name *string, lim int32) ([]ConfigRow, error) {
 			return toRows(q.ListPlans(ctx, db.ListPlansParams{After: after, Name: name, Lim: lim}))
 		},
@@ -190,8 +196,8 @@ func (s *Store) withEndpoints(ctx context.Context, q *db.Queries, kind Kind, row
 	return nil
 }
 
-// CreateConfig adds an entity of kind to the working set.
-func (s *Store) CreateConfig(ctx context.Context, kind Kind, in ConfigInput) (ConfigRow, error) {
+// CreateConfig adds an entity of kind to the working set, audited.
+func (s *Store) CreateConfig(ctx context.Context, a Audit, kind Kind, in ConfigInput) (ConfigRow, error) {
 	var out ConfigRow
 	err := s.inConfigTx(ctx, func(q *db.Queries, rev int64) error {
 		r, err := tables[kind].create(ctx, q, in.Name, in.Spec, rev)
@@ -206,15 +212,15 @@ func (s *Store) CreateConfig(ctx context.Context, kind Kind, in ConfigInput) (Co
 			r.Endpoints = append(r.Endpoints, ep)
 		}
 		out = r
-		return nil
+		return a.write(ctx, q, change{action: tables[kind].entity + ".create", entity: tables[kind].entity, id: r.ID, after: r})
 	})
 	return out, err
 }
 
 // UpdateConfig replaces an entity of kind in the working set if its version
-// is ifMatch (CP-14). An upstream's endpoints are matched by address: those
-// kept keep their IDs.
-func (s *Store) UpdateConfig(ctx context.Context, kind Kind, id, ifMatch int64, in ConfigInput) (ConfigRow, error) {
+// is ifMatch (CP-14), audited. An upstream's endpoints are matched by
+// address: those kept keep their IDs.
+func (s *Store) UpdateConfig(ctx context.Context, a Audit, kind Kind, id, ifMatch int64, in ConfigInput) (ConfigRow, error) {
 	var out ConfigRow
 	err := s.inConfigTx(ctx, func(q *db.Queries, rev int64) error {
 		cur, err := s.currentConfig(ctx, q, kind, id, ifMatch)
@@ -231,7 +237,7 @@ func (s *Store) UpdateConfig(ctx context.Context, kind Kind, id, ifMatch int64, 
 			}
 		}
 		out = r
-		return nil
+		return a.write(ctx, q, change{action: tables[kind].entity + ".update", entity: tables[kind].entity, id: id, before: cur, after: r})
 	})
 	return out, err
 }
@@ -286,31 +292,32 @@ func replaceEndpoints(ctx context.Context, q *db.Queries, upstreamID int64, cur 
 }
 
 // DeleteConfig removes an entity of kind from the working set if its version
-// is ifMatch (CP-14).
-func (s *Store) DeleteConfig(ctx context.Context, kind Kind, id, ifMatch int64) error {
+// is ifMatch (CP-14), audited.
+func (s *Store) DeleteConfig(ctx context.Context, a Audit, kind Kind, id, ifMatch int64) error {
 	return s.inConfigTx(ctx, func(q *db.Queries, _ int64) error {
-		cur, err := tables[kind].get(ctx, q, id)
+		cur, err := s.currentConfig(ctx, q, kind, id, ifMatch)
 		if err != nil {
-			return notFound(err)
-		}
-		if err := checkVersion(cur.Version, ifMatch); err != nil {
 			return err
 		}
-		_, err = tables[kind].delete(ctx, q, id)
-		return err
+		if _, err = tables[kind].delete(ctx, q, id); err != nil {
+			return err
+		}
+		return a.write(ctx, q, change{action: tables[kind].entity + ".delete", entity: tables[kind].entity, id: id, before: cur})
 	})
 }
 
 // DrainEndpoint marks an endpoint of an upstream draining in the working set
 // if the upstream's version is ifMatch; the upstream gets a new version
-// (ADR-0036).
-func (s *Store) DrainEndpoint(ctx context.Context, upstreamID, endpointID, ifMatch int64) (ConfigRow, error) {
+// (ADR-0036). Its audit record is the upstream's, action endpoint.drain.
+func (s *Store) DrainEndpoint(ctx context.Context, a Audit, upstreamID, endpointID, ifMatch int64) (ConfigRow, error) {
 	var out ConfigRow
 	err := s.inConfigTx(ctx, func(q *db.Queries, rev int64) error {
-		cur, err := s.currentConfig(ctx, q, Upstreams, upstreamID, ifMatch)
+		before, err := s.currentConfig(ctx, q, Upstreams, upstreamID, ifMatch)
 		if err != nil {
 			return err
 		}
+		cur := before
+		cur.Endpoints = slices.Clone(before.Endpoints)
 		found := false
 		for i, e := range cur.Endpoints {
 			if e.ID == endpointID {
@@ -330,7 +337,7 @@ func (s *Store) DrainEndpoint(ctx context.Context, upstreamID, endpointID, ifMat
 		}
 		r.Endpoints = cur.Endpoints
 		out = r
-		return nil
+		return a.write(ctx, q, change{action: "endpoint.drain", entity: "upstream", id: upstreamID, before: before, after: r})
 	})
 	return out, err
 }
