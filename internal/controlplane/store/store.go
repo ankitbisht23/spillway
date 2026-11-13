@@ -48,7 +48,7 @@ func Open(ctx context.Context, dsn, password string) (*Store, error) {
 func poolConfig(dsn, password string) (*pgxpool.Config, error) {
 	if u, err := url.Parse(dsn); err != nil || u.Scheme != "postgres" && u.Scheme != "postgresql" {
 		return nil, errors.New("database URL: want postgres://user@host:port/database")
-	} else if _, set := u.User.Password(); set {
+	} else if _, set := u.User.Password(); set || u.Query().Has("password") {
 		return nil, errors.New("database URL: carries a password; give it in its own setting instead")
 	}
 	cfg, err := pgxpool.ParseConfig(dsn)

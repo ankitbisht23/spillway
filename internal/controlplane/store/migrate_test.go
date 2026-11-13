@@ -90,6 +90,9 @@ func TestPoolConfigRejectsPasswordInURL(t *testing.T) {
 	if err == nil || strings.Contains(err.Error(), "hunter2") {
 		t.Errorf("error = %v: want a refusal that does not show the password", err)
 	}
+	if _, err := poolConfig("postgres://u@db/x?sslmode=disable&password=hunter2-dev-only", "p"); err == nil || strings.Contains(err.Error(), "hunter2") {
+		t.Errorf("password in the query: error = %v, want a refusal that does not show the password", err)
+	}
 	if _, err := poolConfig("mysql://u@db/x", "p"); err == nil {
 		t.Error("a mysql URL was accepted")
 	}
