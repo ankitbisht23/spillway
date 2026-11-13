@@ -29,16 +29,17 @@ Decisions that shape Spillway and are not obvious from the code or from docs/des
 | [0018](0018-ratelimit-headers.md) | RateLimit headers | Accepted | 2026-11-10 |
 | [0019](0019-m2-exit-check.md) | The M2 exit check | Accepted; NFR-03 method superseded by 0021 | 2026-11-10 |
 | [0020](0020-method-case-in-policies.md) | Method case in rate limit policies | Accepted; forwarding of methods not in upper case superseded by 0029 | 2026-11-10 |
-| [0021](0021-distributed-rate-limiting-model.md) | Distributed rate limiting model | Accepted; GCRA emission interval superseded by 0023, start-up loading by 0024, breaker rule by 0025, full-outage budget line and NFR-04 run voiding by 0027, GCRA refund maths and accuracy PASS rule by 0028 | 2026-11-10 |
+| [0021](0021-distributed-rate-limiting-model.md) | Distributed rate limiting model | Accepted; GCRA emission interval superseded by 0023, start-up loading by 0024, breaker rule by 0025, full-outage budget line and NFR-04 run voiding by 0027, GCRA refund maths and accuracy PASS rule by 0028, killed-primary window rule extended by 0034 | 2026-11-10 |
 | [0022](0022-multi-region.md) | Multi-region | Accepted | 2026-11-10 |
 | [0023](0023-gcra-emission-interval-in-whole-microseconds.md) | GCRA emission interval in whole microseconds | Accepted | 2026-11-10 |
 | [0024](0024-redis-limiter-warm-up.md) | Redis limiter warm-up | Accepted | 2026-11-11 |
 | [0025](0025-health-check-driven-redis-breakers.md) | Health-check driven Redis breakers | Accepted; refill count superseded by 0026 | 2026-11-11 |
 | [0026](0026-refill-redis-connections-after-an-outage.md) | Refill Redis connections after an outage | Accepted | 2026-11-11 |
-| [0027](0027-tolerance-for-host-stalls-in-the-m3-exit-check.md) | Tolerance for host stalls in the M3 exit check | Accepted | 2026-11-12 |
+| [0027](0027-tolerance-for-host-stalls-in-the-m3-exit-check.md) | Tolerance for host stalls in the M3 exit check | Accepted; NFR-04 one-error rule superseded by 0034 | 2026-11-12 |
 | [0028](0028-conservative-gcra-refunds.md) | Conservative GCRA refunds | Accepted | 2026-11-12 |
 | [0029](0029-methods-not-in-upper-case.md) | Methods that are not upper case | Accepted | 2026-11-12 |
-| [0030](0030-resilience-model.md) | Resilience model | Accepted; connection-cap answer timing superseded by 0032; connection cap at capacity, round-robin retries and the order of retry checks superseded by 0033 | 2026-11-12 |
+| [0030](0030-resilience-model.md) | Resilience model | Accepted; connection-cap answer timing superseded by 0032; connection cap at capacity, round-robin retries and the order of retry checks superseded by 0033; breaker column of the attempt-outcome table superseded by 0034 | 2026-11-12 |
 | [0031](0031-m4-exit-check.md) | The M4 exit check | Accepted; rule (c)'s "by construction" note corrected in 0033 | 2026-11-12 |
 | [0032](0032-answering-shed-connections.md) | Answering shed connections | Accepted; which connections are shed at the cap superseded by 0033 | 2026-11-12 |
-| [0033](0033-m1-m4-review-fixes.md) | M1–M4 review fixes | Accepted | 2026-11-13 |
+| [0033](0033-m1-m4-review-fixes.md) | M1–M4 review fixes | Accepted; open breaker question decided in 0034 | 2026-11-13 |
+| [0034](0034-user-decisions-after-the-m4-review.md) | User decisions after the M4 review | Accepted | 2026-11-13 |

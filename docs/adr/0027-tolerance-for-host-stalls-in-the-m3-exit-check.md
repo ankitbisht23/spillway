@@ -1,6 +1,6 @@
 # 0027. Tolerance for host stalls in the M3 exit check
 
-- **Status:** Accepted
+- **Status:** Accepted; the NFR-04 one-error rule superseded by [ADR-0034](0034-user-decisions-after-the-m4-review.md)
 - **Date:** 2026-11-12
 - **Requirement IDs:** NFR-04, NFR-13
 

@@ -1,6 +1,6 @@
 # 0033. M1–M4 review fixes
 
-- **Status:** Accepted
+- **Status:** Accepted; the breaker question left open is decided in [ADR-0034](0034-user-decisions-after-the-m4-review.md)
 - **Date:** 2026-11-13
 - **Requirement IDs:** GW-01, GW-07, GW-11, GW-12, GW-13, GW-14, GW-26, GW-28, OB-02, RL-03, RL-04
 

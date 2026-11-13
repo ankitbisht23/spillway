@@ -148,8 +148,8 @@ The gateway is a stateless Go reverse proxy. Each requirement carries an ID (ref
 ### Resilience
 
 - **GW-11** (M1) Timeouts per route: connect, per-try, overall, idle.
-- **GW-12** (M4) Retries on connect failure and 502/503/504, idempotent methods only, exponential backoff with jitter.
-- **GW-13** (M4) Retry budget per upstream (`retry_budget` on the upstream): retries ≤ 20% of requests over the last 10 s, plus a floor of 3 retries/s; routes set attempts only. Excess retries are dropped, not queued.
+- **GW-12** (M4) Retries on connect failure and 502/503/504, idempotent methods only, unless a route opts in for all methods (`retry.non_idempotent`), exponential backoff with jitter.
+- **GW-13** (M4) Retry budget per upstream (`retry_budget` on the upstream): retries ≤ 20% of requests over the last 10 s, plus a floor of 3 retries/s; routes set attempts (and may opt non-idempotent methods in) only. Excess retries are dropped, not queued.
 - **GW-14** (M4) Circuit breaker per upstream: max connections, max pending, max concurrent; error-rate state machine closed → open → half-open, tripping only once a window has at least `min_requests` (default 20); half-open lets `half_open_probes` (default 5) requests through before closing or reopening. An open circuit returns 503.
 - **GW-15** (M4) Deadline propagation: remaining time budget sent upstream in a header.
 - **GW-16** (Stretch) Hedged requests for idempotent GETs after the route’s p95 latency.

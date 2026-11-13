@@ -243,6 +243,85 @@ func TestCircuitRetries(t *testing.T) {
 	}
 }
 
+// TestCircuitIgnoresOtherServerErrors: under the default circuit settings,
+// an upstream answering 500, 501, 505 and 599 never opens its breaker: they
+// count as successes for it, though outlier ejection still counts them as
+// failures; and a half-open probe answered 500 closes the breaker (GW-14,
+// ADR-0034).
+func TestCircuitIgnoresOtherServerErrors(t *testing.T) {
+	f := newFlaky(t, "f")
+	g := retryGateway(t, retryConfig("", "retry: {attempts: 1}", f.endpoint()), []*flaky{f})
+	g.reg.clock = g.clock
+	for i := range 100 {
+		code := []int{500, 501, 505, 599}[i%4]
+		if r := g.do(t, http.MethodGet, fmt.Sprintf("/%d/9", code), nil, nil); r.status != code {
+			t.Fatalf("request %d: %d, want the upstream's %d", i+1, r.status, code)
+		}
+	}
+	st := (*g.reg.pools.Load())["u"].breaker.Status(g.clock.Now())
+	if st.State != resilience.Closed || st.Failed != 0 || st.Total != 100 {
+		t.Errorf("breaker %+v after 100 answers 500, 501, 505 and 599; want closed, 100 attempts, none failed", st)
+	}
+	if s := circuitGauge(t, g.reg)["u"]; s != 0 {
+		t.Errorf("gw_circuit_state %v, want 0 (closed)", s)
+	}
+	// Outlier ejection counted them: 5 in a row would eject the endpoint,
+	// were it not the upstream's only one.
+	if !strings.Contains(g.events.String(), "upstream endpoint ejection skipped: max_ejected_percent reached") {
+		t.Errorf("outlier ejection did not count the 5xx as failures (GW-09): %s", g.events.String())
+	}
+	if r := g.do(t, http.MethodGet, "/ok/0", nil, nil); r.status != http.StatusOK {
+		t.Errorf("after the 5xx: %d, want the upstream's 200", r.status)
+	}
+
+	// Half-open, a probe answered 500 is a successful probe.
+	g = retryGateway(t, retryConfig("circuit: {min_requests: 2, open_for: 1s, half_open_probes: 1}, outlier_detection: {consecutive_failures: 1000}", "retry: {attempts: 1}", f.endpoint()), []*flaky{f})
+	g.reg.clock = g.clock
+	g.do(t, http.MethodGet, "/503/9", nil, nil)
+	g.do(t, http.MethodGet, "/503/9", nil, nil)
+	if s := circuitGauge(t, g.reg)["u"]; s != 1 {
+		t.Fatalf("gw_circuit_state %v after two 503s, want 1 (open)", s)
+	}
+	g.clock.Advance(time.Second)
+	if r := g.do(t, http.MethodGet, "/500/9", nil, nil); r.status != http.StatusInternalServerError {
+		t.Errorf("probe: %d, want the upstream's 500", r.status)
+	}
+	if s := circuitGauge(t, g.reg)["u"]; s != 0 {
+		t.Errorf("gw_circuit_state %v after a probe answered 500, want 0 (closed)", s)
+	}
+}
+
+// TestCircuitGatewayErrors: each gateway error opens the breaker once
+// min_requests attempts ended in it: 502, 503, 504, a reset before the
+// headers, the attempt's own timeout and a refused connection (GW-14,
+// ADR-0034).
+func TestCircuitGatewayErrors(t *testing.T) {
+	const circuit = "circuit: {min_requests: 4, open_for: 10s}, outlier_detection: {consecutive_failures: 1000}"
+	f := newFlaky(t, "f")
+	for _, path := range []string{"/502/9", "/503/9", "/504/9", "/reset/9", "/slow/9"} {
+		g := retryGateway(t, retryConfig(circuit, "retry: {attempts: 1}, timeouts: {per_try: 100ms, total: 5s}", f.endpoint()), []*flaky{f})
+		g.reg.clock = g.clock
+		for range 4 {
+			g.do(t, http.MethodGet, path, nil, nil)
+		}
+		if s := circuitGauge(t, g.reg)["u"]; s != 1 {
+			t.Errorf("%s: gw_circuit_state %v after 4 attempts, want 1 (open)", path, s)
+		}
+	}
+	refused := newUpstream(t, "refused")
+	refused.Close()
+	g := retryGateway(t, retryConfig(circuit, "retry: {attempts: 1}", "refused:"+refused.port()), nil, refused)
+	g.reg.clock = g.clock
+	for range 4 {
+		if r := g.do(t, http.MethodGet, "/", nil, nil); r.status != http.StatusBadGateway {
+			t.Errorf("refused: %d, want 502", r.status)
+		}
+	}
+	if s := circuitGauge(t, g.reg)["u"]; s != 1 {
+		t.Errorf("refused: gw_circuit_state %v after 4 attempts, want 1 (open)", s)
+	}
+}
+
 // TestCircuitCaps: past max_concurrent, max_connections or max_pending the
 // gateway answers 503 at once, reason circuit_open, with Retry-After 1; a
 // cap refusal is not retried and is not an upstream failure (GW-14,

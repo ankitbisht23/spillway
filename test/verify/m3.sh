@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# M3 exit checks (docs/design.md, M3; ADR-0021, ADR-0027). Prints one PASS/FAIL line per
+# M3 exit checks (docs/design.md, M3; ADR-0021, ADR-0027, ADR-0034). Prints one PASS/FAIL line per
 # check with what it measured, and exits 1 if any check fails. Run through
 # make:
 #   make verify-m3   the accuracy harness at 3 replicas (NFR-06), the Redis
@@ -114,18 +114,35 @@ if ! build=$("${compose[@]}" build --quiet loadgen 2>&1); then printf '%s\n' "$b
 # be changed for a quick look; the exit check uses these.
 rate=${VERIFY_M3_RATE:-1000} warmup=${VERIFY_M3_WARMUP:-30s} duration=${VERIFY_M3_DURATION:-60s}
 counts() {
-	echo "verify-redis $(decisions verify-redis allow) $(decisions verify-redis deny) $(decisions verify-redis fail_closed) $(redis_errors)"
+	echo "verify-redis $(decisions verify-redis allow) $(decisions verify-redis deny) $(decisions verify-redis fail_closed) $(redis_errors) $(metric 'gw_redis_errors_total{kind="timeout"} ')"
 }
 # During a gateway run, warm-up included, the Redis policy must deny none and
-# allow every measured request but the fail_closed ones. At most one Redis
-# call may fail, and its fail_closed 503 is excused (ADR-0027): the run's
-# line reports it, and the run and its pair still count.
+# allow every measured request but the fail_closed ones. Failed Redis calls
+# and their fail_closed 503s are excused when they are one stall burst
+# (ADR-0034): every error a timeout, one fail_closed decision per error, no
+# other failed answer in loadgen's run (warm-up included), and all of them
+# within one window of at most burst_ms, from the earliest one's due time to
+# the latest one's answer. The run's line reports them, and the run and its
+# pair still count; anything else voids the run.
+burst_ms=1000
 judge() {
-	paste -d ' ' <(echo "$1") <(echo "$2") | awk -v sent="$3" '{
-		a = $7 - $2; d = $8 - $3; f = $9 - $4; e = $10 - $5
-		print (a + f >= sent && d == 0 && e <= 1 && f <= e ? 0 : 1), f,
-			sprintf("%s %d allow %d deny %d fail_closed, %d Redis errors", $1, a, d, f, e) (e == 1 ? " (one excused, ADR-0027)" : "")
-	}'
+	local failures
+	failures=$(jq -r '.failures // {} | "\(.count // 0) \(.span_ms // 0) \(.first // "-") \(.last // "-")"' <<<"$4" 2>/dev/null)
+	paste -d ' ' <(echo "$1") <(echo "$2") <(echo "${failures:-0 0 - -}") | awk -v sent="$3" -v max="$burst_ms" '
+		function clock(s, p) { if (split(s, p, "T") < 2) return s; sub(/Z$/, "", p[2]); return substr(p[2], 1, 12) }
+		{
+			a = $8 - $2; d = $9 - $3; f = $10 - $4; e = $11 - $5; t = $12 - $6; n = $13; span = $14
+			why = ""
+			if (e == 0 && f > 0) why = sprintf("%d fail_closed without a Redis error", f)
+			else if (e > 0 && t != e) why = sprintf("%d of %d Redis errors not timeouts", e - t, e)
+			else if (e > 0 && f != e) why = sprintf("%d fail_closed for %d Redis errors", f, e)
+			else if (e > 0 && n != f) why = sprintf("%d failed answers in the run for %d fail_closed", n, f)
+			else if (e > 0 && span > max) why = sprintf("failures span %.1f ms > %d ms, %s – %s UTC", span, max, clock($15), clock($16))
+			line = sprintf("%s %d allow %d deny %d fail_closed, %d Redis errors", $1, a, d, f, e)
+			if (why != "") line = line " (not excused: " why ", ADR-0034)"
+			else if (e > 0) line = line sprintf(" (%d timeouts in one burst of %.1f ms, %s – %s UTC, excused, ADR-0034)", e, span, clock($15), clock($16))
+			print (a + f >= sent && d == 0 && why == "" ? 0 : 1), f, line
+		}'
 }
 if use test/verify/m3-latency.yaml; then
 	added_latency "NFR-04 added p99 <= 5 ms" 5000 "Redis policy" "$rate" "$warmup" "$duration"

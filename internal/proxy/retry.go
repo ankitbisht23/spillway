@@ -121,13 +121,17 @@ func deadlineMs(deadline time.Time) string {
 }
 
 // retryable reports whether an attempt's outcome may be retried (ADR-0030,
-// "Attempt outcomes"): a failure without a response (connect error, reset
-// or EOF before the headers, the attempt's own deadline), or a 502, 503 or
-// 504.
+// "Attempt outcomes"): a gateway error.
 func retryable(resp *http.Response, err error, failed, counted bool) bool {
-	if !failed || !counted {
-		return false
-	}
+	return failed && counted && gatewayError(resp, err)
+}
+
+// gatewayError reports whether a failed attempt failed as an upstream that
+// cannot serve does: without a response (connect error, reset or EOF before
+// the headers, the attempt's own deadline), or with a 502, 503 or 504. Only
+// these are retried and count as failures for the breaker; other 5xx count
+// for outlier ejection only (ADR-0034).
+func gatewayError(resp *http.Response, err error) bool {
 	if err != nil {
 		return true
 	}
@@ -225,8 +229,8 @@ func (a *attempts) RoundTrip(out *http.Request) (*http.Response, error) {
 		}
 		failed, counted := attemptOutcome(actx, resp, err, a.body)
 		if counted {
-			a.p.record(ep, now, failed) // GW-09
-			a.pass.Record(now, failed)  // GW-14
+			a.p.record(ep, now, failed)                           // GW-09: every 5xx
+			a.pass.Record(now, failed && gatewayError(resp, err)) // GW-14: gateway errors only (ADR-0034)
 		}
 		if span != nil {
 			reason = ""

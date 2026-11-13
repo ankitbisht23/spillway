@@ -99,10 +99,13 @@ func (g *generator) run(ctx context.Context) result {
 		}
 		wg.Go(func() {
 			status, proto, err := g.do(ctx)
-			latency := g.clock.Now().Sub(due)
+			done := g.clock.Now()
 			<-inFlight
+			if err != nil || status/100 != 2 {
+				s.fail(due, done)
+			}
 			if measured {
-				s.record(status, proto, err, latency)
+				s.record(status, proto, err, done.Sub(due))
 			}
 		})
 	}
@@ -119,6 +122,7 @@ func (g *generator) run(ctx context.Context) result {
 		Requests:    requestCounts{Scheduled: sent + dropped, Sent: sent, Dropped: dropped},
 		Status:      s.status,
 		Errors:      s.errors,
+		Failures:    s.failures,
 		LatencyUS: latencies{
 			P50:  s.latency.ValueAtQuantile(50),
 			P99:  s.latency.ValueAtQuantile(99),
@@ -139,6 +143,7 @@ type stats struct {
 	status   map[string]int64        // answered requests by status class
 	errors   map[string]int64        // unanswered requests by errorKind
 	protocol string                  // of the first answer
+	failures *failures               // every request's, warm-up included; nil if none
 }
 
 func (s *stats) record(status int, proto string, err error, latency time.Duration) {
@@ -153,6 +158,26 @@ func (s *stats) record(status int, proto string, err error, latency time.Duratio
 		s.protocol = proto
 	}
 	_ = s.latency.RecordValue(min(latency, maxLatency).Microseconds()) // in range
+}
+
+// fail notes a request, warm-up included, that was due at due and got no
+// answer or a non-2xx one at done.
+func (s *stats) fail(due, done time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f := s.failures
+	if f == nil {
+		f = &failures{First: due, Last: done}
+		s.failures = f
+	}
+	f.Count++
+	if due.Before(f.First) {
+		f.First = due
+	}
+	if done.After(f.Last) {
+		f.Last = done
+	}
+	f.SpanMS = float64(f.Last.Sub(f.First).Microseconds()) / 1000
 }
 
 // errorKind sorts a request without an answer: "timeout" (the request
@@ -181,6 +206,7 @@ type result struct {
 	Requests    requestCounts    `json:"requests"`
 	Status      map[string]int64 `json:"status"`
 	Errors      map[string]int64 `json:"errors"`
+	Failures    *failures        `json:"failures,omitempty"`
 	LatencyUS   latencies        `json:"latency_us"`
 	Hardware    hardware.Info    `json:"hardware"`
 }
@@ -189,6 +215,17 @@ type requestCounts struct {
 	Scheduled int64 `json:"scheduled"`
 	Sent      int64 `json:"sent"`
 	Dropped   int64 `json:"dropped"`
+}
+
+// failures are the run's requests, warm-up included, that got no answer or
+// an answer other than 2xx: how many, and the window from the earliest one's
+// due time to the latest one's end, so that a check can tell one burst of
+// failures from several (ADR-0034).
+type failures struct {
+	Count  int64     `json:"count"`
+	First  time.Time `json:"first"`
+	Last   time.Time `json:"last"`
+	SpanMS float64   `json:"span_ms"`
 }
 
 type latencies struct {

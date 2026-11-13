@@ -20,6 +20,7 @@ type responseRecorder struct {
 	// RateLimit-Policy and RateLimit field values (ADR-0018), "" for none.
 	rateLimitPolicy, rateLimit string
 	decisionTime               string // Spillway-Decision-Time, dev mode only (ADR-0021); "" for none
+	redisErrors                string // Spillway-Redis-Error, dev mode only (ADR-0034); "" for none
 	status                     int    // final status, 0 until written; 1xx other than 101 don't count
 	bytes                      int64
 }
@@ -35,7 +36,8 @@ func (w *responseRecorder) WriteHeader(code int) {
 
 // setRateLimit sets the request's RateLimit-Policy and RateLimit fields in h,
 // replacing any the upstream sent; with none, the upstream's pass through.
-// Spillway-Decision-Time is the gateway's alone: the upstream's never passes.
+// Spillway-Decision-Time and Spillway-Redis-Error are the gateway's alone: the
+// upstream's never pass.
 func (w *responseRecorder) setRateLimit(h http.Header) {
 	if w.rateLimit != "" {
 		h.Set("RateLimit-Policy", w.rateLimitPolicy)
@@ -44,6 +46,10 @@ func (w *responseRecorder) setRateLimit(h http.Header) {
 	h.Del(decisionTimeHeader)
 	if w.decisionTime != "" {
 		h.Set(decisionTimeHeader, w.decisionTime)
+	}
+	h.Del(redisErrorHeader)
+	if w.redisErrors != "" {
+		h.Set(redisErrorHeader, w.redisErrors)
 	}
 }
 

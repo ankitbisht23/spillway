@@ -106,6 +106,44 @@ func TestScheduleLate(t *testing.T) {
 	}
 }
 
+// TestFailures: every request that gets no answer or a non-2xx one, warm-up
+// included, counts in failures, which spans from the earliest one's due time
+// to the latest one's end; a run without any has none (ADR-0034).
+func TestFailures(t *testing.T) {
+	start := time.Unix(1_000_000, 0)
+	var calls atomic.Int64
+	g := generator{clock: &fakeClock{now: start}, rate: 10, warmup: time.Second, duration: 2 * time.Second, maxInFlight: 100,
+		do: func(context.Context) (int, string, error) {
+			if calls.Add(1)%2 == 0 {
+				return 0, "", errors.New("no answer")
+			}
+			return http.StatusServiceUnavailable, "HTTP/1.1", nil
+		}}
+	r := g.run(t.Context())
+	// The fake clock stops at the last request's due time, 2.9 s.
+	want := failures{Count: 30, First: start, Last: start.Add(2900 * time.Millisecond), SpanMS: 2900}
+	if r.Failures == nil || !r.Failures.First.Equal(want.First) || !r.Failures.Last.Equal(want.Last) || r.Failures.Count != want.Count || r.Failures.SpanMS != want.SpanMS {
+		t.Errorf("failures = %+v, want %+v", r.Failures, want)
+	}
+	if r.Status["5xx"]+r.Errors["other"] != 20 {
+		t.Errorf("status = %v, errors = %v; want the 20 measured requests", r.Status, r.Errors)
+	}
+
+	g.do = func(context.Context) (int, string, error) { return http.StatusOK, "HTTP/1.1", nil }
+	if r := g.run(t.Context()); r.Failures != nil {
+		t.Errorf("failures = %+v in a run of 2xx, want none", r.Failures)
+	}
+
+	var s stats
+	at := func(ms int) time.Time { return start.Add(time.Duration(ms) * time.Millisecond) }
+	s.fail(at(500), at(600))
+	s.fail(at(200), at(300))
+	s.fail(at(400), at(900))
+	if f := *s.failures; f.Count != 3 || !f.First.Equal(at(200)) || !f.Last.Equal(at(900)) || f.SpanMS != 700 {
+		t.Errorf("failures = %+v, want 3 from 200 ms to 900 ms, 700 ms", f)
+	}
+}
+
 func TestErrorKind(t *testing.T) {
 	for _, tt := range []struct {
 		err  error

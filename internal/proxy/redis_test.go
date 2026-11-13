@@ -512,3 +512,54 @@ policies:
 		}
 	})
 }
+
+// TestRedisErrorHeader: in dev mode, a response whose Redis calls failed
+// lists each failed call's kind in order, a call the budget left no time
+// for as timeout; a request whose calls all answered gets none, nor does any
+// response with dev mode off, even when something upstream of the recorder
+// set one (ADR-0034).
+func TestRedisErrorHeader(t *testing.T) {
+	u := newUpstream(t, "orders")
+	cfg := fmt.Sprintf(`
+upstreams: [{name: orders, endpoints: [{address: 'orders:%s'}]}]
+routes:
+  - {name: r, upstream: orders, match: {path_prefix: /}, response_headers: {set: [{name: spillway-redis-error, value: 'x'}]}}
+ratelimit: {redis_budget: 50ms}
+policies:
+  - {name: tenant, level: tenant, match: {routes: ['*']}, key_template: '{tenant}', algorithm: gcra, limits: [{rate: 1000, period: 1s}], failure_mode: fail_open}
+  - {name: global, level: global, match: {routes: ['*']}, key_template: '{route}', algorithm: gcra, limits: [{rate: 1000, period: 1s}], failure_mode: fail_open}
+`, u.port())
+	alice := http.Header{"X-Api-Key": {aliceKey}}
+
+	t.Run("on", func(t *testing.T) {
+		f := newFakeRedis()
+		g := newDevGateway(t, newResolver(u), cfg, nil, f, true)
+		g.identity.Store(identity(t, map[string]string{"alice": aliceKey}))
+		for _, tt := range []struct {
+			name  string
+			setup func()
+			want  string
+		}{
+			{"answered", func() {}, ""},
+			{"conn", func() { f.setFail("{t:acme}", true) }, "conn"},
+			// The tenant-slot call times out and leaves the global one no time.
+			{"timeout", func() { f.setFail("{t:acme}", false); f.slow["{t:acme}"] = time.Second }, "timeout,timeout"},
+		} {
+			tt.setup()
+			got := g.send(t, http.MethodGet, "/", alice)
+			if got.status != http.StatusOK || got.header.Get("Spillway-Redis-Error") != tt.want || len(got.header.Values("Spillway-Redis-Error")) > 1 {
+				t.Errorf("%s: %d with Spillway-Redis-Error %q, want 200 with %q", tt.name, got.status, got.header.Values("Spillway-Redis-Error"), tt.want)
+			}
+		}
+	})
+
+	t.Run("off", func(t *testing.T) {
+		f := newFakeRedis()
+		f.setFail("{t:acme}", true)
+		g := newDevGateway(t, newResolver(u), cfg, nil, f, false)
+		g.identity.Store(identity(t, map[string]string{"alice": aliceKey}))
+		if got := g.send(t, http.MethodGet, "/", alice); got.status != http.StatusOK || got.header.Values("Spillway-Redis-Error") != nil {
+			t.Errorf("%d with Spillway-Redis-Error %q, want 200 with none", got.status, got.header.Values("Spillway-Redis-Error"))
+		}
+	})
+}

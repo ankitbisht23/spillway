@@ -1,7 +1,8 @@
 // Command loadgen sends GET requests to one URL at a constant arrival rate
 // (open model) and prints the run's result as JSON on stdout: target and
 // achieved rate, answers by status class, errors, latency percentiles from an
-// HDR histogram, and the hardware (ADR-0014). It exits 1 when the achieved
+// HDR histogram, and the hardware (ADR-0014); and, warm-up included, how many
+// requests failed and when (ADR-0034). It exits 1 when the achieved
 // rate is below 99% of the target, because a saturated generator makes the
 // run invalid (docs/design.md, Benchmark method), and 2 on bad flags.
 //
