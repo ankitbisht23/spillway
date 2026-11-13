@@ -3,9 +3,11 @@
   "enabled": true,
   "roles": {
     "realm": [
-      { "name": "admin", "description": "Everything (CP-12)" },
-      { "name": "operator", "description": "Policies, overrides, consumers, keys (CP-12)" },
-      { "name": "viewer", "description": "Read-only (CP-12)" }
+      { "name": "viewer", "description": "Reads everything except the audit log (CP-12)" },
+      { "name": "editor", "description": "Edits the config working set and imports (CP-12)" },
+      { "name": "publisher", "description": "Publishes and rolls back config (CP-12)" },
+      { "name": "key-admin", "description": "Consumers, API keys, overrides and access lists (CP-12)" },
+      { "name": "admin", "description": "Everything, including tenants and the audit log (CP-12)" }
     ]
   },
   "clients": [
@@ -21,7 +23,53 @@
       "attributes": {
         "pkce.code.challenge.method": "S256",
         "post.logout.redirect.uris": "http://localhost:5173/*##http://localhost:8080/*"
-      }
+      },
+      "protocolMappers": [
+        {
+          "name": "audience spillway-controlplane",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": { "included.custom.audience": "spillway-controlplane", "access.token.claim": "true", "id.token.claim": "false", "introspection.token.claim": "true" }
+        }
+      ]
+    },
+    {
+      "clientId": "spillway-ci",
+      "name": "CI and make verify-m5 (service token, CP-11)",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "dev-only-not-secret",
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "implicitFlowEnabled": false,
+      "serviceAccountsEnabled": true,
+      "protocolMappers": [
+        {
+          "name": "audience spillway-controlplane",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": { "included.custom.audience": "spillway-controlplane", "access.token.claim": "true", "id.token.claim": "false", "introspection.token.claim": "true" }
+        }
+      ]
+    },
+    {
+      "clientId": "rbac-tests",
+      "name": "Dev only: logs the test users in with their passwords for the RBAC tests (CP-12)",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "dev-only-not-secret",
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "implicitFlowEnabled": false,
+      "serviceAccountsEnabled": false,
+      "protocolMappers": [
+        {
+          "name": "audience spillway-controlplane",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": { "included.custom.audience": "spillway-controlplane", "access.token.claim": "true", "id.token.claim": "false", "introspection.token.claim": "true" }
+        }
+      ]
     },
     {
       "clientId": "gateway-tests",
@@ -31,11 +79,64 @@
       "secret": "dev-only-not-secret",
       "standardFlowEnabled": false,
       "directAccessGrantsEnabled": false,
-      "serviceAccountsEnabled": true
+      "serviceAccountsEnabled": true,
+      "protocolMappers": [
+        {
+          "name": "audience spillway-gateway",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": { "included.custom.audience": "spillway-gateway", "access.token.claim": "true", "id.token.claim": "false", "introspection.token.claim": "true" }
+        }
+      ]
     }
   ],
   "users": [
     {
+      "id": "0b5e7c1a-5f1d-4c3e-9a00-000000000001",
+      "username": "test-viewer",
+      "enabled": true,
+      "email": "test-viewer@spillway.test",
+      "emailVerified": true,
+      "firstName": "Test",
+      "lastName": "Viewer",
+      "credentials": [{ "type": "password", "value": "dev-only-not-secret", "temporary": false }],
+      "realmRoles": ["viewer"]
+    },
+    {
+      "id": "0b5e7c1a-5f1d-4c3e-9a00-000000000002",
+      "username": "test-editor",
+      "enabled": true,
+      "email": "test-editor@spillway.test",
+      "emailVerified": true,
+      "firstName": "Test",
+      "lastName": "Editor",
+      "credentials": [{ "type": "password", "value": "dev-only-not-secret", "temporary": false }],
+      "realmRoles": ["editor"]
+    },
+    {
+      "id": "0b5e7c1a-5f1d-4c3e-9a00-000000000003",
+      "username": "test-publisher",
+      "enabled": true,
+      "email": "test-publisher@spillway.test",
+      "emailVerified": true,
+      "firstName": "Test",
+      "lastName": "Publisher",
+      "credentials": [{ "type": "password", "value": "dev-only-not-secret", "temporary": false }],
+      "realmRoles": ["publisher"]
+    },
+    {
+      "id": "0b5e7c1a-5f1d-4c3e-9a00-000000000004",
+      "username": "test-key-admin",
+      "enabled": true,
+      "email": "test-key-admin@spillway.test",
+      "emailVerified": true,
+      "firstName": "Test",
+      "lastName": "Key Admin",
+      "credentials": [{ "type": "password", "value": "dev-only-not-secret", "temporary": false }],
+      "realmRoles": ["key-admin"]
+    },
+    {
+      "id": "0b5e7c1a-5f1d-4c3e-9a00-000000000005",
       "username": "test-admin",
       "enabled": true,
       "email": "test-admin@spillway.test",
@@ -46,24 +147,17 @@
       "realmRoles": ["admin"]
     },
     {
-      "username": "test-operator",
+      "id": "0b5e7c1a-5f1d-4c3e-9a00-0000000000c1",
+      "username": "service-account-spillway-ci",
       "enabled": true,
-      "email": "test-operator@spillway.test",
-      "emailVerified": true,
-      "firstName": "Test",
-      "lastName": "Operator",
-      "credentials": [{ "type": "password", "value": "dev-only-not-secret", "temporary": false }],
-      "realmRoles": ["operator"]
+      "serviceAccountClientId": "spillway-ci",
+      "realmRoles": ["admin"]
     },
     {
-      "username": "test-viewer",
+      "id": "0b5e7c1a-5f1d-4c3e-9a00-0000000000c2",
+      "username": "service-account-gateway-tests",
       "enabled": true,
-      "email": "test-viewer@spillway.test",
-      "emailVerified": true,
-      "firstName": "Test",
-      "lastName": "Viewer",
-      "credentials": [{ "type": "password", "value": "dev-only-not-secret", "temporary": false }],
-      "realmRoles": ["viewer"]
+      "serviceAccountClientId": "gateway-tests"
     }
   ]
 }
