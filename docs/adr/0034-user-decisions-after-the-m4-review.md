@@ -85,8 +85,16 @@ The user confirmed D1 (`HEAD` matches routes and policies that list `GET`, unles
 - A client can no longer open an upstream's breaker for everyone with a path that answers 500, nor hold it open with one request per `open_for`. An upstream that answers 500 to every request no longer trips its breaker either; outlier ejection still ejects its endpoints (up to `max_ejected_percent`), and its 500s still reach the clients.
 - One stall burst no longer voids an NFR-04 gateway run or fails the killed-primary window check. Two bursts in one run, a burst longer than 1 s, or any conn or script error still do. On the 10487ba run above, this rule would still fail: its isolated error 19.6 s before the burst makes two bursts.
 - Dev-mode responses whose Redis calls failed carry `Spillway-Redis-Error`. Production, with dev mode off, is unchanged.
-- loadgen's JSON gains `failures`; nothing else reads it.
+- loadgen's JSON gains `failures`; only `make verify-m3` reads it.
 - ADR-0021 (killed-primary window rule, extended), ADR-0027 (NFR-04 one-error rule), ADR-0030 (breaker column of the attempt-outcome table; D4's wording, now applied) and ADR-0033 (the open breaker question) are superseded or settled in those parts. Their status lines say so.
+
+Measured on the dev laptop (branch `m4-decisions`, 2026-11-13): `make verify-m4` passed (both scenarios, every rule). `make verify-m3` passed **1 of 3** full runs (run 2):
+
+- **NFR-04 passed 3 of 3.** Two runs needed this ADR: run 1's gateway run 1 had 8 Redis timeouts in one burst of 408.5 ms, run 3's gateway runs had 1 (6.1 ms) and 97 in one burst of 132.8 ms; all excused, added p99 0.398, 0.392 and 0.373 ms. Under ADR-0027's one-error rule runs 1 and 3 would have voided their pairs.
+- **Run 1 failed the killed-primary test:** stalls at +15.9 s, +18.8 s and +24.1 s from the kill (gateway-1's access log has 3, 16 and 44 requests over 8 ms at those times) gave 33 failure-mode decisions on surviving primaries' keys, which this ADR does not excuse, and 17 outside the window on the killed primary's keys, all Redis timeouts but over 5,414 ms, so not one burst.
+- **Run 3 failed the full outage's 10 ms line:** 5 of 28,000 Redis checks over 10 ms (27,995 ≤ 10 ms); ADR-0027's line, unchanged here.
+
+Both are the same host stalls in checks the user did not extend. No rule was changed further.
 
 ## Alternatives considered
 
