@@ -208,6 +208,7 @@ func TestPolicyRejects(t *testing.T) {
 		{"unknown algorithm", policies("", p("algorithm", "token_bucket")), `algorithm "token_bucket"`},
 		{"upper-case algorithm", policies("", p("algorithm", "GCRA")), `algorithm "GCRA"`},
 		{"unknown mode", policies("", p("mode", "dry_run")), `mode "dry_run": want enforce, shadow or off`},
+		{"from_plan before the plans task", policies("", p("from_plan", "true")), `policy "p": from_plan is not supported until M5's plans task`},
 		{"upper-case mode", policies("", p("mode", "OFF")), `mode "OFF"`},
 		{"fixed window in Redis", policies("", p("local", "", "algorithm", "fixed_window")), `policy "p": algorithm fixed_window must be local (local: true); Redis policies use gcra or sliding_window`},
 		{"local false, fixed window", policies("", p("local", "false", "algorithm", "fixed_window")), "algorithm fixed_window must be local"},

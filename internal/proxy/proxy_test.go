@@ -768,3 +768,32 @@ func TestRequestFraming(t *testing.T) {
 		}
 	}
 }
+
+// A draining endpoint gets no new requests; with every endpoint draining, the
+// upstream has no usable address and answers 503 (ADR-0038, ADR-0008).
+func TestDrainingEndpoints(t *testing.T) {
+	a, b := newUpstream(t, "a"), newUpstream(t, "b")
+	config := func(drainA, drainB bool) string {
+		return fmt.Sprintf(`
+upstreams: [{name: u, lb: round_robin, endpoints: [{address: 'a:%s', draining: %t}, {address: 'b:%s', draining: %t}]}]
+routes: [{name: r, upstream: u, match: {path_prefix: /}}]
+`, a.port(), drainA, b.port(), drainB)
+	}
+	g := newGateway(t, newResolver(a, b), config(false, true))
+	for range 4 {
+		if status, _, e := g.get(t, "/", nil); status != http.StatusOK || e.Upstream != "a" {
+			t.Fatalf("b draining: %d from %q, want 200 from a", status, e.Upstream)
+		}
+	}
+	g.apply(t, config(true, true))
+	if status, _, _ := g.get(t, "/", nil); status != http.StatusServiceUnavailable {
+		t.Errorf("every endpoint draining: %d, want 503", status)
+	}
+	g.apply(t, config(false, false))
+	for range 4 {
+		g.get(t, "/", nil)
+	}
+	if a.requests.Load() != 6 || b.requests.Load() != 2 {
+		t.Errorf("requests a=%d b=%d, want 6 and 2: undraining b gives it its turn again", a.requests.Load(), b.requests.Load())
+	}
+}

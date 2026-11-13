@@ -84,6 +84,42 @@ services:
       timeout: 2s
       retries: 30
 
+  # Control plane (CP-10, CP-19, ADR-0036). The one-shot migrate applies the
+  # schema migrations as the owner role and sets the app role's password,
+  # then exits 0; the control plane starts after it, as the app role. Its
+  # REST API has no authentication until M5's rbac-audit task, so it is
+  # published on 127.0.0.1 only (SEC-02, ADR-0035).
+  migrate:
+    <<: &controlplane
+      build: { context: ., target: controlplane }
+      image: spillway-controlplane:dev
+      env_file: *env-local
+      read_only: true
+    command: ["migrate"]
+    labels: { spillway.oneshot: "true" } # make verify-m0 expects it to have exited 0
+    environment:
+      SPILLWAY_CP_MIGRATE_DATABASE_URL: postgres://spillway@postgres:5432/spillway?sslmode=disable # the owner role
+      SPILLWAY_CP_MIGRATE_PASSWORD: ${POSTGRES_PASSWORD:-dev-only-not-secret}
+      SPILLWAY_CP_DATABASE_PASSWORD: ${SPILLWAY_CP_DATABASE_PASSWORD:-dev-only-not-secret} # the app role's, which migrate sets (ADR-0040)
+    depends_on:
+      postgres: { condition: service_healthy }
+  controlplane:
+    <<: *controlplane
+    environment:
+      SPILLWAY_CP_DATABASE_URL: postgres://spillway_app@postgres:5432/spillway?sslmode=disable # the app role (ADR-0040)
+      SPILLWAY_CP_DATABASE_PASSWORD: ${SPILLWAY_CP_DATABASE_PASSWORD:-dev-only-not-secret}
+      SPILLWAY_CP_HTTP_ADDR: ":8080"
+      SPILLWAY_CP_ADMIN_ADDR: ":8081" # all interfaces in the container; published on 127.0.0.1 only
+      SPILLWAY_CP_ALLOWED_NETWORKS: 172.29.0.0/16 # the gateways' allow-list (SEC-06)
+    ports: ["127.0.0.1:8080:8080", "127.0.0.1:8081:8081"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    healthcheck:
+      test: ["CMD", "/controlplane", "healthcheck"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
   # OIDC provider and JWT issuer. The browser-facing issuer is
   # http://localhost:8180/auth/realms/spillway; containers reach Keycloak at
   # keycloak:8080 (ADR-0004).

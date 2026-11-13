@@ -1,0 +1,1397 @@
+# Spillway control plane REST API (CP-10, ADR-0036). OpenAPI-first: this file
+# is the source; `make api` generates internal/gen/apiv1 from it, `make
+# lint-api` checks the generated code and runs oasdiff against origin/main,
+# and the admin UI's client is generated from it (UI-05). A breaking change
+# needs a new /api/v2 path, not an edit.
+#
+# Conventions (ADR-0036): JSON with snake_case fields; config entities carry
+# their config.proto message's fields plus the REST-only version, created_at
+# and updated_at; unknown fields are 400; bodies over 1 MiB are 413; GET of
+# an entity answers ETag "<version>", and PUT, DELETE and drain require
+# If-Match with it (428 when missing, 412 when stale); lists are cursor
+# pages. Every operation lists the roles allowed to call it in
+# x-spillway-roles (ADR-0040).
+openapi: 3.0.3
+info:
+  title: Spillway control plane
+  version: 1.0.0
+  description: >-
+    Config entities (upstreams, routes, policies, plans) change the config
+    working set until a publish; identity entities (tenants, consumers, keys,
+    overrides, access lists) apply at once with a new identity version.
+servers:
+  - url: /api/v1
+tags:
+  - name: config
+    description: The config working set (CP-02)
+  - name: identity
+    description: Identity, applied at once (CP-20)
+paths:
+  /upstreams:
+    get:
+      operationId: listUpstreams
+      tags: [config]
+      summary: List upstreams, by id ascending
+      x-spillway-roles: [viewer, editor, publisher, key-admin, admin]
+      parameters:
+        - $ref: '#/components/parameters/PageLimit'
+        - $ref: '#/components/parameters/PageCursor'
+        - $ref: '#/components/parameters/NameFilter'
+      responses:
+        '200':
+          description: A page of upstreams
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UpstreamList' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: createUpstream
+      tags: [config]
+      summary: Create an upstream in the config working set; it ships with the next publish (CP-02)
+      x-spillway-roles: [editor, admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Upstream' }
+      responses:
+        '201':
+          description: Created
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+            Location: { $ref: '#/components/headers/Location' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Upstream' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        default: { $ref: '#/components/responses/Error' }
+  /upstreams/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      operationId: getUpstream
+      tags: [config]
+      summary: Read an upstream
+      x-spillway-roles: [viewer, editor, publisher, key-admin, admin]
+      responses:
+        '200':
+          description: The upstream
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Upstream' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        default: { $ref: '#/components/responses/Error' }
+    put:
+      operationId: updateUpstream
+      tags: [config]
+      summary: Replace an upstream in the config working set; it ships with the next publish (CP-02)
+      x-spillway-roles: [editor, admin]
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Upstream' }
+      responses:
+        '200':
+          description: The replaced upstream
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Upstream' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '428': { $ref: '#/components/responses/PreconditionRequired' }
+        default: { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: deleteUpstream
+      tags: [config]
+      summary: Delete an upstream in the config working set; it ships with the next publish (CP-02)
+      x-spillway-roles: [editor, admin]
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      responses:
+        '204':
+          description: Deleted
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '428': { $ref: '#/components/responses/PreconditionRequired' }
+        default: { $ref: '#/components/responses/Error' }
+  /upstreams/{id}/endpoints/{eid}/drain:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+      - name: eid
+        in: path
+        required: true
+        description: The endpoint's ID.
+        schema: { type: integer, format: int64 }
+    post:
+      operationId: drainEndpoint
+      tags: [config]
+      summary: Mark an endpoint draining in the config working set; it ships with the next publish. Undrain with a PUT of the upstream
+      x-spillway-roles: [editor, admin]
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      responses:
+        '200':
+          description: The upstream, with its new version
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Upstream' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '428': { $ref: '#/components/responses/PreconditionRequired' }
+        default: { $ref: '#/components/responses/Error' }
+  /routes:
+    get:
+      operationId: listRoutes
+      tags: [config]
+      summary: List routes, by id ascending
+      x-spillway-roles: [viewer, editor, publisher, key-admin, admin]
+      parameters:
+        - $ref: '#/components/parameters/PageLimit'
+        - $ref: '#/components/parameters/PageCursor'
+        - $ref: '#/components/parameters/NameFilter'
+      responses:
+        '200':
+          description: A page of routes
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RouteList' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: createRoute
+      tags: [config]
+      summary: Create a route in the config working set; it ships with the next publish (CP-02)
+      x-spillway-roles: [editor, admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Route' }
+      responses:
+        '201':
+          description: Created
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+            Location: { $ref: '#/components/headers/Location' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Route' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        default: { $ref: '#/components/responses/Error' }
+  /routes/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      operationId: getRoute
+      tags: [config]
+      summary: Read a route
+      x-spillway-roles: [viewer, editor, publisher, key-admin, admin]
+      responses:
+        '200':
+          description: The route
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Route' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        default: { $ref: '#/components/responses/Error' }
+    put:
+      operationId: updateRoute
+      tags: [config]
+      summary: Replace a route in the config working set; it ships with the next publish (CP-02)
+      x-spillway-roles: [editor, admin]
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Route' }
+      responses:
+        '200':
+          description: The replaced route
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Route' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '428': { $ref: '#/components/responses/PreconditionRequired' }
+        default: { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: deleteRoute
+      tags: [config]
+      summary: Delete a route in the config working set; it ships with the next publish (CP-02)
+      x-spillway-roles: [editor, admin]
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      responses:
+        '204':
+          description: Deleted
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '428': { $ref: '#/components/responses/PreconditionRequired' }
+        default: { $ref: '#/components/responses/Error' }
+  /policies:
+    get:
+      operationId: listPolicies
+      tags: [config]
+      summary: List policies, by id ascending
+      x-spillway-roles: [viewer, editor, publisher, key-admin, admin]
+      parameters:
+        - $ref: '#/components/parameters/PageLimit'
+        - $ref: '#/components/parameters/PageCursor'
+        - $ref: '#/components/parameters/NameFilter'
+      responses:
+        '200':
+          description: A page of policies
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PolicyList' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: createPolicy
+      tags: [config]
+      summary: Create a policy in the config working set; it ships with the next publish (CP-02)
+      x-spillway-roles: [editor, admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Policy' }
+      responses:
+        '201':
+          description: Created
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+            Location: { $ref: '#/components/headers/Location' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Policy' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        default: { $ref: '#/components/responses/Error' }
+  /policies/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      operationId: getPolicy
+      tags: [config]
+      summary: Read a policy
+      x-spillway-roles: [viewer, editor, publisher, key-admin, admin]
+      responses:
+        '200':
+          description: The policy
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Policy' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        default: { $ref: '#/components/responses/Error' }
+    put:
+      operationId: updatePolicy
+      tags: [config]
+      summary: Replace a policy in the config working set; it ships with the next publish (CP-02)
+      x-spillway-roles: [editor, admin]
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Policy' }
+      responses:
+        '200':
+          description: The replaced policy
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Policy' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '428': { $ref: '#/components/responses/PreconditionRequired' }
+        default: { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: deletePolicy
+      tags: [config]
+      summary: Delete a policy in the config working set; it ships with the next publish (CP-02)
+      x-spillway-roles: [editor, admin]
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      responses:
+        '204':
+          description: Deleted
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '428': { $ref: '#/components/responses/PreconditionRequired' }
+        default: { $ref: '#/components/responses/Error' }
+  /plans:
+    get:
+      operationId: listPlans
+      tags: [config]
+      summary: List plans, by id ascending
+      x-spillway-roles: [viewer, editor, publisher, key-admin, admin]
+      parameters:
+        - $ref: '#/components/parameters/PageLimit'
+        - $ref: '#/components/parameters/PageCursor'
+        - $ref: '#/components/parameters/NameFilter'
+      responses:
+        '200':
+          description: A page of plans
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PlanList' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: createPlan
+      tags: [config]
+      summary: Create a plan in the config working set; it ships with the next publish (CP-02)
+      x-spillway-roles: [editor, admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Plan' }
+      responses:
+        '201':
+          description: Created
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+            Location: { $ref: '#/components/headers/Location' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Plan' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        default: { $ref: '#/components/responses/Error' }
+  /plans/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      operationId: getPlan
+      tags: [config]
+      summary: Read a plan
+      x-spillway-roles: [viewer, editor, publisher, key-admin, admin]
+      responses:
+        '200':
+          description: The plan
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Plan' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        default: { $ref: '#/components/responses/Error' }
+    put:
+      operationId: updatePlan
+      tags: [config]
+      summary: Replace a plan in the config working set; it ships with the next publish (CP-02)
+      x-spillway-roles: [editor, admin]
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Plan' }
+      responses:
+        '200':
+          description: The replaced plan
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Plan' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '428': { $ref: '#/components/responses/PreconditionRequired' }
+        default: { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: deletePlan
+      tags: [config]
+      summary: Delete a plan in the config working set; it ships with the next publish (CP-02)
+      x-spillway-roles: [editor, admin]
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      responses:
+        '204':
+          description: Deleted
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '428': { $ref: '#/components/responses/PreconditionRequired' }
+        default: { $ref: '#/components/responses/Error' }
+  /tenants:
+    get:
+      operationId: listTenants
+      tags: [identity]
+      summary: List tenants, by id ascending
+      x-spillway-roles: [viewer, editor, publisher, key-admin, admin]
+      parameters:
+        - $ref: '#/components/parameters/PageLimit'
+        - $ref: '#/components/parameters/PageCursor'
+        - $ref: '#/components/parameters/NameFilter'
+      responses:
+        '200':
+          description: A page of tenants
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TenantList' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: createTenant
+      tags: [identity]
+      summary: Create a tenant; applies at once with a new identity version (CP-20)
+      x-spillway-roles: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Tenant' }
+      responses:
+        '201':
+          description: Created
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+            Location: { $ref: '#/components/headers/Location' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Tenant' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        default: { $ref: '#/components/responses/Error' }
+  /tenants/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      operationId: getTenant
+      tags: [identity]
+      summary: Read a tenant
+      x-spillway-roles: [viewer, editor, publisher, key-admin, admin]
+      responses:
+        '200':
+          description: The tenant
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Tenant' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        default: { $ref: '#/components/responses/Error' }
+    put:
+      operationId: updateTenant
+      tags: [identity]
+      summary: Replace a tenant; applies at once with a new identity version (CP-20)
+      x-spillway-roles: [admin]
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Tenant' }
+      responses:
+        '200':
+          description: The replaced tenant
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Tenant' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '428': { $ref: '#/components/responses/PreconditionRequired' }
+        default: { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: deleteTenant
+      tags: [identity]
+      summary: Delete a tenant; applies at once with a new identity version (CP-20)
+      x-spillway-roles: [admin]
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      responses:
+        '204':
+          description: Deleted
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '428': { $ref: '#/components/responses/PreconditionRequired' }
+        default: { $ref: '#/components/responses/Error' }
+  /consumers:
+    get:
+      operationId: listConsumers
+      tags: [identity]
+      summary: List consumers, by id ascending
+      x-spillway-roles: [viewer, editor, publisher, key-admin, admin]
+      parameters:
+        - $ref: '#/components/parameters/PageLimit'
+        - $ref: '#/components/parameters/PageCursor'
+        - $ref: '#/components/parameters/TenantIdFilter'
+        - $ref: '#/components/parameters/NameFilter'
+      responses:
+        '200':
+          description: A page of consumers
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConsumerList' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: createConsumer
+      tags: [identity]
+      summary: Create a consumer; applies at once with a new identity version (CP-20)
+      x-spillway-roles: [key-admin, admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Consumer' }
+      responses:
+        '201':
+          description: Created
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+            Location: { $ref: '#/components/headers/Location' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Consumer' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        default: { $ref: '#/components/responses/Error' }
+  /consumers/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      operationId: getConsumer
+      tags: [identity]
+      summary: Read a consumer
+      x-spillway-roles: [viewer, editor, publisher, key-admin, admin]
+      responses:
+        '200':
+          description: The consumer
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Consumer' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        default: { $ref: '#/components/responses/Error' }
+    put:
+      operationId: updateConsumer
+      tags: [identity]
+      summary: Replace a consumer; applies at once with a new identity version (CP-20)
+      x-spillway-roles: [key-admin, admin]
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Consumer' }
+      responses:
+        '200':
+          description: The replaced consumer
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Consumer' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '428': { $ref: '#/components/responses/PreconditionRequired' }
+        default: { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: deleteConsumer
+      tags: [identity]
+      summary: Delete a consumer; applies at once with a new identity version (CP-20)
+      x-spillway-roles: [key-admin, admin]
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      responses:
+        '204':
+          description: Deleted
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '428': { $ref: '#/components/responses/PreconditionRequired' }
+        default: { $ref: '#/components/responses/Error' }
+  /consumers/{id}/keys:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      operationId: listConsumerKeys
+      tags: [identity]
+      summary: List a consumer's API keys, by id ascending; prefix only, never the key or its hash
+      x-spillway-roles: [viewer, editor, publisher, key-admin, admin]
+      parameters:
+        - $ref: '#/components/parameters/PageLimit'
+        - $ref: '#/components/parameters/PageCursor'
+      responses:
+        '200':
+          description: A page of keys
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiKeyList' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        default: { $ref: '#/components/responses/Error' }
+  /overrides:
+    get:
+      operationId: listOverrides
+      tags: [identity]
+      summary: List overrides, by id ascending
+      x-spillway-roles: [viewer, editor, publisher, key-admin, admin]
+      parameters:
+        - $ref: '#/components/parameters/PageLimit'
+        - $ref: '#/components/parameters/PageCursor'
+        - $ref: '#/components/parameters/ConsumerIdFilter'
+        - $ref: '#/components/parameters/PolicyIdFilter'
+      responses:
+        '200':
+          description: A page of overrides
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OverrideList' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: createOverride
+      tags: [identity]
+      summary: Create an override; applies at once with a new identity version (CP-20)
+      x-spillway-roles: [key-admin, admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Override' }
+      responses:
+        '201':
+          description: Created
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+            Location: { $ref: '#/components/headers/Location' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Override' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        default: { $ref: '#/components/responses/Error' }
+  /overrides/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      operationId: getOverride
+      tags: [identity]
+      summary: Read an override
+      x-spillway-roles: [viewer, editor, publisher, key-admin, admin]
+      responses:
+        '200':
+          description: The override
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Override' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        default: { $ref: '#/components/responses/Error' }
+    put:
+      operationId: updateOverride
+      tags: [identity]
+      summary: Replace an override; applies at once with a new identity version (CP-20)
+      x-spillway-roles: [key-admin, admin]
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Override' }
+      responses:
+        '200':
+          description: The replaced override
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Override' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '428': { $ref: '#/components/responses/PreconditionRequired' }
+        default: { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: deleteOverride
+      tags: [identity]
+      summary: Delete an override; applies at once with a new identity version (CP-20)
+      x-spillway-roles: [key-admin, admin]
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      responses:
+        '204':
+          description: Deleted
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '428': { $ref: '#/components/responses/PreconditionRequired' }
+        default: { $ref: '#/components/responses/Error' }
+  /access-lists:
+    get:
+      operationId: listAccessLists
+      tags: [identity]
+      summary: List access-list entries, by id ascending
+      x-spillway-roles: [viewer, editor, publisher, key-admin, admin]
+      parameters:
+        - $ref: '#/components/parameters/PageLimit'
+        - $ref: '#/components/parameters/PageCursor'
+        - $ref: '#/components/parameters/ActionFilter'
+        - $ref: '#/components/parameters/SubjectTypeFilter'
+      responses:
+        '200':
+          description: A page of access-list entries
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AccessListEntryList' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: createAccessList
+      tags: [identity]
+      summary: Create an access-list entry; applies at once with a new identity version (CP-20)
+      x-spillway-roles: [key-admin, admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AccessListEntry' }
+      responses:
+        '201':
+          description: Created
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+            Location: { $ref: '#/components/headers/Location' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AccessListEntry' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        default: { $ref: '#/components/responses/Error' }
+  /access-lists/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      operationId: getAccessList
+      tags: [identity]
+      summary: Read an access-list entry
+      x-spillway-roles: [viewer, editor, publisher, key-admin, admin]
+      responses:
+        '200':
+          description: The access-list entry
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AccessListEntry' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        default: { $ref: '#/components/responses/Error' }
+    put:
+      operationId: updateAccessList
+      tags: [identity]
+      summary: Replace an access-list entry; applies at once with a new identity version (CP-20)
+      x-spillway-roles: [key-admin, admin]
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AccessListEntry' }
+      responses:
+        '200':
+          description: The replaced access-list entry
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AccessListEntry' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '428': { $ref: '#/components/responses/PreconditionRequired' }
+        default: { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: deleteAccessList
+      tags: [identity]
+      summary: Delete an access-list entry; applies at once with a new identity version (CP-20)
+      x-spillway-roles: [key-admin, admin]
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      responses:
+        '204':
+          description: Deleted
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '428': { $ref: '#/components/responses/PreconditionRequired' }
+        default: { $ref: '#/components/responses/Error' }
+components:
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      description: The entity's ID.
+      schema: { type: integer, format: int64 }
+    PageLimit:
+      name: limit
+      in: query
+      description: Page size.
+      schema: { type: integer, format: int32, minimum: 1, maximum: 500, default: 50 }
+    PageCursor:
+      name: cursor
+      in: query
+      description: The next_cursor of the previous page; opaque.
+      schema: { type: string }
+    NameFilter:
+      name: name
+      in: query
+      description: Only the entity with this name.
+      schema: { type: string }
+    TenantIdFilter:
+      name: tenant_id
+      in: query
+      description: Only this tenant's consumers.
+      schema: { type: integer, format: int64 }
+    ConsumerIdFilter:
+      name: consumer_id
+      in: query
+      description: Only this consumer's overrides.
+      schema: { type: integer, format: int64 }
+    PolicyIdFilter:
+      name: policy_id
+      in: query
+      description: Only the overrides of this policy.
+      schema: { type: integer, format: int64 }
+    ActionFilter:
+      name: action
+      in: query
+      description: Only entries with this action.
+      schema: { type: string, enum: [allow, deny] }
+    SubjectTypeFilter:
+      name: subject_type
+      in: query
+      description: Only entries with this subject type.
+      schema: { type: string, enum: [key, consumer, cidr] }
+    IfMatch:
+      name: If-Match
+      in: header
+      required: true
+      description: The entity's ETag, as its GET answered it (CP-14). Missing is 428; any other value than the current one is 412.
+      schema: { type: string }
+  headers:
+    ETag:
+      description: The entity's version as a strong ETag, "<version>" (CP-14).
+      schema: { type: string }
+    Location:
+      description: The created entity's URL.
+      schema: { type: string }
+  responses:
+    BadRequest:
+      description: Malformed JSON, an unknown field or a bad parameter (invalid_request)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: No such entity (not_found)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Conflict:
+      description: A name already taken, or an entity still in use (conflict)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    PreconditionFailed:
+      description: If-Match is not the current version, which details carries (precondition_failed)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    PayloadTooLarge:
+      description: The body is over 1 MiB (payload_too_large)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    UnsupportedMediaType:
+      description: The body is not application/json (unsupported_media_type)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    ValidationFailed:
+      description: The entity breaks its rules, or refers to what does not exist (validation_failed)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    PreconditionRequired:
+      description: If-Match is missing (precondition_required)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Error:
+      description: Any other error (internal, unavailable)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+  schemas:
+    Error:
+      type: object
+      required: [error, code, request_id]
+      properties:
+        error: { type: string, description: A message for people. }
+        code:
+          type: string
+          enum: [invalid_request, unauthenticated, forbidden, not_found, conflict, precondition_failed, payload_too_large, unsupported_media_type, validation_failed, precondition_required, internal, unavailable]
+        request_id: { type: string, description: The request's X-Request-Id. }
+        details:
+          type: array
+          items: { $ref: '#/components/schemas/ErrorDetail' }
+    ErrorDetail:
+      type: object
+      properties:
+        entity: { type: string }
+        id: { type: integer, format: int64 }
+        name: { type: string }
+        path: { type: string, description: The field at fault, such as health_check.interval. }
+        message: { type: string }
+        version: { type: integer, format: int64, description: For 412, the entity's current version. }
+
+    # Config entities: config.proto's messages (CP-21), field for field, plus
+    # version, created_at and updated_at. A unit test checks the parity.
+    Upstream:
+      type: object
+      additionalProperties: false
+      required: [id, name, endpoints, version, created_at, updated_at]
+      properties:
+        id: { type: integer, format: int64, readOnly: true }
+        name: { type: string, description: 'Unique; 1-64 characters from [A-Za-z0-9._-].' }
+        endpoints:
+          type: array
+          items: { $ref: '#/components/schemas/Endpoint' }
+        lb: { type: string, description: 'round_robin, p2c or consistent_hash; unset means p2c (GW-07).' }
+        hash_on: { type: string, description: consistent_hash's key template. }
+        health_check: { $ref: '#/components/schemas/HealthCheck' }
+        outlier_detection: { $ref: '#/components/schemas/OutlierDetection' }
+        circuit: { $ref: '#/components/schemas/CircuitBreaker' }
+        retry_budget: { $ref: '#/components/schemas/RetryBudget' }
+        version: { type: integer, format: int64, readOnly: true }
+        created_at: { type: string, format: date-time, readOnly: true }
+        updated_at: { type: string, format: date-time, readOnly: true }
+    Endpoint:
+      type: object
+      additionalProperties: false
+      required: [address]
+      properties:
+        id: { type: integer, format: int64, readOnly: true, description: Kept by a PUT that keeps the address. }
+        address: { type: string, description: 'host:port, unique within the upstream.' }
+        draining: { type: boolean, description: A draining endpoint gets no new requests. }
+    HealthCheck:
+      type: object
+      additionalProperties: false
+      properties:
+        path: { type: string }
+        interval: { type: string }
+        timeout: { type: string }
+        unhealthy: { type: integer, format: int32 }
+        healthy: { type: integer, format: int32 }
+    OutlierDetection:
+      type: object
+      additionalProperties: false
+      properties:
+        consecutive_failures: { type: integer, format: int32 }
+        base_ejection: { type: string }
+        max_ejection: { type: string }
+        max_ejected_percent: { type: integer, format: int32 }
+    CircuitBreaker:
+      type: object
+      additionalProperties: false
+      properties:
+        max_connections: { type: integer, format: int32 }
+        max_pending: { type: integer, format: int32 }
+        max_concurrent: { type: integer, format: int32 }
+        error_rate: { type: number, format: double }
+        window: { type: string }
+        min_requests: { type: integer, format: int32 }
+        open_for: { type: string }
+        half_open_probes: { type: integer, format: int32 }
+    RetryBudget:
+      type: object
+      additionalProperties: false
+      properties:
+        ratio: { type: number, format: double }
+        min_per_sec: { type: number, format: double }
+    Route:
+      type: object
+      additionalProperties: false
+      required: [id, name, match, upstream, version, created_at, updated_at]
+      properties:
+        id: { type: integer, format: int64, readOnly: true }
+        name: { type: string, description: 'Unique; 1-64 characters from [A-Za-z0-9._-].' }
+        match: { $ref: '#/components/schemas/RouteMatch' }
+        upstream: { type: string, description: The upstream's name. }
+        priority: { type: integer, format: int32 }
+        strip_prefix: { type: string }
+        add_prefix: { type: string }
+        request_headers: { $ref: '#/components/schemas/HeaderTransform' }
+        response_headers: { $ref: '#/components/schemas/HeaderTransform' }
+        max_body_bytes: { type: integer, format: int64 }
+        max_header_bytes: { type: integer, format: int32 }
+        timeouts: { $ref: '#/components/schemas/Timeouts' }
+        hsts_max_age: { type: string }
+        cost: { type: integer, format: int64 }
+        retry: { $ref: '#/components/schemas/Retry' }
+        auth_mode: { type: string, description: 'none, api_key, jwt or either; unset means none (GW-20).' }
+        version: { type: integer, format: int64, readOnly: true }
+        created_at: { type: string, format: date-time, readOnly: true }
+        updated_at: { type: string, format: date-time, readOnly: true }
+    RouteMatch:
+      type: object
+      additionalProperties: false
+      properties:
+        host: { type: string }
+        methods:
+          type: array
+          items: { type: string }
+        path: { type: string }
+        path_prefix: { type: string }
+        headers:
+          type: array
+          items: { $ref: '#/components/schemas/HeaderMatch' }
+    HeaderMatch:
+      type: object
+      additionalProperties: false
+      properties:
+        name: { type: string }
+        exact: { type: string }
+        regex: { type: string }
+    HeaderTransform:
+      type: object
+      additionalProperties: false
+      properties:
+        set:
+          type: array
+          items: { $ref: '#/components/schemas/HeaderValue' }
+        add:
+          type: array
+          items: { $ref: '#/components/schemas/HeaderValue' }
+        remove:
+          type: array
+          items: { type: string }
+    HeaderValue:
+      type: object
+      additionalProperties: false
+      properties:
+        name: { type: string }
+        value: { type: string }
+    Timeouts:
+      type: object
+      additionalProperties: false
+      properties:
+        connect: { type: string }
+        per_try: { type: string }
+        total: { type: string }
+        idle: { type: string }
+    Retry:
+      type: object
+      additionalProperties: false
+      properties:
+        attempts: { type: integer, format: int32 }
+        non_idempotent: { type: boolean }
+    Policy:
+      type: object
+      additionalProperties: false
+      required: [id, name, version, created_at, updated_at]
+      properties:
+        id: { type: integer, format: int64, readOnly: true }
+        name: { type: string, description: 'Unique; 1-64 characters from [A-Za-z0-9._-].' }
+        level: { type: string, description: 'global, tenant, consumer or route.' }
+        match: { $ref: '#/components/schemas/PolicyMatch' }
+        key_template: { type: string }
+        algorithm: { type: string, description: 'gcra, sliding_window, fixed_window or concurrency.' }
+        limits:
+          type: array
+          items: { $ref: '#/components/schemas/Limit' }
+        mode: { type: string, description: 'enforce, shadow or off; unset means enforce.' }
+        local: { type: boolean }
+        failure_mode: { type: string, description: 'fail_open, fail_closed or degraded.' }
+        from_plan: { type: boolean, description: "Takes the limits from the consumer's plan (RL-08)." }
+        version: { type: integer, format: int64, readOnly: true }
+        created_at: { type: string, format: date-time, readOnly: true }
+        updated_at: { type: string, format: date-time, readOnly: true }
+    PolicyMatch:
+      type: object
+      additionalProperties: false
+      properties:
+        routes:
+          type: array
+          items: { type: string }
+        methods:
+          type: array
+          items: { type: string }
+    Limit:
+      type: object
+      additionalProperties: false
+      properties:
+        rate: { type: integer, format: int64 }
+        period: { type: string }
+        burst: { type: integer, format: int64 }
+    Plan:
+      type: object
+      additionalProperties: false
+      required: [id, name, version, created_at, updated_at]
+      properties:
+        id: { type: integer, format: int64, readOnly: true }
+        name: { type: string, description: 'Unique; 1-64 characters from [A-Za-z0-9._-].' }
+        default_limits:
+          type: array
+          items: { $ref: '#/components/schemas/PlanLimits' }
+        version: { type: integer, format: int64, readOnly: true }
+        created_at: { type: string, format: date-time, readOnly: true }
+        updated_at: { type: string, format: date-time, readOnly: true }
+    PlanLimits:
+      type: object
+      additionalProperties: false
+      properties:
+        policy: { type: string, description: The policy's name. }
+        limits:
+          type: array
+          items: { $ref: '#/components/schemas/Limit' }
+
+    # Identity entities (CP-20).
+    Tenant:
+      type: object
+      additionalProperties: false
+      required: [id, name, plan_id, status, version, created_at, updated_at]
+      properties:
+        id: { type: integer, format: int64, readOnly: true }
+        name: { type: string, description: 'Unique; 1-64 characters from [A-Za-z0-9._-].' }
+        plan_id: { type: integer, format: int64, description: A plan of the latest published config. }
+        status: { type: string, enum: [active, suspended], default: active }
+        version: { type: integer, format: int64, readOnly: true }
+        created_at: { type: string, format: date-time, readOnly: true }
+        updated_at: { type: string, format: date-time, readOnly: true }
+    Consumer:
+      type: object
+      additionalProperties: false
+      required: [id, tenant_id, name, status, version, created_at, updated_at]
+      properties:
+        id: { type: integer, format: int64, readOnly: true }
+        tenant_id: { type: integer, format: int64 }
+        name: { type: string, description: 'Unique within the tenant; 1-64 characters from [A-Za-z0-9._-].' }
+        plan_id: { type: integer, format: int64, nullable: true, description: "A plan of the latest published config; null means the tenant's plan." }
+        status: { type: string, enum: [active, suspended], default: active }
+        jwt_subject: { type: string, nullable: true, description: 'The JWT sub that resolves to this consumer; unique.' }
+        version: { type: integer, format: int64, readOnly: true }
+        created_at: { type: string, format: date-time, readOnly: true }
+        updated_at: { type: string, format: date-time, readOnly: true }
+    ApiKey:
+      type: object
+      description: An API key as listed; never the key or its hash.
+      required: [id, consumer_id, prefix, version, created_at, updated_at]
+      properties:
+        id: { type: integer, format: int64 }
+        consumer_id: { type: integer, format: int64 }
+        prefix: { type: string }
+        expires_at: { type: string, format: date-time, nullable: true }
+        revoked_at: { type: string, format: date-time, nullable: true }
+        rotated_from: { type: integer, format: int64, nullable: true }
+        version: { type: integer, format: int64 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    Override:
+      type: object
+      additionalProperties: false
+      required: [id, consumer_id, policy_id, limits, version, created_at, updated_at]
+      properties:
+        id: { type: integer, format: int64, readOnly: true }
+        consumer_id: { type: integer, format: int64 }
+        policy_id: { type: integer, format: int64, description: A policy of the latest published config. }
+        limits:
+          type: array
+          items: { $ref: '#/components/schemas/Limit' }
+        starts_at: { type: string, format: date-time, nullable: true }
+        ends_at: { type: string, format: date-time, nullable: true, description: Set for a burst grant (RL-08). }
+        note: { type: string, nullable: true }
+        version: { type: integer, format: int64, readOnly: true }
+        created_at: { type: string, format: date-time, readOnly: true }
+        updated_at: { type: string, format: date-time, readOnly: true }
+    AccessListEntry:
+      type: object
+      additionalProperties: false
+      required: [id, action, subject_type, version, created_at, updated_at]
+      properties:
+        id: { type: integer, format: int64, readOnly: true }
+        action: { type: string, enum: [allow, deny] }
+        subject_type: { type: string, enum: [key, consumer, cidr] }
+        api_key_id: { type: integer, format: int64, nullable: true, description: Set exactly when subject_type is key. }
+        consumer_id: { type: integer, format: int64, nullable: true, description: Set exactly when subject_type is consumer. }
+        cidr: { type: string, nullable: true, description: 'Set exactly when subject_type is cidr, such as 203.0.113.0/24.' }
+        note: { type: string, nullable: true }
+        version: { type: integer, format: int64, readOnly: true }
+        created_at: { type: string, format: date-time, readOnly: true }
+        updated_at: { type: string, format: date-time, readOnly: true }
+
+    # Pages (UI-06): next_cursor is null on the last page.
+    UpstreamList:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Upstream' }
+        next_cursor: { type: string, nullable: true }
+    RouteList:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Route' }
+        next_cursor: { type: string, nullable: true }
+    PolicyList:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Policy' }
+        next_cursor: { type: string, nullable: true }
+    PlanList:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Plan' }
+        next_cursor: { type: string, nullable: true }
+    TenantList:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Tenant' }
+        next_cursor: { type: string, nullable: true }
+    ConsumerList:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Consumer' }
+        next_cursor: { type: string, nullable: true }
+    ApiKeyList:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/ApiKey' }
+        next_cursor: { type: string, nullable: true }
+    OverrideList:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Override' }
+        next_cursor: { type: string, nullable: true }
+    AccessListEntryList:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/AccessListEntry' }
+        next_cursor: { type: string, nullable: true }
