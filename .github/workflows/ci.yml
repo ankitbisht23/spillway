@@ -34,7 +34,7 @@ jobs:
         run: make lint-go
       - name: buf lint, generated code, buf breaking (CP-21)
         run: make lint-proto
-      - name: OpenAPI: generated code, oasdiff breaking (CP-10)
+      - name: "OpenAPI: generated code, oasdiff breaking (CP-10)"
         run: make lint-api
       - name: sqlc generated code (CP-01)
         run: make lint-sql
