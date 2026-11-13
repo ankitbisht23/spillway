@@ -14,6 +14,13 @@ import (
 	"github.com/ankitbisht23/spillway/internal/router"
 )
 
+// The snapshot schema version (CP-18, ADR-0038). It travels with every
+// published config version.
+const (
+	SchemaMajor = 1
+	SchemaMinor = 0
+)
+
 // Snapshot is a compiled config. It never changes once compiled: a reload
 // builds a new one, and a request keeps the snapshot it started with (GW-21).
 type Snapshot struct {

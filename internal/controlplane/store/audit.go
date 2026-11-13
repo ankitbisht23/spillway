@@ -40,29 +40,25 @@ type change struct {
 	note     *string
 	removed  map[string][]int64 // rows a delete cascaded to, by kind
 	identity int64              // the identity version the change made, 0 for none
+	config   int64              // the config version the change made, 0 for none
+	// diff, when not nil, is the record's diff instead of before and after:
+	// publish and rollback record their changes list (ADR-0040).
+	diff any
 }
 
 // write inserts c's audit record. The diff is {"before": …, "after": …}
-// in the REST representation, plus "removed" for a cascading delete; it
-// never holds a key, its hash, a token or a password (ADR-0040).
+// in the REST representation, plus "removed" for a cascading delete, or
+// c.diff; it never holds a key, its hash, a token or a password (ADR-0040).
 func (a Audit) write(ctx context.Context, q *db.Queries, c change) error {
-	if a.Actor.Sub == "" || a.RequestID == "" || a.Show == nil {
+	if a.Actor.Sub == "" || a.RequestID == "" || a.Show == nil && (c.before != nil || c.after != nil) {
 		return errors.New("an audited change needs an actor, a request ID and Show")
 	}
-	diff := map[string]any{"before": nil, "after": nil}
-	var err error
-	if c.before != nil {
-		if diff["before"], err = a.Show(c.before); err != nil {
+	diff := c.diff
+	if diff == nil {
+		var err error
+		if diff, err = a.beforeAfter(c); err != nil {
 			return err
 		}
-	}
-	if c.after != nil {
-		if diff["after"], err = a.Show(c.after); err != nil {
-			return err
-		}
-	}
-	if len(c.removed) > 0 {
-		diff["removed"] = c.removed
 	}
 	b, err := json.Marshal(diff)
 	if err != nil {
@@ -80,7 +76,30 @@ func (a Audit) write(ctx context.Context, q *db.Queries, c change) error {
 	if c.identity != 0 {
 		p.IdentityVersion = &c.identity
 	}
+	if c.config != 0 {
+		p.ConfigVersion = &c.config
+	}
 	return q.InsertAudit(ctx, p)
+}
+
+// beforeAfter is c's diff of an entity change.
+func (a Audit) beforeAfter(c change) (map[string]any, error) {
+	diff := map[string]any{"before": nil, "after": nil}
+	var err error
+	if c.before != nil {
+		if diff["before"], err = a.Show(c.before); err != nil {
+			return nil, err
+		}
+	}
+	if c.after != nil {
+		if diff["after"], err = a.Show(c.after); err != nil {
+			return nil, err
+		}
+	}
+	if len(c.removed) > 0 {
+		diff["removed"] = c.removed
+	}
+	return diff, nil
 }
 
 // AuditFilter narrows an audit-log page (ADR-0036): EntityID only with
