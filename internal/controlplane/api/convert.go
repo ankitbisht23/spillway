@@ -56,19 +56,6 @@ func toProto(body any, m proto.Message) error {
 	return nil
 }
 
-// specOf is m's protojson form without id, name and endpoints, which have
-// columns (ADR-0036).
-func specOf(m proto.Message) ([]byte, error) {
-	m = proto.Clone(m)
-	r := m.ProtoReflect()
-	for _, f := range []protoreflect.Name{"id", "name", "endpoints"} {
-		if fd := r.Descriptor().Fields().ByName(f); fd != nil {
-			r.Clear(fd)
-		}
-	}
-	return protojson.MarshalOptions{UseProtoNames: true}.Marshal(m)
-}
-
 // fromRow fills out, the generated model of a config entity, from a stored
 // row: its spec, id, name and endpoints, and the REST-only fields.
 func fromRow(row store.ConfigRow, m proto.Message, out any) error {

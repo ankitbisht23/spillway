@@ -110,7 +110,7 @@ func TestEveryOperationIsServed(t *testing.T) {
 	for path, item := range spec(t).Paths.Map() {
 		for method, op := range item.Operations() {
 			n++
-			url := BasePath + strings.NewReplacer("{id}", "1", "{eid}", "2").Replace(path)
+			url := BasePath + strings.NewReplacer("{id}", "1", "{eid}", "2", "{v}", "3").Replace(path)
 			body := ""
 			if op.RequestBody != nil {
 				body = "{}"

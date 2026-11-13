@@ -59,6 +59,8 @@ var matrix = map[string][]string{
 	"createConsumer": {"key-admin", "admin"}, "updateConsumer": {"key-admin", "admin"}, "deleteConsumer": {"key-admin", "admin"},
 	"createOverride": {"key-admin", "admin"}, "updateOverride": {"key-admin", "admin"}, "deleteOverride": {"key-admin", "admin"},
 	"createAccessList": {"key-admin", "admin"}, "updateAccessList": {"key-admin", "admin"}, "deleteAccessList": {"key-admin", "admin"},
+	"validateConfig": all, "listConfigVersions": all, "getConfigVersion": all, "diffConfigVersion": all,
+	"publishConfig": {"publisher", "admin"}, "rollbackConfig": {"publisher", "admin"},
 	"listAudit": {"admin"},
 }
 
@@ -72,7 +74,7 @@ func specOps(t *testing.T) []specOp {
 	var ops []specOp
 	for path, item := range spec(t).Paths.Map() {
 		for method, op := range item.Operations() {
-			o := specOp{id: operationID(op), method: method, url: BasePath + strings.NewReplacer("{id}", "1", "{eid}", "2").Replace(path)}
+			o := specOp{id: operationID(op), method: method, url: BasePath + strings.NewReplacer("{id}", "1", "{eid}", "2", "{v}", "3").Replace(path)}
 			if op.RequestBody != nil {
 				o.body = "{}"
 			}

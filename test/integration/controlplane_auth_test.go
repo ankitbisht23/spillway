@@ -142,7 +142,7 @@ func matrix(t *testing.T, c cpClient, tokens map[string]string) {
 	}
 	id := fmt.Sprint(int64(math.MaxInt64))
 	for _, op := range ops {
-		path := strings.NewReplacer("{id}", id, "{eid}", id).Replace(op.path)
+		path := strings.NewReplacer("{id}", id, "{eid}", id, "{v}", id).Replace(op.path)
 		var body any
 		if op.body {
 			body = map[string]any{}
