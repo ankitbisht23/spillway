@@ -58,7 +58,7 @@ The design's data model says the identity version is "a Postgres sequence". A se
 3. The revision equals the latest version's `working_set_revision`: **409** `nothing_to_publish`. Two publishers of the same preview therefore produce one version, and the second gets 409.
 4. Validation above; any error: **422**, nothing written.
 5. `version = (SELECT coalesce(max(version), 0) + 1 FROM config_versions)`. Under the row lock this is monotonic and gapless, and versions commit in order.
-6. `INSERT INTO config_versions (…, published_at, snapshot, kind) VALUES (…, clock_timestamp(), <protojson Config with version and IDs>, 'publish')`. `clock_timestamp()` here, the last statement before commit, is "publish committed" for NFR-08 (ADR-0042).
+6. `INSERT INTO config_versions (…, published_at, snapshot, kind) VALUES (…, clock_timestamp(), <protojson Config with version and IDs>, 'publish')`. `published_at` is "publish committed" for NFR-08 (ADR-0042): taken just before the audit insert, the `NOTIFY` and the commit, it is never later than the commit, so the measure can only overstate.
 7. The audit record: action `config.publish`, entity `config`, `diff` = `{"from_version", "to_version", "changes"}` (the snapshot itself is in `config_versions`), the note, `config_version`.
 8. `NOTIFY spillway_config, '<version>'` (delivered at commit, ADR-0038). Commit; answer **200** `{"version", "published_at"}`.
 

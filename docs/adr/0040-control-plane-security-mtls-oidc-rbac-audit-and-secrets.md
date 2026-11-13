@@ -39,7 +39,7 @@ The control plane is the one place that can change every gateway's behaviour, so
   - realm roles `viewer`, `editor`, `publisher`, `key-admin`, `admin` (D4); `operator` removed;
   - users `test-viewer`, `test-editor`, `test-publisher`, `test-key-admin`, `test-admin`, one role each, password `dev-only-not-secret`, fixed `id`s; `test-operator` removed;
   - `admin-ui` (public, PKCE; M6) gets an audience mapper adding `spillway-controlplane`;
-  - new confidential client `spillway-ci` (client credentials only, secret `dev-only-not-secret`, audience `spillway-controlplane`) whose service account holds `editor`, `publisher` and `key-admin`; `make verify-m5` and the integration tests use it;
+  - new confidential client `spillway-ci` (client credentials only, secret `dev-only-not-secret`, audience `spillway-controlplane`) whose service account holds `admin` (`make verify-m5` creates a tenant, which only admin may); `make verify-m5` and the integration tests use it, and the RBAC tests use the per-role users;
   - `gateway-tests` (confidential, existing) gets an audience mapper adding `spillway-gateway`, and its service-account user a fixed `id`, so its `sub` is stable for a consumer's `jwt_subject` (ADR-0039);
   - tokens must carry `sub` and `realm_access.roles` (Keycloak's `basic` and `roles` client scopes). The rbac-audit task asserts both on a minted token and declares the scopes in the realm file if the import does not add them.
   

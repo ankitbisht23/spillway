@@ -137,7 +137,9 @@ docs/design.md is not edited in this PR. Each item names the task that would app
 - Heavy hitters: one 100-counter sketch per replica, count 1 per deny or shadow would-deny, failure modes excluded, 22-character digests with the consumer and key IDs, one-minute windows (ADR-0041).
 - NFR-09: 20 revocations, probes every 50 ms per replica, sender clock, every sample < 5 s (ADR-0042).
 - NFR-12: control plane and Postgres stopped for 600 s under 500 rps over five gateways, gateway-3 restarted from its snapshot at +300 s, five rules (ADR-0042).
-- Library pins: the newest release at least two weeks old (pgx v5.12.0, go-jose v4.1.7, oapi-codegen runtime v1.8.0, testcontainers v0.44.0, goose v3.29.0 to match the CLI, kin-openapi v0.142.0 as oapi-codegen requires) (ADR-0036, ADR-0039).
+- `make verify-m5`'s timeouts: the routes keep the default 5 s connect and 15 s total, probes and scrapes get 4 s, REST calls 10 s, the load client 20 s — every timeout at least 4× the 820 ms planning stall, and a failed probe or scrape fails its check (ADR-0042).
+- The `spillway-ci` client's service account holds `admin`: `make verify-m5` creates a tenant, which only admin may; RBAC tests use the per-role users (ADR-0040).
+- Library pins: releases about two weeks old or older on 2026-11-13 (pgx v5.12.0, go-jose v4.1.7, oapi-codegen runtime v1.8.0, testcontainers v0.44.0, goose v3.29.0 to match the CLI, kin-openapi v0.142.0 as oapi-codegen requires) (ADR-0036, ADR-0039).
 
 ## Consequences
 

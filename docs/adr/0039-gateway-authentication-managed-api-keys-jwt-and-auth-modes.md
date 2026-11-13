@@ -37,7 +37,7 @@ M2 gave the gateway static API keys from a YAML file (ADR-0017): a 12-byte prefi
 
 ### JWT (GW-18, SEC-04, D8)
 
-- **Library**: `github.com/go-jose/go-jose/v4` **v4.1.7** (exact; the newest release at least two weeks old), in `internal/auth`, shared with the control plane's bearer-token checks (ADR-0040). It parses compact JWS with an explicit algorithm list, so `none` and HS256 can never be accepted.
+- **Library**: `github.com/go-jose/go-jose/v4` **v4.1.7** (exact; released 2026-10-30), in `internal/auth`, shared with the control plane's bearer-token checks (ADR-0040). It parses compact JWS with an explicit algorithm list, so `none` and HS256 can never be accepted.
 - **Settings**, from the environment (ADR-0008: a trust anchor in the snapshot would let the admin API change it):
 
   | Variable | Meaning | Default |
