@@ -351,6 +351,11 @@ func (id *Identity) addAccess(e *configpb.AccessListEntry) error {
 		if err != nil || p != p.Masked() {
 			return fmt.Errorf("cidr %q: want a CIDR with no bits set past its prefix", e.GetCidr())
 		}
+		// Client addresses are unmapped before matching (SEC-05), so an
+		// IPv4-mapped prefix matches the IPv4 addresses it maps.
+		if p.Addr().Is4In6() {
+			p = netip.PrefixFrom(p.Addr().Unmap(), p.Bits()-96)
+		}
 		a.cidrs = append(a.cidrs, p)
 	case "key":
 		if e.GetApiKeyId() <= 0 {

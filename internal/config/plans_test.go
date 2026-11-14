@@ -194,6 +194,7 @@ func TestIdentityAccessAndOverrides(t *testing.T) {
 			{Id: 4, Action: "deny", SubjectType: "key", ApiKeyId: 70},
 			{Id: 5, Action: "allow", SubjectType: "key", ApiKeyId: 71},
 			{Id: 6, Action: "allow", SubjectType: "consumer", ConsumerId: 3},
+			{Id: 7, Action: "deny", SubjectType: "cidr", Cidr: "::ffff:192.0.2.128/121"}, // matches 192.0.2.128/25
 		},
 		Overrides: []*configpb.Override{
 			{Id: 10, ConsumerId: 3, PolicyId: 12, Limits: limit(30)},
@@ -209,6 +210,7 @@ func TestIdentityAccessAndOverrides(t *testing.T) {
 	}
 	for ip, want := range map[string][2]bool{
 		"203.0.113.9": {true, false}, "198.51.100.1": {false, true}, "2001:db8::1": {false, true}, "192.0.2.1": {false, false},
+		"192.0.2.200": {true, false},
 	} {
 		if d, a := id.CIDR(netip.MustParseAddr(ip)); [2]bool{d, a} != want {
 			t.Errorf("CIDR(%s) = deny %v, allow %v; want %v", ip, d, a, want)

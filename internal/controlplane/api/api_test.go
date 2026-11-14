@@ -264,6 +264,7 @@ func TestRequestErrors(t *testing.T) {
 		{"access list subject missing", "POST", "/api/v1/access-lists", `{"action": "deny", "subject_type": "cidr"}`, nil, 422, apiv1.ErrorCodeValidationFailed, "set cidr and none of the other subjects"},
 		{"access list two subjects", "POST", "/api/v1/access-lists", `{"action": "deny", "subject_type": "key", "api_key_id": 1, "consumer_id": 2}`, nil, 422, apiv1.ErrorCodeValidationFailed, "set api_key_id and none"},
 		{"access list host bits", "POST", "/api/v1/access-lists", `{"action": "deny", "subject_type": "cidr", "cidr": "203.0.113.7/24"}`, nil, 422, apiv1.ErrorCodeValidationFailed, "want 203.0.113.0/24"},
+		{"access list IPv4-mapped CIDR", "POST", "/api/v1/access-lists", `{"action": "deny", "subject_type": "cidr", "cidr": "::ffff:203.0.113.0/120"}`, nil, 422, apiv1.ErrorCodeValidationFailed, "want 203.0.113.0/24"},
 		{"access list bad CIDR", "POST", "/api/v1/access-lists", `{"action": "allow", "subject_type": "cidr", "cidr": "nope"}`, nil, 422, apiv1.ErrorCodeValidationFailed, "want a CIDR"},
 		{"access list action", "POST", "/api/v1/access-lists", `{"action": "block", "subject_type": "cidr", "cidr": "10.0.0.0/8"}`, nil, 422, apiv1.ErrorCodeValidationFailed, `action "block"`},
 		{"override without limits", "POST", "/api/v1/overrides", `{"consumer_id": 1, "policy_id": 2, "limits": []}`, nil, 422, apiv1.ErrorCodeValidationFailed, "at least one"},

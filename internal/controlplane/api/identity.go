@@ -251,6 +251,11 @@ func accessListIn(b *apiv1.AccessListEntry) (db.CreateAccessListParams, error) {
 		if p != p.Masked() {
 			return in, validation("access_list", "cidr", fmt.Sprintf("cidr %q has bits set past its prefix; want %s", *b.Cidr, p.Masked()))
 		}
+		// Gateways compare client addresses as IPv4 (SEC-05), which an
+		// IPv6 prefix never contains.
+		if p.Addr().Is4In6() {
+			return in, validation("access_list", "cidr", fmt.Sprintf("cidr %q is IPv4-mapped IPv6, which matches no client; want %s", *b.Cidr, netip.PrefixFrom(p.Addr().Unmap(), p.Bits()-96)))
+		}
 		in.Cidr = &p
 	}
 	return in, nil
