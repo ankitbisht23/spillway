@@ -86,6 +86,14 @@ func canonicalYAML(c *configpb.Config) ([]byte, error) {
 	if proto.Size(c) == 0 {
 		return nil, nil
 	}
+	return exportYAML(c)
+}
+
+// exportYAML is c as export writes it (CP-05, ADR-0037): entities sorted by
+// name, fields in proto order, only set fields, 64-bit integers as YAML
+// integers; an empty config is {}.
+func exportYAML(c *configpb.Config) ([]byte, error) {
+	c = proto.Clone(c).(*configpb.Config)
 	byName := func(a, b protoreflect.Message) int { return cmp.Compare(nameOf(a), nameOf(b)) }
 	r := c.ProtoReflect()
 	for _, l := range configLists {

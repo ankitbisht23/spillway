@@ -470,7 +470,8 @@ plans:
 | POST | `/api/v1/consumers/{id}/keys` | Issue a key (returned once) |
 | POST | `/api/v1/keys/{id}/rotate`, `/revoke` | Rotate, revoke |
 | POST | `/api/v1/upstreams/{id}/endpoints/{eid}/drain` | Mark an endpoint draining in the working config (ships with the next publish) |
-| GET | `/api/v1/config/export` | Full config and identity as YAML (CP-05) |
+| GET | `/api/v1/config/export` | Config as YAML (CP-05) |
+| GET | `/api/v1/identity/export` | Identity as YAML (admin) |
 | POST | `/api/v1/config/import` | Replace the working set from YAML (CP-05); config still needs a publish |
 | POST | `/api/v1/config/validate` | Validate working config; return errors, diff and the working-set revision |
 | POST | `/api/v1/config/publish` | Publish working config as a new version (`If-Match`: working-set revision; change note required) |
@@ -669,7 +670,7 @@ Exit (`make verify-m4`): with one of three endpoints failing, ≥ 99% of request
 
 - [x] Postgres schema; CRUD admin API, OpenAPI-first (`api/openapi.yaml`, oapi-codegen server stubs, `oasdiff` in CI), incl. tenants, access lists, key listing and endpoint drain (CP-01, CP-10, CP-14)
 - [x] Migrations as a separate `controlplane migrate` step: compose runs it before the API, Helm as a pre-install/pre-upgrade Job; expand, then contract (CP-19)
-- [ ] YAML import and export through the API (CP-05)
+- [x] YAML import and export through the API (CP-05)
 - [x] Validate, publish with a change note and `If-Match` on the working-set revision, version, rollback (config only); upstream allow-list checked in API validation (CP-02–CP-04, SEC-06)
 - [ ] Identity changes applied immediately with their own version, audited, never rolled back, and sent on the Watch stream as separate messages (CP-20)
 - [ ] gRPC Watch and Heartbeat (every 5 s plus immediately on apply), `replicas` table and `live_replicas`, `gw_config_sync_age_seconds`, on-disk last-good snapshot on a writable volume, versioned snapshot schema guarded by `buf breaking` (CP-06–CP-09, CP-18, RL-24)
