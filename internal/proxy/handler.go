@@ -159,6 +159,12 @@ func (h *Handler) serve(w *responseRecorder, r *http.Request, body *countingBody
 	// path that would have matched another route (ADR-0007).
 	path := router.CleanPath(r.URL.Path)
 	s := h.snapshot()
+	if s == nil {
+		// A managed gateway before its first config (ADR-0038); /readyz
+		// fails meanwhile.
+		jsonError(w, http.StatusServiceUnavailable, "no config loaded yet")
+		return
+	}
 	route, _, ok := s.Match(r.Host, r.Method, path, r.Header)
 	if !ok {
 		http.Error(w, "no route", http.StatusNotFound)

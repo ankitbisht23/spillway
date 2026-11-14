@@ -92,6 +92,10 @@ func (s *Service) Watch(req *configpb.WatchRequest, stream grpc.ServerStreamingS
 		return err
 	}
 	defer s.b.unsubscribe(sub)
+	// The headers tell the gateway that its stream is registered.
+	if err := stream.SendHeader(nil); err != nil {
+		return err
+	}
 	if replaced {
 		log.Warn("Watch stream replaced an open stream with the same replica name")
 	}

@@ -148,6 +148,9 @@ func TestWatchReplacedAndStepDown(t *testing.T) {
 	client, b := watchServer(t, newFakeSource(1, 1))
 	ctx := t.Context()
 	first, _ := client.Watch(ctx, watchReq("gateway-1", 1, 1))
+	if _, err := first.Header(); err != nil { // registered
+		t.Fatal(err)
+	}
 	second, _ := client.Watch(ctx, watchReq("gateway-1", 1, 0))
 	if got, err := recv(t, second); got != "identity 1" {
 		t.Fatalf("second stream: %q %v", got, err)

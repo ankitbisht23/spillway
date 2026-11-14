@@ -45,6 +45,14 @@ func TestLoadSettings(t *testing.T) {
 		s.maxConnections != 8192 || s.maxInFlight != 4096 || s.traceSampleRatio != 1 {
 		t.Errorf("settings = %+v", s)
 	}
+	managedEnv := map[string]string{"SPILLWAY_GATEWAY_CONFIG": "", "SPILLWAY_GATEWAY_CONTROL_PLANE": "controlplane:9090", "SPILLWAY_GATEWAY_REPLICA_ID": "gateway-3"}
+	if s, err := loadSettings(env(managedEnv)); err != nil || s.controlPlane != "controlplane:9090" || s.snapshot != "/var/lib/spillway/snapshot.pb" || s.replicaID != "gateway-3" {
+		t.Errorf("managed mode: %+v, %v", s, err)
+	}
+	s = settings{controlPlane: "cp:9090"}
+	if err := s.mode(func() (string, error) { return "Gateway-2", nil }); err != nil || s.replicaID != "gateway-2" {
+		t.Errorf("replica name from the host name: %q, %v", s.replicaID, err)
+	}
 	tlsOnly := map[string]string{"SPILLWAY_GATEWAY_HTTP_ADDR": "", "SPILLWAY_GATEWAY_TLS_CERT": "/c.pem", "SPILLWAY_GATEWAY_TLS_KEY": "/k.pem"}
 	if s, err := loadSettings(env(tlsOnly)); err != nil || s.httpAddr != "" || s.tlsAddr != ":8443" || s.tlsCert != "/c.pem" || s.tlsKey != "/k.pem" {
 		t.Errorf("TLS only: %+v, %v", s, err)
@@ -116,6 +124,12 @@ func TestLoadSettings(t *testing.T) {
 		want string // the error's prefix
 	}{
 		{map[string]string{"SPILLWAY_GATEWAY_CONFIG": ""}, "SPILLWAY_GATEWAY_CONFIG"},
+		// Managed mode (ADR-0038).
+		{map[string]string{"SPILLWAY_GATEWAY_CONTROL_PLANE": "controlplane:9090"}, "SPILLWAY_GATEWAY_CONFIG and SPILLWAY_GATEWAY_IDENTITY: not with SPILLWAY_GATEWAY_CONTROL_PLANE"},
+		{map[string]string{"SPILLWAY_GATEWAY_CONFIG": "", "SPILLWAY_GATEWAY_IDENTITY": "/i.yaml", "SPILLWAY_GATEWAY_CONTROL_PLANE": "controlplane:9090"}, "SPILLWAY_GATEWAY_CONFIG and SPILLWAY_GATEWAY_IDENTITY"},
+		{map[string]string{"SPILLWAY_GATEWAY_CONFIG": "", "SPILLWAY_GATEWAY_CONTROL_PLANE": "controlplane"}, `SPILLWAY_GATEWAY_CONTROL_PLANE: "controlplane" is not host:port`},
+		{map[string]string{"SPILLWAY_GATEWAY_CONFIG": "", "SPILLWAY_GATEWAY_CONTROL_PLANE": "cp:9090", "SPILLWAY_GATEWAY_REPLICA_ID": "Gateway_1"}, `SPILLWAY_GATEWAY_REPLICA_ID: "Gateway_1" is not a DNS label`},
+		{map[string]string{"SPILLWAY_GATEWAY_SNAPSHOT": "/s.pb"}, "SPILLWAY_GATEWAY_SNAPSHOT and SPILLWAY_GATEWAY_REPLICA_ID: managed mode only"},
 		{map[string]string{"SPILLWAY_GATEWAY_HTTP_ADDR": ""}, "no listener"},
 		{map[string]string{"SPILLWAY_GATEWAY_TLS_CERT": "/c.pem"}, "SPILLWAY_GATEWAY_TLS_CERT and SPILLWAY_GATEWAY_TLS_KEY"},
 		{map[string]string{"SPILLWAY_GATEWAY_TLS_KEY": "/k.pem"}, "SPILLWAY_GATEWAY_TLS_CERT and SPILLWAY_GATEWAY_TLS_KEY"},

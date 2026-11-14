@@ -22,8 +22,12 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/ankitbisht23/spillway/internal/config"
+	"github.com/ankitbisht23/spillway/internal/gen/configpb"
+	"github.com/ankitbisht23/spillway/internal/managed"
 	"github.com/ankitbisht23/spillway/internal/proxy"
 	"github.com/ankitbisht23/spillway/internal/ratelimit"
 	"github.com/ankitbisht23/spillway/internal/ratelimit/local"
@@ -130,8 +134,8 @@ const flushTimeout = 5 * time.Second
 // (GW-23, ADR-0030), in this order: /readyz fails; for the drain the
 // listeners keep serving, closing each HTTP/1.1 connection after its
 // response; the listeners close and in-flight requests get the shutdown
-// grace, after which the rest are cut; the health probers, DNS refresh and
-// watchers stop; flush sends the queued telemetry; the admin server closes.
+// grace, after which the rest are cut; the health probers, DNS refresh,
+// watchers and the control-plane stream stop; flush sends the queued telemetry; the admin server closes.
 // With a tracer, requests are traced (OB-02).
 func serve(ctx context.Context, s settings, log *slog.Logger, tracer trace.Tracer, flush func(context.Context)) error {
 	// Background work runs until step 4 of the shutdown, past ctx, so
@@ -153,7 +157,7 @@ func serve(ctx context.Context, s settings, log *slog.Logger, tracer trace.Trace
 		go c.Warm(bg, time.Second)
 		rl = c
 	}
-	cfg, err := config.NewWatcher(s.configPath, log, func(snap *config.Snapshot) error {
+	apply := func(snap *config.Snapshot) error {
 		if err := checkRedis(snap, rl != nil); err != nil {
 			return err
 		}
@@ -162,27 +166,53 @@ func serve(ctx context.Context, s settings, log *slog.Logger, tracer trace.Trace
 		}
 		limiters.Apply(snap)
 		return nil
-	})
-	if err != nil {
-		return err
 	}
-	// API keys resolve against the identity file, polled like the config
-	// (ADR-0017); without one, every key is invalid.
+	// Config and identity come from files in static mode and from the
+	// control plane in managed mode (ADR-0038).
+	var snapshot func() *config.Snapshot
 	identity := func() *config.Identity { return nil }
-	if s.identity != "" {
-		ids, err := config.NewIdentityWatcher(s.identity, log)
+	ready := func() bool { return snapshot() != nil }
+	if s.controlPlane == "" {
+		cfg, err := config.NewWatcher(s.configPath, log, apply)
 		if err != nil {
 			return err
 		}
-		identity = ids.Identity
-		go ids.Run(bg, time.Second)
+		snapshot = cfg.Snapshot
+		go cfg.Run(bg, time.Second)
+		// API keys resolve against the identity file, polled like the
+		// config (ADR-0017); without one, every key is invalid.
+		if s.identity != "" {
+			ids, err := config.NewIdentityWatcher(s.identity, log)
+			if err != nil {
+				return err
+			}
+			identity = ids.Identity
+			go ids.Run(bg, time.Second)
+		}
+	} else {
+		// Plaintext inside the compose network until M5's mtls-secrets
+		// task (ADR-0035, ADR-0045).
+		conn, err := grpc.NewClient(s.controlPlane, managed.DialOptions(grpc.WithTransportCredentials(insecure.NewCredentials()))...)
+		if err != nil {
+			return fmt.Errorf("SPILLWAY_GATEWAY_CONTROL_PLANE: %w", err)
+		}
+		defer func() { _ = conn.Close() }()
+		m := managed.New(configpb.NewConfigServiceClient(conn), managed.Options{
+			ReplicaID: s.replicaID, SnapshotPath: s.snapshot, Log: log,
+			Compile: func(c *configpb.Config) (*config.Snapshot, error) { return config.Prepare(c, log, apply) },
+		})
+		log.Info("managed mode", "control_plane", s.controlPlane, "replica", s.replicaID, "snapshot", s.snapshot)
+		go m.Run(bg)
+		go m.Boot(bg) // the stream gets 5 s, then the on-disk snapshot is served (D9)
+		snapshot, identity = m.Snapshot, m.Identity
+		ready = func() bool { return m.Snapshot() != nil && m.Identity() != nil }
 	}
 	reg := telemetry.NewRegistry()
 	reg.MustRegister(pools) // gw_upstream_endpoint_healthy
 	rec := telemetry.NewRecorder(reg, log, s.accessLogSampleRate)
 	// The handler sheds requests past the in-flight cap and the listeners
 	// connections past the connection cap; the admin port is exempt (GW-26).
-	handler := proxy.NewHandler(cfg.Snapshot, identity, s.trusted, pools, limiters, rl, s.devMode, s.maxInFlight, tracer, rec, log)
+	handler := proxy.NewHandler(snapshot, identity, s.trusted, pools, limiters, rl, s.devMode, s.maxInFlight, tracer, rec, log)
 	conns := proxy.NewConnLimit(s.maxConnections, rec, log)
 	srv := proxy.NewServer(handler, log)
 	srv.ConnState = conns.ConnState // waiting connections give way to new ones at the cap (ADR-0033)
@@ -194,19 +224,32 @@ func serve(ctx context.Context, s settings, log *slog.Logger, tracer trace.Trace
 		go certs.Run(bg, time.Second)
 		srv.TLSConfig = certs.TLSConfig()
 	}
-	go cfg.Run(bg, time.Second)
 	go pools.Run(bg, s.dnsRefresh)
 	go limiters.Run(bg, 10*time.Second) // drops idle limiter keys (ADR-0017)
 	go rec.Run(bg, time.Minute)         // tenants are ranked per minute (OB-01)
 
 	reg.MustRegister(prometheus.NewGaugeFunc(prometheus.GaugeOpts{
 		Name: "gw_config_version",
-		Help: "Version of the config snapshot in use.",
-	}, func() float64 { return float64(cfg.Snapshot().Version) }))
-	// Ready while a config snapshot is loaded and shutdown has not started;
-	// Redis never counts (GW-24).
+		Help: "Version of the config snapshot in use; 0 before the first.",
+	}, func() float64 {
+		if c := snapshot(); c != nil {
+			return float64(c.Version)
+		}
+		return 0
+	}), prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+		Name: "gw_identity_version",
+		Help: "Version of the identity in use; 0 before the first, or without an identity file.",
+	}, func() float64 {
+		if id := identity(); id != nil {
+			return float64(id.Version)
+		}
+		return 0
+	}))
+	// Ready while a config snapshot is loaded (in managed mode, an identity
+	// too) and shutdown has not started; Redis never counts (GW-24,
+	// ADR-0038).
 	var draining atomic.Bool
-	admin := telemetry.NewAdminServer(reg, func() bool { return cfg.Snapshot() != nil && !draining.Load() }, log)
+	admin := telemetry.NewAdminServer(reg, func() bool { return ready() && !draining.Load() }, log)
 
 	lc := &net.ListenConfig{}
 	aln, err := lc.Listen(ctx, "tcp", s.adminAddr)

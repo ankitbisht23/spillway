@@ -6,10 +6,13 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/ankitbisht23/spillway/internal/managed"
 	"github.com/ankitbisht23/spillway/internal/proxy"
 	"github.com/ankitbisht23/spillway/internal/ratelimit/redis"
 )
@@ -18,8 +21,14 @@ import (
 // never from a config snapshot, so a config change can't widen what the
 // gateway may reach (ADR-0008).
 type settings struct {
-	configPath string          // SPILLWAY_GATEWAY_CONFIG: YAML config file (CP-05)
-	identity   string          // SPILLWAY_GATEWAY_IDENTITY: YAML identity file with consumers and static API keys (GW-17), optional
+	configPath string // SPILLWAY_GATEWAY_CONFIG: YAML config file (CP-05); static mode only
+	identity   string // SPILLWAY_GATEWAY_IDENTITY: YAML identity file with consumers and static API keys (GW-17), optional; static mode only
+
+	// Managed mode (ADR-0038): on when the control plane is set.
+	controlPlane string // SPILLWAY_GATEWAY_CONTROL_PLANE: the ConfigService's host:port
+	snapshot     string // SPILLWAY_GATEWAY_SNAPSHOT: the on-disk last good snapshot (CP-07), default /var/lib/spillway/snapshot.pb
+	replicaID    string // SPILLWAY_GATEWAY_REPLICA_ID: the replica name, a DNS label, default the host name; until M5's mtls-secrets task, which takes it from the client certificate (ADR-0045)
+
 	httpAddr   string          // SPILLWAY_GATEWAY_HTTP_ADDR: plain-HTTP listener, dev and benchmarks only, off when empty (SEC-01)
 	tlsAddr    string          // SPILLWAY_GATEWAY_TLS_ADDR: TLS listener (GW-04, SEC-01), default :8443
 	tlsCert    string          // SPILLWAY_GATEWAY_TLS_CERT: PEM certificate chain file; TLS is on when it and the key are set
@@ -82,8 +91,9 @@ func loadSettings(getenv func(string) string) (settings, error) {
 		traceSampleRatio:    1,
 		otlpEndpoint:        getenv("SPILLWAY_GATEWAY_OTLP_ENDPOINT"),
 	}
-	if s.configPath == "" {
-		return s, errors.New("SPILLWAY_GATEWAY_CONFIG: required")
+	s.controlPlane, s.snapshot, s.replicaID = getenv("SPILLWAY_GATEWAY_CONTROL_PLANE"), getenv("SPILLWAY_GATEWAY_SNAPSHOT"), getenv("SPILLWAY_GATEWAY_REPLICA_ID")
+	if err := s.mode(os.Hostname); err != nil {
+		return s, err
 	}
 	if (s.tlsCert == "") != (s.tlsKey == "") {
 		return s, errors.New("SPILLWAY_GATEWAY_TLS_CERT and SPILLWAY_GATEWAY_TLS_KEY: set both or neither")
@@ -163,4 +173,42 @@ func adminAddr(getenv func(string) string) string {
 		return v
 	}
 	return defaultAdminAddr
+}
+
+// replicaName is a DNS label, as a certificate's name must be (ADR-0040).
+var replicaName = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+
+// mode checks the settings of static or managed mode (ADR-0038): static
+// needs the config file; managed needs the control plane and takes config
+// and identity only from it, so the files are refused.
+func (s *settings) mode(hostname func() (string, error)) error {
+	if s.controlPlane == "" {
+		if s.configPath == "" {
+			return errors.New("SPILLWAY_GATEWAY_CONFIG: required, unless SPILLWAY_GATEWAY_CONTROL_PLANE is set (managed mode)")
+		}
+		if s.snapshot != "" || s.replicaID != "" {
+			return errors.New("SPILLWAY_GATEWAY_SNAPSHOT and SPILLWAY_GATEWAY_REPLICA_ID: managed mode only; set SPILLWAY_GATEWAY_CONTROL_PLANE")
+		}
+		return nil
+	}
+	if s.configPath != "" || s.identity != "" {
+		return errors.New("SPILLWAY_GATEWAY_CONFIG and SPILLWAY_GATEWAY_IDENTITY: not with SPILLWAY_GATEWAY_CONTROL_PLANE; a managed gateway takes config and identity from the control plane")
+	}
+	if host, port, err := net.SplitHostPort(s.controlPlane); err != nil || host == "" || port == "" {
+		return fmt.Errorf("SPILLWAY_GATEWAY_CONTROL_PLANE: %q is not host:port", s.controlPlane)
+	}
+	if s.snapshot == "" {
+		s.snapshot = managed.DefaultSnapshotPath
+	}
+	if s.replicaID == "" {
+		h, err := hostname()
+		if err != nil {
+			return fmt.Errorf("SPILLWAY_GATEWAY_REPLICA_ID: not set, and the host name: %w", err)
+		}
+		s.replicaID = strings.ToLower(h)
+	}
+	if !replicaName.MatchString(s.replicaID) {
+		return fmt.Errorf("SPILLWAY_GATEWAY_REPLICA_ID: %q is not a DNS label (lower-case letters, digits and '-', at most 63)", s.replicaID)
+	}
+	return nil
 }
