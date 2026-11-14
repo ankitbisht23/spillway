@@ -37,6 +37,10 @@ type IdentityRef struct {
 	Name   string // the tenant's or consumer's; empty for an override
 	Field  string // plan_id or policy_id
 	Ref    int64  // the plan or policy ID
+	// Limits are an override's that has not ended, which must fit its
+	// policy in the config about to be published (RL-08, ADR-0041); nil
+	// otherwise.
+	Limits []*configpb.Limit
 }
 
 // Check validates c, the config a publish or rollback would publish (CP-03),
@@ -338,10 +342,13 @@ func sortByName(c *configpb.Config) {
 }
 
 // identityRefs returns the identity rows that refer to a plan or policy of
-// base that c lacks. Every identity reference names an entity of the latest
-// published version: identity writes check it there (ADR-0037), and every
-// publish and rollback checks that what identity refers to stays. So these
-// rows are the only ones c can break, and they are found by index.
+// base that c lacks, and every override that has not ended, with its
+// limits. Every identity reference names an entity of the latest published
+// version: identity writes check it there (ADR-0037), and every publish
+// and rollback checks that what identity refers to stays. So the first
+// rows are the only ones c can break by removing an entity, and they are
+// found by index; an override's limits can break with any change to its
+// policy, so all are read (RL-08, ADR-0041).
 func identityRefs(ctx context.Context, q *db.Queries, base *Published, c *configpb.Config) ([]IdentityRef, error) {
 	if base == nil {
 		return nil, nil
@@ -374,13 +381,27 @@ func identityRefs(ctx context.Context, q *db.Queries, base *Published, c *config
 			refs = append(refs, IdentityRef{Entity: "consumer", ID: cn.ID, Name: cn.Name, Field: "plan_id", Ref: *cn.PlanID})
 		}
 	}
+	live, err := q.LiveOverrides(ctx)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[int64]bool{}
+	for _, o := range live {
+		ref := IdentityRef{Entity: "override", ID: o.ID, Field: "policy_id", Ref: *o.PolicyID}
+		if ref.Limits, err = parseLimits(o.Limits); err != nil {
+			return nil, fmt.Errorf("override %d: stored limits: %w", o.ID, err)
+		}
+		refs, seen[o.ID] = append(refs, ref), true
+	}
 	if len(policies) > 0 {
 		overrides, err := q.OverridesOnPolicies(ctx, policies)
 		if err != nil {
 			return nil, err
 		}
 		for _, o := range overrides {
-			refs = append(refs, IdentityRef{Entity: "override", ID: o.ID, Field: "policy_id", Ref: *o.PolicyID})
+			if !seen[o.ID] {
+				refs = append(refs, IdentityRef{Entity: "override", ID: o.ID, Field: "policy_id", Ref: *o.PolicyID})
+			}
 		}
 	}
 	return refs, nil

@@ -186,14 +186,14 @@ func TestManagedIdentity(t *testing.T) {
 	}
 	// Identity resolution (GW-19): consumer, tenant and plan, the
 	// consumer's own plan or else its tenant's.
-	if c, ok := id.Lookup(alice); !ok || *c != (Consumer{Name: "3", Tenant: "1", TenantName: "acme", Plan: 2}) {
+	if c, ok := id.Lookup(alice); !ok || *c != (Consumer{Name: "3", Tenant: "1", TenantName: "acme", Plan: 2, ID: 3}) {
 		t.Errorf("alice's key: Lookup = %+v, %v; want consumer 3 of tenant 1 (acme), plan 2", c, ok)
 	}
 	if c, ok := id.Lookup(bob); !ok || c.Name != "6" || c.TenantName != "globex" || c.Plan != 5 {
 		t.Errorf("bob's key: Lookup = %+v, %v; want consumer 6 of globex, its own plan 5", c, ok)
 	}
 	// A token's subject finds the same consumer as its key (ADR-0039).
-	if c, ok := id.Subject("svc-alice"); !ok || *c != (Consumer{Name: "3", Tenant: "1", TenantName: "acme", Plan: 2}) {
+	if c, ok := id.Subject("svc-alice"); !ok || *c != (Consumer{Name: "3", Tenant: "1", TenantName: "acme", Plan: 2, ID: 3}) {
 		t.Errorf("Subject(svc-alice) = %+v, %v; want consumer 3", c, ok)
 	}
 	for _, sub := range []string{"", "svc-Alice", "svc-alice ", "bob", "6"} {

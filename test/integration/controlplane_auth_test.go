@@ -305,7 +305,7 @@ func TestControlPlaneAudit(t *testing.T) {
 	// Identity: a tenant, a consumer with a key, an entry and an override,
 	// then the consumer's delete, which cascades.
 	owner := pgConnect(t, pgURL(t, "spillway", db), pgOwnerPassword)
-	publish(t, owner, `{"plans": [{"id": 1, "name": "free"}], "policies": [{"id": 5, "name": "per-consumer"}]}`)
+	publish(t, owner, `{"plans": [{"id": 1, "name": "free"}], "policies": [{"id": 5, "name": "per-consumer", "level": "consumer", "match": {"routes": ["*"]}, "key_template": "{consumer}", "algorithm": "gcra", "limits": [{"rate": 100, "period": "1s"}]}]}`)
 	var ten apiv1.Tenant
 	admin.must(201, "POST", "/tenants", map[string]any{"name": "acme", "plan_id": 1}).decode(t, &ten)
 	var con apiv1.Consumer

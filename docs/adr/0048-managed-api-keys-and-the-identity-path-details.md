@@ -1,6 +1,6 @@
 # 0048. Managed API keys and the identity path: details
 
-- **Status:** Accepted
+- **Status:** Accepted; policy names in managed keys ended by [ADR-0050](0050-plans-overrides-and-access-lists-details.md)
 - **Date:** 2026-11-14
 - **Requirement IDs:** CP-15, CP-16, CP-17, CP-20, GW-17, GW-19, NFR-09, SEC-03, OB-01
 

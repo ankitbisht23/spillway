@@ -333,7 +333,9 @@ func (s *Server) DeleteAccessList(ctx context.Context, req apiv1.DeleteAccessLis
 }
 
 // Overrides and burst grants (RL-08). The rules that depend on the policy
-// (its level, key template and algorithm, ADR-0041) come with the plans task.
+// (its level, key template and algorithm, ADR-0041) are the store's, against
+// the latest published config, and every publish and rollback checks them
+// again.
 
 func overrideIn(b *apiv1.Override) (db.CreateOverrideParams, error) {
 	in := db.CreateOverrideParams{ConsumerID: b.ConsumerId, PolicyID: &b.PolicyId, StartsAt: b.StartsAt, EndsAt: b.EndsAt, Note: b.Note}

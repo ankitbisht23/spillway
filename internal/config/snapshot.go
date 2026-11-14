@@ -75,8 +75,20 @@ func (s *Snapshot) Match(host, method, path string, h http.Header) (*Route, rout
 	return &s.Routes[m.Index], m, true
 }
 
-// Compile validates a config and builds its snapshot.
+// Compile validates a config and builds its snapshot, for static mode:
+// policies keep their names in limiter IDs and Redis keys.
 func Compile(c *configpb.Config) (*Snapshot, error) {
+	return compile(c, false)
+}
+
+// CompileManaged is Compile for a managed gateway (ADR-0038): policies are
+// named by their control-plane IDs in limiter IDs and Redis keys, so a
+// rename keeps their counters (ADR-0036, ADR-0050).
+func CompileManaged(c *configpb.Config) (*Snapshot, error) {
+	return compile(c, true)
+}
+
+func compile(c *configpb.Config, managed bool) (*Snapshot, error) {
 	s := &Snapshot{Version: c.GetVersion(), Upstreams: map[string]*Upstream{}}
 	for _, u := range c.GetUpstreams() {
 		up, err := compileUpstream(u)
@@ -121,13 +133,37 @@ func Compile(c *configpb.Config) (*Snapshot, error) {
 	if err := s.compileRateLimit(c); err != nil {
 		return nil, err
 	}
-	if s.Policies, err = compilePolicies(c, s.Routes, s.Replicas); err != nil {
+	if s.Policies, err = compilePolicies(c, s.Routes, s.Replicas, managed); err != nil {
 		return nil, err
 	}
-	if err := compilePlans(c.GetPlans()); err != nil {
+	if err := compilePlans(c.GetPlans(), s.Policies, s.Routes, s.Replicas); err != nil {
+		return nil, err
+	}
+	if err := checkCallLimits(s.Routes, s.Policies, nil, 0); err != nil {
 		return nil, err
 	}
 	return s, nil
+}
+
+// CheckOverride checks an override's limits against policy policyID of s,
+// as the control plane does at the override's write and at every publish
+// and rollback (RL-08, ADR-0041): the policy exists and plans and
+// overrides may set its limits, the limits pass its algorithm's rules and
+// admit every route it matches, and no route's Redis call would carry
+// more than 32 limits with them.
+func (s *Snapshot) CheckOverride(policyID int64, limits []*configpb.Limit) error {
+	i := slices.IndexFunc(s.Policies, func(p Policy) bool { return p.ID == policyID })
+	if i < 0 {
+		return fmt.Errorf("policy %d is not defined", policyID)
+	}
+	p := &s.Policies[i]
+	if !p.PerConsumer {
+		return fmt.Errorf("policy %q: %s", p.Name, perConsumerRule)
+	}
+	if _, err := p.limitsFor(limits, s.Replicas, s.Routes); err != nil {
+		return fmt.Errorf("policy %q: %w", p.Name, err)
+	}
+	return checkCallLimits(s.Routes, s.Policies, p, len(limits))
 }
 
 // compileRoute checks the rules of r that concern r alone, everything but

@@ -44,7 +44,17 @@ func NewWatcher(path string, log *slog.Logger, apply func(*Snapshot) error) (*Wa
 // file reloads and managed mode's stream updates both go through it
 // (GW-21, GW-29, ADR-0038).
 func Prepare(c *configpb.Config, log *slog.Logger, apply func(*Snapshot) error) (*Snapshot, error) {
-	s, err := Compile(c)
+	return prepare(Compile, c, log, apply)
+}
+
+// PrepareManaged is Prepare for a managed gateway's configs, compiled with
+// CompileManaged.
+func PrepareManaged(c *configpb.Config, log *slog.Logger, apply func(*Snapshot) error) (*Snapshot, error) {
+	return prepare(CompileManaged, c, log, apply)
+}
+
+func prepare(compile func(*configpb.Config) (*Snapshot, error), c *configpb.Config, log *slog.Logger, apply func(*Snapshot) error) (*Snapshot, error) {
+	s, err := compile(c)
 	if err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}

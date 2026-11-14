@@ -39,6 +39,8 @@ func TestCompilePolicies(t *testing.T) {
 			t.Errorf("%s: key = %q, %v; want %q", p.Name, key, ok, wantKeys[i])
 		}
 		p.Key = KeyTemplate{}
+		want[i].Ref, want[i].maxLimits = want[i].Name, len(want[i].Limits)
+		want[i].PerConsumer = want[i].Name == "per-consumer" // consumer level, keyed by {consumer}
 		if !reflect.DeepEqual(p, want[i]) {
 			t.Errorf("policy %d = %+v\nwant %+v", i, p, want[i])
 		}
@@ -208,7 +210,9 @@ func TestPolicyRejects(t *testing.T) {
 		{"unknown algorithm", policies("", p("algorithm", "token_bucket")), `algorithm "token_bucket"`},
 		{"upper-case algorithm", policies("", p("algorithm", "GCRA")), `algorithm "GCRA"`},
 		{"unknown mode", policies("", p("mode", "dry_run")), `mode "dry_run": want enforce, shadow or off`},
-		{"from_plan before the plans task", policies("", p("from_plan", "true")), `policy "p": from_plan is not supported until M5's plans task`},
+		{"from_plan with limits", policies("", p("from_plan", "true", "level", "consumer", "key_template", "'{consumer}'")), `policy "p": from_plan: the policy takes its limits from plans; remove limits`},
+		{"from_plan on a global policy", policies("", p("from_plan", "true", "limits", "", "key_template", "'{consumer}'")), `policy "p": from_plan: plans and overrides apply only to consumer- and route-level policies whose key_template has {consumer} or {api_key}`},
+		{"from_plan keyed by ip", policies("", p("from_plan", "true", "limits", "", "level", "route")), "plans and overrides apply only to"},
 		{"upper-case mode", policies("", p("mode", "OFF")), `mode "OFF"`},
 		{"fixed window in Redis", policies("", p("local", "", "algorithm", "fixed_window")), `policy "p": algorithm fixed_window must be local (local: true); Redis policies use gcra or sliding_window`},
 		{"local false, fixed window", policies("", p("local", "false", "algorithm", "fixed_window")), "algorithm fixed_window must be local"},

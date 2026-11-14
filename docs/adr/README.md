@@ -43,7 +43,7 @@ Decisions that shape Spillway and are not obvious from the code or from docs/des
 | [0032](0032-answering-shed-connections.md) | Answering shed connections | Accepted; which connections are shed at the cap superseded by 0033 | 2026-11-12 |
 | [0033](0033-m1-m4-review-fixes.md) | M1–M4 review fixes | Accepted; open breaker question decided in 0034 | 2026-11-13 |
 | [0034](0034-user-decisions-after-the-m4-review.md) | User decisions after the M4 review | Accepted | 2026-11-13 |
-| [0035](0035-m5-control-plane-and-auth-plan-and-decisions.md) | M5 control plane and auth: plan and decisions | Accepted; the auth_mode interim ended by 0049 | 2026-11-13 |
+| [0035](0035-m5-control-plane-and-auth-plan-and-decisions.md) | M5 control plane and auth: plan and decisions | Accepted; the auth_mode interim ended by 0049; the from_plan and default_limits interim ended by 0050 | 2026-11-13 |
 | [0036](0036-control-plane-data-model-migrations-and-rest-api.md) | Control-plane data model, migrations and REST API | Accepted | 2026-11-13 |
 | [0037](0037-config-publish-rollback-and-the-identity-path.md) | Config publish, versions and rollback; the identity path | Accepted | 2026-11-13 |
 | [0038](0038-config-distribution-watch-heartbeat-snapshots-and-the-active-replica.md) | Config distribution: Watch, Heartbeat, snapshots and the active replica | Accepted | 2026-11-13 |
@@ -56,5 +56,6 @@ Decisions that shape Spillway and are not obvious from the code or from docs/des
 | [0045](0045-config-settings-and-the-watch-task.md) | Config settings, and the watch task's details | Accepted; the interim until mtls-secrets ended by 0047; managed identity without key lookup ended by 0048 | 2026-11-14 |
 | [0046](0046-heartbeats-and-live-replicas-details.md) | Heartbeats and live replicas: details | Accepted | 2026-11-14 |
 | [0047](0047-stream-mtls-and-secrets-details.md) | Config stream mTLS and secrets: details | Accepted | 2026-11-14 |
-| [0048](0048-managed-api-keys-and-the-identity-path-details.md) | Managed API keys and the identity path: details | Accepted | 2026-11-14 |
+| [0048](0048-managed-api-keys-and-the-identity-path-details.md) | Managed API keys and the identity path: details | Accepted; policy names in managed keys ended by 0050 | 2026-11-14 |
 | [0049](0049-gateway-jwt-and-auth-modes-details.md) | Gateway JWT and auth modes: details | Accepted | 2026-11-14 |
+| [0050](0050-plans-overrides-and-access-lists-details.md) | Plans, overrides and access lists: details | Accepted | 2026-11-14 |
