@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ankitbisht23/spillway/internal/auth"
 	"github.com/ankitbisht23/spillway/internal/managed"
 	"github.com/ankitbisht23/spillway/internal/mtls"
 	"github.com/ankitbisht23/spillway/internal/proxy"
@@ -57,6 +58,12 @@ type settings struct {
 	redisAddrMap map[string]string // SPILLWAY_REDIS_ADDR_MAP: dev and tests only (ADR-0004)
 	redisAuth    redis.Auth        // SPILLWAY_GATEWAY_REDIS_USERNAME, and SPILLWAY_GATEWAY_REDIS_PASSWORD or _FILE (SEC-09): Redis AUTH, off when the password is unset
 	devMode      bool              // SPILLWAY_GATEWAY_DEV_MODE: dev-only behaviour, the Spillway-Decision-Time header (ADR-0021), default false
+
+	// Bearer tokens (GW-18, SEC-04, ADR-0039): on when the issuer is set.
+	jwtIssuer   string // SPILLWAY_GATEWAY_JWT_ISSUER: the browser-facing issuer every token's iss must equal
+	jwtJWKSURL  string // SPILLWAY_GATEWAY_JWT_JWKS_URL: where the issuer's keys are fetched (in-network in dev, ADR-0004)
+	jwtAudience string // SPILLWAY_GATEWAY_JWT_AUDIENCE: a value every token's aud must contain
+	jwtCA       string // SPILLWAY_GATEWAY_JWT_CA: PEM certificates trusted for the JWKS URL besides the system roots, optional
 
 	// Logs and traces (OB-03, OB-02)
 	accessLogSampleRate float64 // SPILLWAY_GATEWAY_ACCESS_LOG_SAMPLE_RATE: share of 1xx-3xx and upstream 4xx requests access-logged, 0 to 1, default 1
@@ -139,6 +146,9 @@ func loadSettings(getenv func(string) string) (settings, error) {
 			return s, fmt.Errorf("SPILLWAY_GATEWAY_DEV_MODE: %q is not true or false", v)
 		}
 	}
+	if err := s.loadJWT(getenv); err != nil {
+		return s, err
+	}
 	if v := getenv("SPILLWAY_GATEWAY_DNS_REFRESH"); v != "" {
 		if s.dnsRefresh, err = time.ParseDuration(v); err != nil || s.dnsRefresh <= 0 {
 			return s, fmt.Errorf("SPILLWAY_GATEWAY_DNS_REFRESH: %q is not a positive duration", v)
@@ -180,6 +190,29 @@ func loadSettings(getenv func(string) string) (settings, error) {
 		}
 	}
 	return s, nil
+}
+
+// loadJWT reads the bearer-token settings: all or none, with https://
+// URLs unless in dev mode (SEC-04, ADR-0039).
+func (s *settings) loadJWT(getenv func(string) string) error {
+	s.jwtIssuer, s.jwtJWKSURL = getenv("SPILLWAY_GATEWAY_JWT_ISSUER"), getenv("SPILLWAY_GATEWAY_JWT_JWKS_URL")
+	s.jwtAudience, s.jwtCA = getenv("SPILLWAY_GATEWAY_JWT_AUDIENCE"), getenv("SPILLWAY_GATEWAY_JWT_CA")
+	if s.jwtIssuer == "" {
+		if s.jwtJWKSURL != "" || s.jwtAudience != "" || s.jwtCA != "" {
+			return errors.New("SPILLWAY_GATEWAY_JWT_JWKS_URL, SPILLWAY_GATEWAY_JWT_AUDIENCE and SPILLWAY_GATEWAY_JWT_CA: set with SPILLWAY_GATEWAY_JWT_ISSUER only")
+		}
+		return nil
+	}
+	if err := auth.CheckURL(s.jwtIssuer, s.devMode); err != nil {
+		return fmt.Errorf("SPILLWAY_GATEWAY_JWT_ISSUER: %w", err)
+	}
+	if err := auth.CheckURL(s.jwtJWKSURL, s.devMode); err != nil {
+		return fmt.Errorf("SPILLWAY_GATEWAY_JWT_JWKS_URL: %w", err)
+	}
+	if s.jwtAudience == "" {
+		return errors.New("SPILLWAY_GATEWAY_JWT_AUDIENCE: required with SPILLWAY_GATEWAY_JWT_ISSUER")
+	}
+	return nil
 }
 
 func adminAddr(getenv func(string) string) string {

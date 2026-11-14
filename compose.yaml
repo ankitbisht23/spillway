@@ -301,6 +301,12 @@ services:
         SPILLWAY_GATEWAY_TRACE_SAMPLE_RATIO: ${SPILLWAY_GATEWAY_TRACE_SAMPLE_RATIO:-1} # every trace, tail-sampled in the Collector; the latency checks set 0.01 (OB-02, ADR-0030)
         SPILLWAY_GATEWAY_REDIS_ADDRS: redis-0:6379,redis-1:6379,redis-2:6379,redis-3:6379,redis-4:6379,redis-5:6379 # seeds of the limiter's cluster; Redis policies need it (ADR-0021)
         SPILLWAY_GATEWAY_DEV_MODE: "true" # Spillway-Decision-Time on Redis-decided responses, for the accuracy harness; never in production (ADR-0021)
+        # Bearer tokens for jwt and either routes (GW-18, ADR-0039): iss is
+        # the browser-facing issuer, the keys come from Keycloak in the
+        # network (ADR-0004); plain HTTP only because of dev mode (SEC-04).
+        SPILLWAY_GATEWAY_JWT_ISSUER: http://localhost:8180/auth/realms/spillway
+        SPILLWAY_GATEWAY_JWT_JWKS_URL: http://keycloak:8080/auth/realms/spillway/protocol/openid-connect/certs
+        SPILLWAY_GATEWAY_JWT_AUDIENCE: spillway-gateway
         SPILLWAY_GATEWAY_DRAIN: ${SPILLWAY_GATEWAY_DRAIN:-5s} # after SIGTERM, keep serving with /readyz failing (GW-23, ADR-0030)
         SPILLWAY_GATEWAY_SHUTDOWN_GRACE: ${SPILLWAY_GATEWAY_SHUTDOWN_GRACE:-15s} # then in-flight requests get this long
         SPILLWAY_GATEWAY_MAX_CONNECTIONS: ${SPILLWAY_GATEWAY_MAX_CONNECTIONS:-8192} # open client connections; past it, a 503 or a reset (GW-26, ADR-0030)
