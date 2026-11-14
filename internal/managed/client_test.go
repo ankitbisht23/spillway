@@ -1,12 +1,14 @@
 package managed
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -28,7 +30,8 @@ import (
 // fake clock.
 type fakeCP struct {
 	mu      sync.Mutex
-	down    bool // Watch fails at once, as a refused connection does
+	down    bool  // Watch fails at once, as a refused connection does
+	refuse  error // Watch streams end with it before their headers, as a refused call's do
 	reqs    []*configpb.WatchRequest
 	at      []time.Time // when each Watch came
 	streams chan *fakeStream
@@ -56,6 +59,9 @@ func (f *fakeCP) Watch(ctx context.Context, req *configpb.WatchRequest, _ ...grp
 	if f.down {
 		return nil, status.Error(codes.Unavailable, "connection refused")
 	}
+	if f.refuse != nil {
+		return &fakeStream{ctx: ctx, refused: f.refuse}, nil
+	}
 	s := &fakeStream{ctx: ctx, msgs: make(chan *configpb.WatchResponse, 10), end: make(chan error, 1)}
 	f.streams <- s
 	return s, nil
@@ -69,14 +75,26 @@ func (f *fakeCP) Heartbeat(context.Context, *configpb.HeartbeatRequest, ...grpc.
 // from the nil embedded interface.
 type fakeStream struct {
 	grpc.ClientStream
-	ctx  context.Context
-	msgs chan *configpb.WatchResponse
-	end  chan error
+	ctx     context.Context
+	msgs    chan *configpb.WatchResponse
+	end     chan error
+	refused error // the stream ended before its headers with this error
 }
 
-func (s *fakeStream) Header() (metadata.MD, error) { return nil, nil }
+// Header answers as gRPC's does: headers, never nil, once the server has
+// sent them; nil and no error for a stream that ended first, whose error
+// Recv returns.
+func (s *fakeStream) Header() (metadata.MD, error) {
+	if s.refused != nil {
+		return nil, nil
+	}
+	return metadata.MD{}, nil
+}
 
 func (s *fakeStream) Recv() (*configpb.WatchResponse, error) {
+	if s.refused != nil {
+		return nil, s.refused
+	}
 	select {
 	case m := <-s.msgs:
 		return m, nil
@@ -233,6 +251,57 @@ func TestReconnect(t *testing.T) {
 		_, at = cp.requests()
 		if gap := at[len(at)-1].Sub(ended); gap > backoffMin {
 			t.Errorf("reconnect after a long stream took %v, want at most %v", gap, backoffMin)
+		}
+	})
+}
+
+// TestRefusedWatch checks that a Watch the server ends before its headers
+// (here another schema major's refusal, CP-18) is a failed stream, retried
+// with backoff, and never counted as established.
+func TestRefusedWatch(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var logs bytes.Buffer
+		cp := newFakeCP(false)
+		cp.refuse = status.Error(codes.FailedPrecondition, "schema 2.0 is not served")
+		c := New(cp, Options{ReplicaID: "gateway-1", SnapshotPath: filepath.Join(t.TempDir(), "snapshot.pb"),
+			Log: slog.New(slog.NewTextHandler(&logs, nil))})
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			c.Run(ctx)
+		}()
+		time.Sleep(10 * time.Second)
+		cancel()
+		<-done
+		if reqs, _ := cp.requests(); len(reqs) < 3 {
+			t.Errorf("%d Watch calls in 10 s", len(reqs))
+		}
+		if out := logs.String(); strings.Contains(out, "established") || !strings.Contains(out, "schema 2.0 is not served") {
+			t.Errorf("logs:\n%s", out)
+		}
+	})
+}
+
+// TestBootFileNeverReplacesStream checks that the on-disk snapshot applies
+// only sections the stream has not delivered, checked under the apply
+// lock: a stream update that lands as the 5 s wait ends is kept (D9).
+func TestBootFileNeverReplacesStream(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		cp := newFakeCP(false)
+		c := client(t, cp, t.TempDir())
+		s := <-cp.streams
+		s.msgs <- configMsg(config.SchemaMajor, cfg(9))
+		synctest.Wait()
+		if c.applyConfig(schema(config.SchemaMajor), cfg(7), sourceFile) || !c.applyIdentity(schema(config.SchemaMajor),
+			&configpb.Identity{Version: 4, KeyFormat: config.KeyFormatManaged}, sourceFile) {
+			t.Error("the file's config was applied over the stream's, or its identity was not")
+		}
+		if c.applyIdentity(schema(config.SchemaMajor), &configpb.Identity{Version: 3, KeyFormat: config.KeyFormatManaged}, sourceFile) {
+			t.Error("a second file identity was applied over the first")
+		}
+		if versionsOf(c) != [2]int64{9, 4} {
+			t.Errorf("versions %v, want the stream's config 9 and the file's identity 4", versionsOf(c))
 		}
 	})
 }

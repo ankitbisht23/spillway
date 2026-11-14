@@ -146,8 +146,15 @@ func (c *Client) watch(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	// The server sends its headers once it has registered the stream.
-	if _, err := s.Header(); err != nil {
+	// The server sends its headers once it has registered the stream. A
+	// stream that ends first (refused, or a standby's closed port) has no
+	// headers, and gRPC leaves its error to Recv.
+	md, err := s.Header()
+	if err != nil {
+		return err
+	}
+	if md == nil {
+		_, err := s.Recv()
 		return err
 	}
 	c.opts.Log.Info("Watch stream to the control plane established", "config_version", cv, "identity_version", iv)
@@ -170,6 +177,9 @@ func (c *Client) watch(ctx context.Context) error {
 func (c *Client) applyConfig(v *configpb.SchemaVersion, cfg *configpb.Config, source string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if source == sourceFile && c.rawConfig != nil {
+		return false // the stream delivered first; the file must not replace it
+	}
 	var err error
 	var snap *config.Snapshot
 	if err = checkSchema(v); err == nil {
@@ -197,6 +207,9 @@ func (c *Client) applyConfig(v *configpb.SchemaVersion, cfg *configpb.Config, so
 func (c *Client) applyIdentity(v *configpb.SchemaVersion, id *configpb.Identity, source string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if source == sourceFile && c.rawIdentity != nil {
+		return false // the stream delivered first; the file must not replace it
+	}
 	var err error
 	var compiled *config.Identity
 	if err = checkSchema(v); err == nil {
@@ -295,16 +308,14 @@ func (c *Client) Boot(ctx context.Context) {
 		c.opts.Log.Error("no control plane within 5s and the on-disk snapshot cannot be used; not ready until the control plane answers", "err", err)
 		return
 	}
-	// Only what the stream has not delivered yet.
-	ok := true
-	if c.Snapshot() == nil {
-		ok = c.applyConfig(f.GetSchemaVersion(), f.GetConfig(), sourceFile) && ok
-	}
-	if c.Identity() == nil {
-		ok = c.applyIdentity(f.GetSchemaVersion(), f.GetIdentity(), sourceFile) && ok
-	}
-	if ok {
+	// Only what the stream has not delivered yet: the applies skip a
+	// section it has, checked under their lock, so a stream update that
+	// lands meanwhile is never replaced by the older file.
+	cfgOK := c.applyConfig(f.GetSchemaVersion(), f.GetConfig(), sourceFile)
+	idOK := c.applyIdentity(f.GetSchemaVersion(), f.GetIdentity(), sourceFile)
+	if cfgOK || idOK {
 		c.opts.Log.Warn("no control plane within 5s: serving the on-disk snapshot until it answers",
-			"config_version", f.GetConfig().GetVersion(), "identity_version", f.GetIdentity().GetVersion(), "synced_at", f.GetSyncedAt().AsTime())
+			"config_version", f.GetConfig().GetVersion(), "config_from_file", cfgOK,
+			"identity_version", f.GetIdentity().GetVersion(), "identity_from_file", idOK, "synced_at", f.GetSyncedAt().AsTime())
 	}
 }
