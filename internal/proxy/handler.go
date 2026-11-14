@@ -80,7 +80,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Method: r.Method,
 		Origin: telemetry.OriginGateway,
 		Reason: telemetry.ReasonNone,
-		Tenant: telemetry.NoTenant, // tenants arrive in M5
+		Tenant: telemetry.NoTenant, // a managed key's tenant, once resolved
 	}
 	rw := &responseRecorder{ResponseWriter: w, requestID: q.ID}
 	body := &countingBody{ReadCloser: r.Body}
@@ -193,6 +193,9 @@ func (h *Handler) serve(w *responseRecorder, r *http.Request, body *countingBody
 			w.rateLimitPolicy, w.rateLimit = lim.headers() // the first phase's deductions stay
 			jsonError(w, http.StatusUnauthorized, "invalid API key")
 			return
+		}
+		if consumer != nil && consumer.TenantName != "" {
+			q.Tenant = consumer.TenantName // managed mode (GW-19, OB-01)
 		}
 		lim.identify(consumer, r.Header.Get("X-API-Key"))
 		allowed = lim.check(true) && lim.checkRedis()
