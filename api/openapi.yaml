@@ -1064,6 +1064,93 @@ paths:
         '422': { $ref: '#/components/responses/ConfigValidationFailed' }
         '428': { $ref: '#/components/responses/PreconditionRequired' }
         default: { $ref: '#/components/responses/Error' }
+  /config/export:
+    get:
+      operationId: exportConfig
+      tags: [config]
+      summary: >-
+        The config working set, or a published version, as the declarative
+        YAML that static mode reads (CP-05): entities sorted by name with their
+        ids, fields in proto order; a published version also carries its
+        version. Identity is not part of it (ADR-0037)
+      x-spillway-roles: [viewer, editor, publisher, key-admin, admin]
+      parameters:
+        - name: version
+          in: query
+          description: A published version to export instead of the working set.
+          schema: { type: integer, format: int64, minimum: 1 }
+      responses:
+        '200':
+          description: >-
+            The config as YAML. For the working set, the ETag is its revision,
+            which an import's If-Match carries
+          headers:
+            ETag: { $ref: '#/components/headers/RevisionETag' }
+          content:
+            application/yaml:
+              schema: { type: string }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ConfigValidationFailed' }
+        default: { $ref: '#/components/responses/Error' }
+  /config/import:
+    post:
+      operationId: importConfig
+      tags: [config]
+      summary: >-
+        Replace the config working set from YAML in export's shape (CP-05),
+        if it is still at the revision If-Match names; config still needs a
+        publish. Entities are matched by id, then by name, else created;
+        rows matched by nothing are deleted. Each entity's rules apply;
+        references between entities are checked by validate and publish
+        (ADR-0037). Identity is refused, the ratelimit section is not kept
+        (ADR-0044)
+      x-spillway-roles: [editor, admin]
+      parameters:
+        - $ref: '#/components/parameters/RevisionIfMatch'
+        - name: note
+          in: query
+          description: An optional note for the audit record (ADR-0040).
+          schema: { type: string, minLength: 1, maxLength: 2000 }
+      requestBody:
+        required: true
+        content:
+          application/yaml:
+            schema: { type: string, description: 'At most 10 MiB.' }
+      responses:
+        '200':
+          description: The revision after the import and what it changed
+          headers:
+            ETag: { $ref: '#/components/headers/RevisionETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConfigImport' }
+        '400':
+          description: The body is not YAML, or has a field config.proto does not (invalid_request)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '412': { $ref: '#/components/responses/RevisionPreconditionFailed' }
+        '413':
+          description: The body is over 10 MiB (payload_too_large)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '415':
+          description: The body is not application/yaml (unsupported_media_type)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422':
+          description: >-
+            An entity breaks its rules or SEC-06's allow-list, a name or id is
+            given twice, an id names no entity of its type, or the file holds
+            identity, with one detail per error (validation_failed)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '428': { $ref: '#/components/responses/PreconditionRequired' }
+        default: { $ref: '#/components/responses/Error' }
   /audit:
     get:
       operationId: listAudit
@@ -1628,6 +1715,21 @@ components:
           type: array
           items: { $ref: '#/components/schemas/ConfigChange' }
         diff: { type: string, description: A unified diff of the canonical YAML of the two versions. }
+    ConfigImport:
+      type: object
+      required: [working_set_revision, changes, ignored]
+      properties:
+        working_set_revision:
+          type: integer
+          format: int64
+          description: The revision after the import, what validate and publish's If-Match carry; unchanged when the import changed nothing.
+        changes:
+          type: array
+          items: { $ref: '#/components/schemas/ConfigChange' }
+        ignored:
+          type: array
+          items: { type: string }
+          description: Sections of the file that the control plane does not keep, each with its reason (ADR-0044).
 
     # The audit log (CP-13, ADR-0040).
     AuditRecord:

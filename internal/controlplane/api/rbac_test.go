@@ -61,6 +61,7 @@ var matrix = map[string][]string{
 	"createAccessList": {"key-admin", "admin"}, "updateAccessList": {"key-admin", "admin"}, "deleteAccessList": {"key-admin", "admin"},
 	"validateConfig": all, "listConfigVersions": all, "getConfigVersion": all, "diffConfigVersion": all,
 	"publishConfig": {"publisher", "admin"}, "rollbackConfig": {"publisher", "admin"},
+	"exportConfig": all, "importConfig": {"editor", "admin"},
 	"listAudit": {"admin"},
 }
 
