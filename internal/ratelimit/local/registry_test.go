@@ -169,3 +169,93 @@ func TestRegistrySweep(t *testing.T) {
 		t.Errorf("a sweep dropped an in-flight count")
 	}
 }
+
+// TestRegistryPlansAndOverrides: limiters keep one period's state and take
+// each call's limit (ForLimit); a plan's periods have limiters from Apply,
+// an override's from For, which keeps them across reloads while the policy
+// stays (RL-08, GW-29, ADR-0041); managed policies are named by ID.
+func TestRegistryPlansAndOverrides(t *testing.T) {
+	clock := ratelimit.NewFakeClock(base)
+	r := NewRegistry(clock)
+	key := ratelimit.Key("k")
+	managed := func(planPeriod string) *config.Snapshot {
+		t.Helper()
+		c, err := config.Load([]byte(`
+upstreams: [{name: u, endpoints: [{address: 'u:80'}]}]
+routes: [{name: r, upstream: u, match: {path_prefix: /}}]
+policies:
+  - {id: 7, name: per-consumer, level: consumer, match: {routes: ['*']}, key_template: '{consumer}', algorithm: gcra, limits: [{rate: 10, period: 1s}], local: true}
+plans: [{id: 9, name: pro, default_limits: [{policy: per-consumer, limits: [{rate: 100, period: ` + planPeriod + `, burst: 100}]}]}]
+`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := config.CompileManaged(c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	r.Apply(managed("1m"))
+	second := ID{"7", config.GCRA, time.Second, false}
+	minute := ID{"7", config.GCRA, time.Minute, false}
+	if r.Limiter(second) == nil || r.Limiter(minute) == nil || r.Limiter(ID{"per-consumer", config.GCRA, time.Second, false}) != nil {
+		t.Fatal("want limiters for the policy's and the plan's periods, named by the policy's ID")
+	}
+
+	// ForLimit: the base limit is the limiter itself; another limit sees
+	// the same state.
+	own := config.Limit{Rate: 10, Period: time.Second, Burst: 10}
+	if ForLimit(r.Limiter(second), own) != r.Limiter(second) {
+		t.Error("ForLimit with the limiter's own limit made a copy")
+	}
+	take(r.For(second, own), key, 5)
+	if d := take(r.For(second, config.Limit{Rate: 20, Period: time.Second, Burst: 20}), key, 0); d.Remaining != 10 { // TAT 500 ms of 1 s: 10 more at 50 ms
+		t.Errorf("at 20/s after 5 at 10/s: %d left, want 10", d.Remaining)
+	}
+	for _, tt := range []struct {
+		id  ID
+		alg string
+	}{{ID{"w", config.FixedWindow, time.Minute, false}, "fixed_window"}, {ID{"s", config.SlidingWindow, time.Minute, false}, "sliding_window"}} {
+		r.Apply(compile(t, "policies:\n"+policy(tt.id.Policy, tt.alg, "[{rate: 5, period: 1m}]")))
+		take(r.Limiter(tt.id), key, 4)
+		if d := take(r.For(tt.id, config.Limit{Rate: 10, Period: time.Minute}), key, 0); d.Remaining != 6 {
+			t.Errorf("%s at 10 after 4 at 5: %d left, want 6", tt.alg, d.Remaining)
+		}
+	}
+	r.Apply(compile(t, "policies:\n"+policy("c", "concurrency", "[{rate: 2}]")))
+	inflight := ID{"c", config.Concurrency, 0, false}
+	take(r.Limiter(inflight), key, 2)
+	wide := r.For(inflight, config.Limit{Rate: 5})
+	if d := take(wide, key, 1); !d.Allowed || d.Remaining != 2 {
+		t.Errorf("concurrency at 5 with 2 in flight: %+v, want allowed with 2 free", d)
+	}
+	wide.(*Concurrency).Release(key, 3)
+	if d := take(r.Limiter(inflight), key, 0); d.Remaining != 2 {
+		t.Errorf("after the releases: %d free, want 2", d.Remaining)
+	}
+
+	// For adds a limiter for an override's period while the policy is
+	// there, keeps it across reloads, and drops it with the policy.
+	r.Apply(managed("1m"))
+	hour := ID{"7", config.GCRA, time.Hour, false}
+	if r.Limiter(hour) != nil {
+		t.Fatal("a limiter for a period nothing declares")
+	}
+	perHour := config.Limit{Rate: 60, Period: time.Hour, Burst: 60}
+	take(r.For(hour, perHour), key, 30)
+	r.Apply(managed("2m")) // a publish: the plan's period changes
+	if d := take(r.For(hour, perHour), key, 0); d.Remaining != 30 {
+		t.Errorf("override period after a reload: %d left, want 30 (state kept)", d.Remaining)
+	}
+	if r.Limiter(minute) != nil || r.Limiter(ID{"7", config.GCRA, 2 * time.Minute, false}) == nil {
+		t.Error("the plan's old period kept or its new one missing")
+	}
+	if r.For(ID{"8", config.GCRA, time.Hour, false}, perHour) != nil || r.For(ID{"7", config.SlidingWindow, time.Hour, false}, perHour) != nil {
+		t.Error("For made a limiter for a policy the snapshot does not have")
+	}
+	r.Apply(compile(t, "policies:\n"+policy("g", "gcra", "[{rate: 10, period: 1s}]")))
+	if r.Limiter(hour) != nil || r.For(hour, perHour) != nil {
+		t.Error("an override's limiter outlived its policy")
+	}
+}

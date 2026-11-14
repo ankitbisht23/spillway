@@ -45,6 +45,10 @@ type limits struct {
 	q        *telemetry.Request
 	cost     int64
 	values   config.KeyValues
+	// consumer and identity are the request's, once authenticated; they
+	// choose the limits of per-consumer policies (limitsOf).
+	consumer *config.Consumer
+	identity *config.Identity
 	checks   []check      // in evaluation order
 	calls    []*redisCall // the Redis calls that answered, in order
 	denied   bool         // an enforce limit denied the request
@@ -59,6 +63,7 @@ type limits struct {
 type check struct {
 	policy  *config.Policy
 	limit   config.Limit      // a degraded limiter's per-replica limit
+	windows int               // the limits the policy checks for this request
 	limiter ratelimit.Limiter // nil for a Redis limit; local or degraded otherwise
 	key     string
 	d       ratelimit.Decision // the last decision: the refund's once refunded
@@ -72,6 +77,7 @@ type redisCall struct {
 	limits   []rlredis.Limit
 	policies []*config.Policy // of each limit; a policy's limits are adjacent
 	conf     []config.Limit   // of each limit
+	windows  []int            // of each limit: its policy's limits for this request
 	checks   []int            // index in limits.checks of each limit, once answered
 	nowUS    int64            // the call's Redis TIME, which its refund names
 	slot     string           // the hash slot's kind, for its span: "tenant", "key" or "global"
@@ -116,16 +122,40 @@ func ipKey(ip netip.Addr) string {
 
 // identify fills the identity placeholders for phase 2 from the request's
 // consumer and the API key that resolved it; anonymous, they stay unfilled,
-// and so does {api_key} for a consumer a token resolved (ADR-0039).
-func (l *limits) identify(c *config.Consumer, key string) {
+// and so does {api_key} for a consumer a token resolved (ADR-0039). id is
+// the identity the consumer comes from, whose overrides apply (RL-08).
+func (l *limits) identify(c *config.Consumer, key string, id *config.Identity) {
 	if c == nil {
 		return
 	}
+	l.consumer, l.identity = c, id
 	if key != "" {
 		sum := sha256.Sum256([]byte(key))
 		l.values.APIKey = hex.EncodeToString(sum[:])
 	}
 	l.values.Consumer, l.values.Tenant = c.Name, c.Tenant
+}
+
+// limitsOf returns the limits p checks the request against, or false when
+// p does not apply to it (RL-08, D3, ADR-0041): for a per-consumer policy,
+// the override of p that applies now to the request's consumer, else its
+// plan's limits for p; otherwise p's own. A from_plan policy without plan
+// limits for the request (an anonymous one) does not apply, like a
+// template that does not fill.
+func (l *limits) limitsOf(p *config.Policy) ([]config.Limit, bool) {
+	if c := l.consumer; c != nil && p.PerConsumer {
+		if c.ID != 0 {
+			if raw, ok := l.identity.Override(c.ID, p.ID, l.registry.Now()); ok {
+				if ls, ok := p.OverrideLimits(raw, l.replicas); ok {
+					return ls, true
+				}
+			}
+		}
+		if ls, ok := p.PlanLimits[c.Plan]; ok && c.Plan != 0 {
+			return ls, true
+		}
+	}
+	return p.Limits, !p.FromPlan
 }
 
 // check evaluates one local phase: the local policies whose key templates
@@ -150,11 +180,15 @@ func (l *limits) check(identity bool) bool {
 		if !ok {
 			continue // a placeholder without a value: the policy does not apply
 		}
+		lims, ok := l.limitsOf(p)
+		if !ok {
+			continue
+		}
 		key := ratelimit.Key(filled)
 		decision := "allow"
 		applied := false
-		for _, lim := range p.Limits {
-			limiter := l.registry.Limiter(local.LimitID(p, lim))
+		for _, lim := range lims {
+			limiter := l.registry.For(local.LimitID(p, lim), lim)
 			if limiter == nil {
 				continue // removed by a reload since this request's snapshot
 			}
@@ -164,7 +198,7 @@ func (l *limits) check(identity bool) bool {
 				continue
 			}
 			applied = true
-			l.checks = append(l.checks, check{policy: p, limit: lim, limiter: limiter, key: key, d: d, at: at, held: d.Allowed})
+			l.checks = append(l.checks, check{policy: p, limit: lim, windows: len(lims), limiter: limiter, key: key, d: d, at: at, held: d.Allowed})
 			if !d.Allowed {
 				decision = "deny"
 				l.denied = l.denied || p.Mode == config.Enforce
@@ -230,7 +264,7 @@ func (l *limits) checkRedis() bool {
 			// Written: enforce limits of an allowed call, and its shadow
 			// limits that would allow (the script's write rule).
 			written := res.Allowed && (lim.Enforce || res.ShadowWouldDeny&(1<<i) == 0)
-			l.checks = append(l.checks, check{policy: c.policies[i], limit: c.conf[i], d: res.Limits[i], held: written})
+			l.checks = append(l.checks, check{policy: c.policies[i], limit: c.conf[i], windows: c.windows[i], d: res.Limits[i], held: written})
 		}
 		l.decide(c, func(i int) string {
 			if res.Limits[i].Allowed {
@@ -283,7 +317,8 @@ func (l *limits) failed(c *redisCall, err error) bool {
 				break // not evaluated: the request is answered 503
 			}
 			for k := i; k < j; k++ {
-				limiter := l.registry.Limiter(local.DegradedID(p, c.conf[k]))
+				lim := c.conf[k].PerReplica(l.replicas)
+				limiter := l.registry.For(local.DegradedID(p, c.conf[k]), lim)
 				if limiter == nil {
 					continue // removed by a reload since this request's snapshot
 				}
@@ -296,7 +331,7 @@ func (l *limits) failed(c *redisCall, err error) bool {
 					continue
 				}
 				applied = true
-				l.checks = append(l.checks, check{policy: p, limit: c.conf[k].PerReplica(l.replicas), limiter: limiter, key: key, d: d, at: at, held: d.Allowed})
+				l.checks = append(l.checks, check{policy: p, limit: lim, windows: c.windows[k], limiter: limiter, key: key, d: d, at: at, held: d.Allowed})
 				if !d.Allowed {
 					decision = "deny"
 					l.denied = l.denied || p.Mode == config.Enforce
@@ -379,6 +414,10 @@ func (l *limits) redisCalls() []*redisCall {
 		if !ok {
 			continue // a placeholder without a value: the policy does not apply
 		}
+		lims, ok := l.limitsOf(p)
+		if !ok {
+			continue
+		}
 		digest := rlredis.Digest(filled)
 		var c *redisCall
 		var key func(period time.Duration) string
@@ -386,13 +425,13 @@ func (l *limits) redisCalls() []*redisCall {
 		case p.Level == "global":
 			c = &redisCall{slot: "global"}
 			global = append(global, c)
-			key = func(period time.Duration) string { return rlredis.GlobalKey(p.Name, period, digest) }
+			key = func(period time.Duration) string { return rlredis.GlobalKey(p.Ref, period, digest) }
 		case l.values.Tenant != "":
 			if len(slot) == 0 {
 				slot = append(slot, &redisCall{slot: "tenant"})
 			}
 			c = slot[0]
-			key = func(period time.Duration) string { return rlredis.TenantKey(l.values.Tenant, p.Name, period, digest) }
+			key = func(period time.Duration) string { return rlredis.TenantKey(l.values.Tenant, p.Ref, period, digest) }
 		default:
 			if c = byDigest[digest]; c == nil {
 				c = &redisCall{slot: "key"}
@@ -402,15 +441,16 @@ func (l *limits) redisCalls() []*redisCall {
 				byDigest[digest] = c
 				slot = append(slot, c)
 			}
-			key = func(period time.Duration) string { return rlredis.NoTenantKey(digest, p.Name, period) }
+			key = func(period time.Duration) string { return rlredis.NoTenantKey(digest, p.Ref, period) }
 		}
-		for _, lim := range p.Limits {
+		for _, lim := range lims {
 			c.limits = append(c.limits, rlredis.Limit{
 				Key: key(lim.Period), Level: p.Level, Enforce: p.Mode == config.Enforce,
 				Algorithm: p.Algorithm, Rate: lim.Rate, Period: lim.Period, Burst: lim.Burst,
 			})
 			c.policies = append(c.policies, p)
 			c.conf = append(c.conf, lim)
+			c.windows = append(c.windows, len(lims))
 		}
 	}
 	return append(slot, global...)
@@ -507,7 +547,7 @@ func (l *limits) headers() (policy, limit string) {
 			r.WriteString(", ")
 		}
 		name := c.policy.Name
-		if len(c.policy.Limits) > 1 {
+		if c.windows > 1 {
 			name += "/" + strconv.FormatInt(int64(c.limit.Period/time.Second), 10) + "s"
 		}
 		p.WriteString(`"` + name + `";q=` + strconv.FormatInt(c.limit.Rate, 10) + ";w=" + strconv.FormatInt(int64(c.limit.Period/time.Second), 10))

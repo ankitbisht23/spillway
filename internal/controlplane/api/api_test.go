@@ -256,7 +256,7 @@ func TestRequestErrors(t *testing.T) {
 		{"upstream name resolving outside", "POST", "/api/v1/upstreams", `{"name": "u", "endpoints": [{"address": "outside:80"}]}`, nil, 422, apiv1.ErrorCodeValidationFailed, "resolves to 10.1.2.3"},
 		{"upstream name resolving to metadata too", "POST", "/api/v1/upstreams", `{"name": "u", "endpoints": [{"address": "metadata:80"}]}`, nil, 422, apiv1.ErrorCodeValidationFailed, "resolves to 169.254.169.254"},
 		{"policy rule", "POST", "/api/v1/policies", `{"name": "p", "level": "user"}`, nil, 422, apiv1.ErrorCodeValidationFailed, `level "user"`},
-		{"plan before its task", "POST", "/api/v1/plans", `{"name": "free", "default_limits": [{"policy": "p", "limits": [{"rate": 1, "period": "1s"}]}]}`, nil, 422, apiv1.ErrorCodeValidationFailed, "not supported until"},
+		{"plan rule", "POST", "/api/v1/plans", `{"name": "free", "default_limits": [{"limits": [{"rate": 1, "period": "1s"}]}]}`, nil, 422, apiv1.ErrorCodeValidationFailed, "default_limits[0].policy is required"},
 		{"tenant without a plan", "POST", "/api/v1/tenants", `{"name": "acme"}`, nil, 422, apiv1.ErrorCodeValidationFailed, "plan_id is required"},
 		{"tenant status", "POST", "/api/v1/tenants", `{"name": "acme", "plan_id": 1, "status": "gone"}`, nil, 422, apiv1.ErrorCodeValidationFailed, `status "gone"`},
 		{"consumer without a tenant", "POST", "/api/v1/consumers", `{"name": "bot"}`, nil, 422, apiv1.ErrorCodeValidationFailed, "tenant_id is required"},

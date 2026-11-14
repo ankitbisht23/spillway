@@ -174,19 +174,28 @@ func (h *Handler) serve(w *responseRecorder, r *http.Request, body *countingBody
 	}
 	q.Route = route.Name
 
-	// Rate limits (ADR-0017, ADR-0021): the local policies that need no
-	// identity, then authentication (ADR-0039), then the local policies that
-	// use its identity, then the Redis policies. They run before the size
-	// limits, so oversized requests count too. A request denied in the first
-	// phase is not authenticated.
+	// Access lists and rate limits (RL-09, ADR-0041, ADR-0017, ADR-0021):
+	// the CIDR deny and allow lists, the local policies that need no
+	// identity, then authentication (ADR-0039), then the key and consumer
+	// lists and statuses, then the local policies that use its identity,
+	// then the Redis policies. They run before the size limits, so
+	// oversized requests count too. A request denied by a CIDR or in the
+	// first phase is not authenticated. Deny beats allow, and an allowed
+	// request skips every policy that has not run yet (D3).
 	peer, _ := netip.ParseAddrPort(r.RemoteAddr)
 	ip := h.trusted.ClientIP(peer.Addr(), r.Header.Values("X-Forwarded-For"))
+	id := h.identity()
+	deny, exempt := id.CIDR(ip)
+	if deny {
+		forbidden(w)
+		return
+	}
 	lim := newLimits(s, route, h.limiters, h.redis, h.tracer, h.rec, h.log, r, q, ip)
 	defer lim.release()
-	allowed := lim.check(false)
+	allowed := exempt || lim.check(false)
 	if allowed {
 		span := childSpan(r.Context(), h.tracer, "authn")
-		consumer, key, fail := h.authenticate(r.Context(), route.AuthMode, r.Header, q)
+		consumer, key, keyID, fail := h.authenticate(r.Context(), id, route.AuthMode, r.Header, q)
 		if span != nil {
 			span.SetAttributes(attribute.String("spillway.authn.result", authnResult(consumer, fail)))
 			span.End()
@@ -199,8 +208,16 @@ func (h *Handler) serve(w *responseRecorder, r *http.Request, body *countingBody
 		if consumer != nil && consumer.TenantName != "" {
 			q.Tenant = consumer.TenantName // managed mode (GW-19, OB-01)
 		}
-		lim.identify(consumer, key)
-		allowed = lim.check(true) && lim.checkRedis()
+		deny, allow := id.Access(consumer, keyID)
+		if deny {
+			w.rateLimitPolicy, w.rateLimit = lim.headers() // as for a 401
+			forbidden(w)
+			return
+		}
+		lim.identify(consumer, key, id)
+		if !exempt && !allow {
+			allowed = lim.check(true) && lim.checkRedis()
+		}
 	}
 	w.rateLimitPolicy, w.rateLimit = lim.headers()
 	if h.devMode {

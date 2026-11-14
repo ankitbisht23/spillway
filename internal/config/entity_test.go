@@ -50,9 +50,15 @@ func TestCheck(t *testing.T) {
 		{"policy listing a route twice", checkJSON(CheckPolicy, &configpb.Policy{}, `{"name": "p", "level": "route", "match": {"routes": ["a", "a"]}, "key_template": "{route}", "algorithm": "gcra", "limits": [{"rate": 1, "period": "1s"}]}`), "listed twice"},
 		{"policy with a bad limit", checkJSON(CheckPolicy, &configpb.Policy{}, `{"name": "p", "level": "global", "match": {"routes": ["*"]}, "key_template": "x", "algorithm": "gcra", "limits": [{"rate": 1, "period": "2m"}]}`), "burst: required"},
 		{"policy with a bad template", checkJSON(CheckPolicy, &configpb.Policy{}, `{"name": "p", "level": "global", "match": {"routes": ["*"]}, "key_template": "{nope}", "algorithm": "gcra", "limits": [{"rate": 1, "period": "1s"}]}`), "nope"},
-		{"policy from_plan", checkJSON(CheckPolicy, &configpb.Policy{}, `{"name": "p", "level": "consumer", "match": {"routes": ["*"]}, "key_template": "{consumer}", "algorithm": "gcra", "from_plan": true}`), "not supported until"},
+		{"policy from_plan", checkJSON(CheckPolicy, &configpb.Policy{}, `{"name": "p", "level": "consumer", "match": {"routes": ["*"]}, "key_template": "{consumer}", "algorithm": "gcra", "from_plan": true}`), ""},
+		{"policy from_plan with limits", checkJSON(CheckPolicy, &configpb.Policy{}, `{"name": "p", "level": "consumer", "match": {"routes": ["*"]}, "key_template": "{consumer}", "algorithm": "gcra", "from_plan": true, "limits": [{"rate": 1, "period": "1s"}]}`), "remove limits"},
+		{"policy from_plan keyed by route", checkJSON(CheckPolicy, &configpb.Policy{}, `{"name": "p", "level": "route", "match": {"routes": ["*"]}, "key_template": "{route}", "algorithm": "gcra", "from_plan": true}`), "plans and overrides apply only to"},
+		{"policy from_plan at tenant level", checkJSON(CheckPolicy, &configpb.Policy{}, `{"name": "p", "level": "tenant", "match": {"routes": ["*"]}, "key_template": "{consumer}", "algorithm": "gcra", "from_plan": true}`), "plans and overrides apply only to"},
 		{"plan", checkJSON(CheckPlan, &configpb.Plan{}, `{"name": "free"}`), ""},
-		{"plan with limits", checkJSON(CheckPlan, &configpb.Plan{}, `{"name": "free", "default_limits": [{"policy": "p", "limits": [{"rate": 1, "period": "1s"}]}]}`), "not supported until"},
+		{"plan with limits", checkJSON(CheckPlan, &configpb.Plan{}, `{"name": "free", "default_limits": [{"policy": "p", "limits": [{"rate": 1, "period": "1s"}]}]}`), ""},
+		{"plan entry without a policy", checkJSON(CheckPlan, &configpb.Plan{}, `{"name": "free", "default_limits": [{"limits": [{"rate": 1, "period": "1s"}]}]}`), "default_limits[0].policy is required"},
+		{"plan entry without limits", checkJSON(CheckPlan, &configpb.Plan{}, `{"name": "free", "default_limits": [{"policy": "p"}]}`), "default_limits[0].limits: at least one is required"},
+		{"plan with two entries for a policy", checkJSON(CheckPlan, &configpb.Plan{}, `{"name": "free", "default_limits": [{"policy": "p", "limits": [{"rate": 1, "period": "1s"}]}, {"policy": "p", "limits": [{"rate": 2, "period": "1s"}]}]}`), `default_limits[1]: policy "p" has another entry`},
 		{"plan with a bad name", checkJSON(CheckPlan, &configpb.Plan{}, `{"name": "a b"}`), "name must be"},
 	}
 	for _, tt := range tests {

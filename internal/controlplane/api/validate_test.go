@@ -95,7 +95,32 @@ func TestValidateConfig(t *testing.T) {
 		{"policy rule", func(c *configpb.Config) { c.Policies[0].Level = "user" }, nil, `policy "per-route" : level "user"`},
 		{"plan rule", func(c *configpb.Config) {
 			c.Plans[0].DefaultLimits = []*configpb.PlanLimits{{Policy: "per-route", Limits: []*configpb.Limit{{Rate: 1, Period: "1s"}}}}
-		}, nil, `plan "free" : default_limits are not supported`},
+		}, nil, `config "" : plan "free": default_limits[0]: policy "per-route": plans and overrides apply only to consumer- and route-level policies`},
+		// Plans and overrides (RL-08, ADR-0041).
+		{"plan limits for a per-consumer policy", func(c *configpb.Config) {
+			c.Policies = append(c.Policies, policy("pc", "enforce", "consumer", "gcra", "{consumer}", `["*"]`, `[]`))
+			c.Plans[0].DefaultLimits = []*configpb.PlanLimits{{Policy: "pc", Limits: []*configpb.Limit{{Rate: 50, Period: "1s"}}}}
+		}, nil, ""},
+		{"plan limits below a route's cost", func(c *configpb.Config) {
+			c.Policies = append(c.Policies, policy("pc", "enforce", "consumer", "gcra", "{consumer}", `["*"]`, `[]`))
+			c.Plans[0].DefaultLimits = []*configpb.PlanLimits{{Policy: "pc", Limits: []*configpb.Limit{{Rate: 1, Period: "1s"}}}}
+		}, nil, `plan "free": default_limits[0] (policy "pc"): route "orders-api" costs 2, more than the 1`},
+		{"from_plan policy without the plan's limits", func(c *configpb.Config) {
+			p := policy("pc", "enforce", "consumer", "gcra", "{consumer}", `["*"]`, `[]`)
+			p.FromPlan, p.Limits = true, nil
+			c.Policies = append(c.Policies, p)
+		}, nil, `plan "free": no default_limits for policy "pc", which takes its limits from plans (from_plan)`},
+		{"override that fits its policy", func(c *configpb.Config) {
+			c.Policies = append(c.Policies, policy("pc", "enforce", "consumer", "gcra", "{consumer}", `["*"]`, `[]`))
+		}, []store.IdentityRef{{Entity: "override", ID: 7, Field: "policy_id", Ref: 9, Limits: []*configpb.Limit{{Rate: 30, Period: "1s"}}}}, ""},
+		{"override that no longer fits its policy", func(c *configpb.Config) {
+			c.Policies = append(c.Policies, policy("pc", "enforce", "consumer", "sliding_window", "{consumer}", `["*"]`, `[]`))
+		}, []store.IdentityRef{{Entity: "override", ID: 7, Field: "policy_id", Ref: 9, Limits: []*configpb.Limit{{Rate: 30, Period: "1s", Burst: 30}}}},
+			`override "" limits: override 7 no longer fits its policy: policy "pc": limits[0].burst: only gcra has a burst; change or delete the override first`},
+		{"override of a policy no longer per consumer", func(c *configpb.Config) {
+			c.Policies = append(c.Policies, policy("pc", "enforce", "tenant", "gcra", "{consumer}", `["*"]`, `[]`))
+		}, []store.IdentityRef{{Entity: "override", ID: 7, Field: "policy_id", Ref: 9, Limits: []*configpb.Limit{{Rate: 30, Period: "1s"}}}},
+			`override 7 no longer fits its policy: policy "pc": plans and overrides apply only to`},
 		// References.
 		{"route to a missing upstream", func(c *configpb.Config) { c.Routes[0].Upstream = "payments" }, nil, `route "orders-api" upstream: upstream "payments" does not exist`},
 		{"policy on a missing route", func(c *configpb.Config) { c.Policies[0].Match.Routes = []string{"orders-api", "gone"} }, nil, `policy "per-route" match.routes: route "gone" does not exist`},

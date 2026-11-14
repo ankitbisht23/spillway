@@ -35,7 +35,7 @@ type Options struct {
 	// SnapshotPath is the on-disk snapshot file.
 	SnapshotPath string
 	// Compile compiles a config and reconciles the gateway's runtime state
-	// with it, as a file reload does (config.Prepare); an error rejects
+	// with it, as a file reload does (config.PrepareManaged); an error rejects
 	// it. Its ratelimit.replicas is the live replica count once one is
 	// known (RL-24).
 	Compile func(*configpb.Config) (*config.Snapshot, error)
