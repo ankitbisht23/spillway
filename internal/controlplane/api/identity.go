@@ -208,7 +208,7 @@ func (s *Server) DeleteConsumer(ctx context.Context, req apiv1.DeleteConsumerReq
 }
 
 // ListConsumerKeys lists a consumer's keys: prefix only, never the key or
-// its hash (ADR-0036). Issue, rotate and revoke come with keys-identity.
+// its hash (ADR-0036). Issue, rotate and revoke are in keys.go.
 func (s *Server) ListConsumerKeys(ctx context.Context, req apiv1.ListConsumerKeysRequestObject) (apiv1.ListConsumerKeysResponseObject, error) {
 	p, err := page(req.Params.Limit, req.Params.Cursor)
 	if err != nil {
@@ -221,10 +221,7 @@ func (s *Server) ListConsumerKeys(ctx context.Context, req apiv1.ListConsumerKey
 	rows, next := pageOf(rows, p, func(k db.ListConsumerKeysRow) int64 { return k.ID })
 	items := make([]apiv1.ApiKey, len(rows))
 	for i, k := range rows {
-		items[i] = apiv1.ApiKey{
-			Id: k.ID, ConsumerId: k.ConsumerID, Prefix: k.Prefix, ExpiresAt: k.ExpiresAt, RevokedAt: k.RevokedAt,
-			RotatedFrom: k.RotatedFrom, Version: k.Version, CreatedAt: k.CreatedAt.UTC(), UpdatedAt: k.UpdatedAt.UTC(),
-		}
+		items[i] = keyOut(k)
 	}
 	return apiv1.ListConsumerKeys200JSONResponse{Items: items, NextCursor: next}, nil
 }

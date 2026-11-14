@@ -65,6 +65,36 @@ FROM api_keys
 WHERE consumer_id = @consumer_id AND id > @after::bigint
 ORDER BY id LIMIT @lim;
 
+-- name: GetAPIKey :one
+-- api_keys_pkey. Never the hash. Rotations and revocations read it under
+-- the identity version's row lock, which every writer of api_keys holds.
+SELECT id, consumer_id, prefix, expires_at, revoked_at, rotated_from, version, created_at, updated_at,
+       (expires_at IS NOT NULL AND expires_at <= clock_timestamp())::boolean AS expired
+FROM api_keys WHERE id = @id;
+
+-- name: InsertAPIKey :one
+-- api_keys_prefix_key: a prefix that is taken inserts nothing and returns
+-- no row, and the caller draws another (ADR-0039). Returns no hash.
+INSERT INTO api_keys (consumer_id, prefix, hash, expires_at, rotated_from, version)
+VALUES (@consumer_id, @prefix, @hash, sqlc.narg(expires_at), sqlc.narg(rotated_from), @version)
+ON CONFLICT (prefix) DO NOTHING
+RETURNING id, consumer_id, prefix, expires_at, revoked_at, rotated_from, version, created_at, updated_at;
+
+-- name: ExpireAPIKey :one
+-- api_keys_pkey. A rotated key's expiry: the earlier of its own and now
+-- plus the grace period, on Postgres's clock (D2, ADR-0039).
+UPDATE api_keys
+SET expires_at = LEAST(coalesce(expires_at, 'infinity'), clock_timestamp() + make_interval(secs => @grace_seconds::float8)),
+    version = @version, updated_at = clock_timestamp()
+WHERE id = @id
+RETURNING id, consumer_id, prefix, expires_at, revoked_at, rotated_from, version, created_at, updated_at;
+
+-- name: RevokeAPIKey :one
+-- api_keys_pkey (CP-17).
+UPDATE api_keys SET revoked_at = clock_timestamp(), version = @version, updated_at = clock_timestamp()
+WHERE id = @id
+RETURNING id, consumer_id, prefix, expires_at, revoked_at, rotated_from, version, created_at, updated_at;
+
 -- name: ListAccessLists :many
 -- access_lists_pkey keyset scan.
 SELECT * FROM access_lists

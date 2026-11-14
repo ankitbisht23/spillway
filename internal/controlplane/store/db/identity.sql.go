@@ -380,6 +380,90 @@ func (q *Queries) DeleteTenant(ctx context.Context, id int64) (int64, error) {
 	return result.RowsAffected(), nil
 }
 
+const expireAPIKey = `-- name: ExpireAPIKey :one
+UPDATE api_keys
+SET expires_at = LEAST(coalesce(expires_at, 'infinity'), clock_timestamp() + make_interval(secs => $1::float8)),
+    version = $2, updated_at = clock_timestamp()
+WHERE id = $3
+RETURNING id, consumer_id, prefix, expires_at, revoked_at, rotated_from, version, created_at, updated_at
+`
+
+type ExpireAPIKeyParams struct {
+	GraceSeconds float64
+	Version      int64
+	ID           int64
+}
+
+type ExpireAPIKeyRow struct {
+	ID          int64
+	ConsumerID  int64
+	Prefix      string
+	ExpiresAt   *time.Time
+	RevokedAt   *time.Time
+	RotatedFrom *int64
+	Version     int64
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+// api_keys_pkey. A rotated key's expiry: the earlier of its own and now
+// plus the grace period, on Postgres's clock (D2, ADR-0039).
+func (q *Queries) ExpireAPIKey(ctx context.Context, arg ExpireAPIKeyParams) (ExpireAPIKeyRow, error) {
+	row := q.db.QueryRow(ctx, expireAPIKey, arg.GraceSeconds, arg.Version, arg.ID)
+	var i ExpireAPIKeyRow
+	err := row.Scan(
+		&i.ID,
+		&i.ConsumerID,
+		&i.Prefix,
+		&i.ExpiresAt,
+		&i.RevokedAt,
+		&i.RotatedFrom,
+		&i.Version,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getAPIKey = `-- name: GetAPIKey :one
+SELECT id, consumer_id, prefix, expires_at, revoked_at, rotated_from, version, created_at, updated_at,
+       (expires_at IS NOT NULL AND expires_at <= clock_timestamp())::boolean AS expired
+FROM api_keys WHERE id = $1
+`
+
+type GetAPIKeyRow struct {
+	ID          int64
+	ConsumerID  int64
+	Prefix      string
+	ExpiresAt   *time.Time
+	RevokedAt   *time.Time
+	RotatedFrom *int64
+	Version     int64
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+	Expired     bool
+}
+
+// api_keys_pkey. Never the hash. Rotations and revocations read it under
+// the identity version's row lock, which every writer of api_keys holds.
+func (q *Queries) GetAPIKey(ctx context.Context, id int64) (GetAPIKeyRow, error) {
+	row := q.db.QueryRow(ctx, getAPIKey, id)
+	var i GetAPIKeyRow
+	err := row.Scan(
+		&i.ID,
+		&i.ConsumerID,
+		&i.Prefix,
+		&i.ExpiresAt,
+		&i.RevokedAt,
+		&i.RotatedFrom,
+		&i.Version,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Expired,
+	)
+	return i, err
+}
+
 const getAccessList = `-- name: GetAccessList :one
 SELECT id, action, subject_type, api_key_id, consumer_id, cidr, note, version, created_at, updated_at FROM access_lists WHERE id = $1
 `
@@ -479,6 +563,60 @@ func (q *Queries) IdentityVersion(ctx context.Context) (int64, error) {
 	var version int64
 	err := row.Scan(&version)
 	return version, err
+}
+
+const insertAPIKey = `-- name: InsertAPIKey :one
+INSERT INTO api_keys (consumer_id, prefix, hash, expires_at, rotated_from, version)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (prefix) DO NOTHING
+RETURNING id, consumer_id, prefix, expires_at, revoked_at, rotated_from, version, created_at, updated_at
+`
+
+type InsertAPIKeyParams struct {
+	ConsumerID  int64
+	Prefix      string
+	Hash        []byte
+	ExpiresAt   *time.Time
+	RotatedFrom *int64
+	Version     int64
+}
+
+type InsertAPIKeyRow struct {
+	ID          int64
+	ConsumerID  int64
+	Prefix      string
+	ExpiresAt   *time.Time
+	RevokedAt   *time.Time
+	RotatedFrom *int64
+	Version     int64
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+// api_keys_prefix_key: a prefix that is taken inserts nothing and returns
+// no row, and the caller draws another (ADR-0039). Returns no hash.
+func (q *Queries) InsertAPIKey(ctx context.Context, arg InsertAPIKeyParams) (InsertAPIKeyRow, error) {
+	row := q.db.QueryRow(ctx, insertAPIKey,
+		arg.ConsumerID,
+		arg.Prefix,
+		arg.Hash,
+		arg.ExpiresAt,
+		arg.RotatedFrom,
+		arg.Version,
+	)
+	var i InsertAPIKeyRow
+	err := row.Scan(
+		&i.ID,
+		&i.ConsumerID,
+		&i.Prefix,
+		&i.ExpiresAt,
+		&i.RevokedAt,
+		&i.RotatedFrom,
+		&i.Version,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const listAccessLists = `-- name: ListAccessLists :many
@@ -820,6 +958,47 @@ SELECT pg_notify('spillway_identity', $1::text)
 func (q *Queries) NotifyIdentity(ctx context.Context, version string) error {
 	_, err := q.db.Exec(ctx, notifyIdentity, version)
 	return err
+}
+
+const revokeAPIKey = `-- name: RevokeAPIKey :one
+UPDATE api_keys SET revoked_at = clock_timestamp(), version = $1, updated_at = clock_timestamp()
+WHERE id = $2
+RETURNING id, consumer_id, prefix, expires_at, revoked_at, rotated_from, version, created_at, updated_at
+`
+
+type RevokeAPIKeyParams struct {
+	Version int64
+	ID      int64
+}
+
+type RevokeAPIKeyRow struct {
+	ID          int64
+	ConsumerID  int64
+	Prefix      string
+	ExpiresAt   *time.Time
+	RevokedAt   *time.Time
+	RotatedFrom *int64
+	Version     int64
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+// api_keys_pkey (CP-17).
+func (q *Queries) RevokeAPIKey(ctx context.Context, arg RevokeAPIKeyParams) (RevokeAPIKeyRow, error) {
+	row := q.db.QueryRow(ctx, revokeAPIKey, arg.Version, arg.ID)
+	var i RevokeAPIKeyRow
+	err := row.Scan(
+		&i.ID,
+		&i.ConsumerID,
+		&i.Prefix,
+		&i.ExpiresAt,
+		&i.RevokedAt,
+		&i.RotatedFrom,
+		&i.Version,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const updateAccessList = `-- name: UpdateAccessList :one
