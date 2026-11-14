@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-11-14
-- **Requirement IDs:** NFR-08, NFR-09, NFR-12, CP-07, CP-08, CP-09, CP-17, CP-22
+- **Requirement IDs:** NFR-08, NFR-09, NFR-12, CP-06, CP-07, CP-08, CP-09, CP-17, CP-22
 
 ## Context
 
@@ -34,6 +34,11 @@ ADR-0042 settles `make verify-m5`'s three checks, their pass rules and their tim
 - **Scrape failures.** A scrape fails on a transport error or timeout, a `/metrics` answer other than 200, or a missing `gw_config_version`, `gw_identity_version` or `gw_config_sync_age_seconds`; it breaks (c2) and (c3) in the outage and (c5) after it. A `/readyz` other than 200 is a successful scrape that breaks (c2).
 - **(c4)** also needs gateway-3's first ready scrape to be sent before t_healthy: it booted while the control plane was down, from its snapshot.
 
+### A fix the check found: gateways resolve the control plane on every dial
+
+- The first full run failed (c5): 60 s after the control plane was back, gateway-2, gateway-4 and gateway-5 had not reopened their Watch streams (gateway-3, restarted mid-outage, did after 4 s and gateway-1 after 9 s). While the control plane is stopped its compose name does not resolve, and grpc-go's default `dns` resolver (v1.84.0) retries such a name with its own exponential backoff of up to 120 s, during which it ignores the channel's requests to resolve again. After 10 minutes a gateway could stay away for up to 2 minutes, although ADR-0038's dial options cap reconnects at 5 s exactly to avoid that.
+- Managed gateways now dial `passthrough:///<SPILLWAY_GATEWAY_CONTROL_PLANE>` (`managed.Target`): the dialer gets the name and resolves it on every connection attempt, so reconnects follow the 100 ms to 5 s backoff. With several control-plane addresses behind one name, Go's dialer tries them in order, as `pick_first` did. A unit test checks that a name that does not resolve still reaches the dialer on the first attempt and on the reconnect after it; under the `dns` resolver it never does.
+
 ### Clean-up
 
 - On every exit the script starts the control plane and Postgres if not both run, runs `chaos controlplane cleanup` (revokes consumer `m5-verify`'s keys that are not revoked, deletes the consumer, whose keys go with it, and the tenant), recreates gateway-1 in static mode and removes gateway-2 … gateway-5. Published config versions stay, and the working set stays at `m5.yaml` with the last header edit. Unlike ADR-0042, tenant, consumer and keys do not stay, so later imports may drop plan `m5-verify`; setup removes them too when a run was killed before its trap.
@@ -43,6 +48,7 @@ ADR-0042 settles `make verify-m5`'s three checks, their pass rules and their tim
 
 - Only the stated edges move: (c5)'s 60 s count from a t_healthy up to compose's 2 s healthcheck interval earlier than the script's line, which is stricter; (c2) and (c3) end where the outage can first have ended instead of where compose noticed. No rule is checked fewer times than once per scrape in the outage, and nothing re-runs.
 - `make test-integration` and other imports work after `make verify-m5`; a run's tenant cannot outlive it.
+- A managed gateway is back on the stream within about 5 s of the control plane's return however long the outage was, which (c5) and NFR-12's recovery need.
 - The script holds no timing logic beyond its 200 ms poll; the sender's unit tests drive the whole timeline against a fake control plane, fake gateways and a fake script.
 
 ## Alternatives considered
@@ -52,3 +58,4 @@ ADR-0042 settles `make verify-m5`'s three checks, their pass rules and their tim
 - **Keeping the tenant and having the integration tests delete it** — every test that imports would have to know about `make verify-m5`.
 - **The script keeping the timeline** — two processes' sleeps to keep in step; the sender already schedules its load and scrapes.
 - **gateway-3's share all to its neighbour** — 200 rps on one replica for the restart; ADR-0042 says the other four.
+- **Keeping the `dns` resolver and lowering its backoff** — grpc-go exposes only the minimum interval between successful resolutions, not the backoff after a failed one.

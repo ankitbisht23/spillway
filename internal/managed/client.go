@@ -84,6 +84,15 @@ func New(cs configpb.ConfigServiceClient, opts Options) *Client {
 	return c
 }
 
+// Target is the gRPC target of the ConfigService at addr (host:port). The
+// passthrough resolver hands addr to the dialer, which resolves the name
+// on every connection attempt, so reconnects follow DialOptions' backoff.
+// gRPC's default dns resolver retries a name that does not resolve, as a
+// stopped compose service's does not, with its own backoff of up to 120 s
+// and ignores reconnects in between: after a 10-minute outage a gateway
+// stayed away from the control plane for over a minute (ADR-0052).
+func Target(addr string) string { return "passthrough:///" + addr }
+
 // DialOptions are the gRPC client options of the ConfigService connection
 // (ADR-0038, ADR-0040): mTLS with tlsConfig (there is no plaintext),
 // keepalive pings after 10 s idle with a 5 s timeout, messages up to

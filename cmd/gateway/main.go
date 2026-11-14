@@ -219,7 +219,7 @@ func serve(ctx context.Context, s settings, log *slog.Logger, tracer trace.Trace
 			return fmt.Errorf("config stream mTLS: %w", err)
 		}
 		go streamCerts.Run(bg, time.Second)
-		conn, err := grpc.NewClient(s.controlPlane, managed.DialOptions(streamCerts.ClientConfig(s.cpServerName))...)
+		conn, err := grpc.NewClient(managed.Target(s.controlPlane), managed.DialOptions(streamCerts.ClientConfig(s.cpServerName))...)
 		if err != nil {
 			return fmt.Errorf("SPILLWAY_GATEWAY_CONTROL_PLANE: %w", err)
 		}
