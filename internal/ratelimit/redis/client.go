@@ -570,7 +570,7 @@ type limiter struct {
 
 func (a limiter) Allow(ctx context.Context, key string, cost int64) (ratelimit.Decision, error) {
 	limits := []Limit{{
-		Key:       GlobalKey(a.policy, a.l.Period, digestOf(key)),
+		Key:       GlobalKey(a.policy, a.l.Period, KeyDigest(key)),
 		Level:     "global",
 		Enforce:   true,
 		Algorithm: a.algorithm,

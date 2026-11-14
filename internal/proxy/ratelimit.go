@@ -15,6 +15,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/ankitbisht23/spillway/internal/config"
+	"github.com/ankitbisht23/spillway/internal/heavyhitters"
 	"github.com/ankitbisht23/spillway/internal/ratelimit"
 	"github.com/ankitbisht23/spillway/internal/ratelimit/local"
 	rlredis "github.com/ankitbisht23/spillway/internal/ratelimit/redis"
@@ -45,10 +46,14 @@ type limits struct {
 	q        *telemetry.Request
 	cost     int64
 	values   config.KeyValues
+	// hitters counts denies and shadow would-denies (RL-21); nil in
+	// static mode.
+	hitters *heavyhitters.Sketch
 	// consumer and identity are the request's, once authenticated; they
 	// choose the limits of per-consumer policies (limitsOf).
 	consumer *config.Consumer
 	identity *config.Identity
+	keyID    int64        // the managed API key that resolved the consumer; 0 for none
 	checks   []check      // in evaluation order
 	calls    []*redisCall // the Redis calls that answered, in order
 	denied   bool         // an enforce limit denied the request
@@ -78,6 +83,7 @@ type redisCall struct {
 	policies []*config.Policy // of each limit; a policy's limits are adjacent
 	conf     []config.Limit   // of each limit
 	windows  []int            // of each limit: its policy's limits for this request
+	keys     []string         // of each limit: its policy's filled key template's ratelimit.Key
 	checks   []int            // index in limits.checks of each limit, once answered
 	nowUS    int64            // the call's Redis TIME, which its refund names
 	slot     string           // the hash slot's kind, for its span: "tenant", "key" or "global"
@@ -95,10 +101,11 @@ type refunder interface {
 }
 
 // newLimits prepares the checks of a request for route on snapshot s, sent
-// by the client at ip; tracer, if not nil, traces them under r's span.
-func newLimits(s *config.Snapshot, route *config.Route, registry *local.Registry, redis Redis, tracer trace.Tracer, rec *telemetry.Recorder, log *slog.Logger, r *http.Request, q *telemetry.Request, ip netip.Addr) *limits {
+// by the client at ip; tracer, if not nil, traces them under r's span, and
+// hitters, if not nil, counts their denies.
+func newLimits(s *config.Snapshot, route *config.Route, registry *local.Registry, redis Redis, tracer trace.Tracer, hitters *heavyhitters.Sketch, rec *telemetry.Recorder, log *slog.Logger, r *http.Request, q *telemetry.Request, ip netip.Addr) *limits {
 	l := &limits{
-		policies: s.Policies, registry: registry, redis: redis, budget: s.RedisBudget, replicas: s.Replicas, tracer: tracer, rec: rec, log: log, r: r, q: q, cost: route.Cost,
+		policies: s.Policies, registry: registry, redis: redis, budget: s.RedisBudget, replicas: s.Replicas, tracer: tracer, hitters: hitters, rec: rec, log: log, r: r, q: q, cost: route.Cost,
 		// Upper-cased: many upstreams take "post" for POST, so it must not
 		// skip POST policies or get a {method} bucket of its own (ADR-0020).
 		values: config.KeyValues{Route: route.Name, Method: strings.ToUpper(r.Method), Header: r.Header},
@@ -123,12 +130,13 @@ func ipKey(ip netip.Addr) string {
 // identify fills the identity placeholders for phase 2 from the request's
 // consumer and the API key that resolved it; anonymous, they stay unfilled,
 // and so does {api_key} for a consumer a token resolved (ADR-0039). id is
-// the identity the consumer comes from, whose overrides apply (RL-08).
-func (l *limits) identify(c *config.Consumer, key string, id *config.Identity) {
+// the identity the consumer comes from, whose overrides apply (RL-08);
+// keyID is the key's ID, 0 for none or a static key.
+func (l *limits) identify(c *config.Consumer, key string, keyID int64, id *config.Identity) {
 	if c == nil {
 		return
 	}
-	l.consumer, l.identity = c, id
+	l.consumer, l.identity, l.keyID = c, id, keyID
 	if key != "" {
 		sum := sha256.Sum256([]byte(key))
 		l.values.APIKey = hex.EncodeToString(sum[:])
@@ -207,6 +215,9 @@ func (l *limits) check(identity bool) bool {
 		if applied {
 			policies++
 			l.q.Decisions = append(l.q.Decisions, telemetry.Decision{Policy: p.Name, Decision: decision, Mode: p.Mode})
+			if decision == "deny" {
+				l.throttled(p, key)
+			}
 		}
 	}
 	if l.denied {
@@ -340,6 +351,9 @@ func (l *limits) failed(c *redisCall, err error) bool {
 		}
 		if applied {
 			l.q.Decisions = append(l.q.Decisions, telemetry.Decision{Policy: p.Name, Decision: decision, Mode: p.Mode})
+			if decision == "deny" {
+				l.throttled(p, c.keys[i])
+			}
 		}
 		i = j
 	}
@@ -386,14 +400,32 @@ func errorKind(err error) (kind, node string) {
 // that is not "allow", else "allow".
 func (l *limits) decide(c *redisCall, decision func(i int) string) {
 	for i := 0; i < len(c.limits); {
-		p, d := c.policies[i], "allow"
+		p, d, first := c.policies[i], "allow", i
 		for ; i < len(c.limits) && c.policies[i] == p; i++ {
 			if x := decision(i); d == "allow" {
 				d = x
 			}
 		}
 		l.q.Decisions = append(l.q.Decisions, telemetry.Decision{Policy: p.Name, Decision: d, Mode: p.Mode})
+		if d == "deny" {
+			l.throttled(p, c.keys[first])
+		}
 	}
+}
+
+// throttled counts a deny of policy p, or a would-deny if p is in shadow
+// mode, for the key whose ratelimit.Key is key, in the heavy hitters
+// (RL-21, ADR-0041): once per policy and request, whatever the cost. A
+// failure mode's outcome is not a deny and is not counted.
+func (l *limits) throttled(p *config.Policy, key string) {
+	if l.hitters == nil {
+		return
+	}
+	var consumer int64
+	if l.consumer != nil {
+		consumer = l.consumer.ID
+	}
+	l.hitters.Add(p.ID, key, p.Mode == config.Shadow, consumer, l.keyID)
 }
 
 // redisCalls groups the Redis policies that apply to the request into calls
@@ -418,7 +450,8 @@ func (l *limits) redisCalls() []*redisCall {
 		if !ok {
 			continue
 		}
-		digest := rlredis.Digest(filled)
+		raw := ratelimit.Key(filled)
+		digest := rlredis.KeyDigest(raw)
 		var c *redisCall
 		var key func(period time.Duration) string
 		switch {
@@ -451,6 +484,7 @@ func (l *limits) redisCalls() []*redisCall {
 			c.policies = append(c.policies, p)
 			c.conf = append(c.conf, lim)
 			c.windows = append(c.windows, len(lims))
+			c.keys = append(c.keys, raw)
 		}
 	}
 	return append(slot, global...)

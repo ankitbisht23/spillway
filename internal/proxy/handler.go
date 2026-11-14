@@ -21,6 +21,7 @@ import (
 
 	"github.com/ankitbisht23/spillway/internal/auth"
 	"github.com/ankitbisht23/spillway/internal/config"
+	"github.com/ankitbisht23/spillway/internal/heavyhitters"
 	"github.com/ankitbisht23/spillway/internal/ratelimit/local"
 	"github.com/ankitbisht23/spillway/internal/resilience"
 	"github.com/ankitbisht23/spillway/internal/router"
@@ -32,7 +33,8 @@ import (
 type Handler struct {
 	snapshot func() *config.Snapshot
 	identity func() *config.Identity
-	tokens   *auth.Verifier // bearer tokens (GW-18); nil without JWT settings
+	tokens   *auth.Verifier       // bearer tokens (GW-18); nil without JWT settings
+	hitters  *heavyhitters.Sketch // top throttled keys (RL-21); nil in static mode
 	trusted  TrustedProxies
 	pools    *Registry
 	limiters *local.Registry
@@ -64,6 +66,11 @@ type Handler struct {
 func NewHandler(snapshot func() *config.Snapshot, identity func() *config.Identity, trusted TrustedProxies, pools *Registry, limiters *local.Registry, redis Redis, devMode bool, maxInFlight int64, tracer trace.Tracer, rec *telemetry.Recorder, log *slog.Logger) *Handler {
 	return &Handler{snapshot: snapshot, identity: identity, trusted: trusted, pools: pools, limiters: limiters, redis: redis, devMode: devMode, jitter: rand.N[time.Duration], tracer: tracer, maxInFlight: maxInFlight, rec: rec, log: log, errLog: slog.NewLogLogger(log.Handler(), slog.LevelWarn)}
 }
+
+// SetHeavyHitters makes the handler count every rate-limit deny and shadow
+// would-deny in s, which heartbeats report (RL-21, ADR-0041); managed mode
+// only, as static policies have no IDs. Call it before serving.
+func (h *Handler) SetHeavyHitters(s *heavyhitters.Sketch) { h.hitters = s }
 
 // InFlight returns the number of requests being handled.
 func (h *Handler) InFlight() int64 {
@@ -190,7 +197,7 @@ func (h *Handler) serve(w *responseRecorder, r *http.Request, body *countingBody
 		forbidden(w)
 		return
 	}
-	lim := newLimits(s, route, h.limiters, h.redis, h.tracer, h.rec, h.log, r, q, ip)
+	lim := newLimits(s, route, h.limiters, h.redis, h.tracer, h.hitters, h.rec, h.log, r, q, ip)
 	defer lim.release()
 	allowed := exempt || lim.check(false)
 	if allowed {
@@ -214,7 +221,7 @@ func (h *Handler) serve(w *responseRecorder, r *http.Request, body *countingBody
 			forbidden(w)
 			return
 		}
-		lim.identify(consumer, key, id)
+		lim.identify(consumer, key, keyID, id)
 		if !exempt && !allow {
 			allowed = lim.check(true) && lim.checkRedis()
 		}

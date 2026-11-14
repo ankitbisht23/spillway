@@ -25,6 +25,7 @@ import (
 
 	"github.com/ankitbisht23/spillway/internal/config"
 	"github.com/ankitbisht23/spillway/internal/gen/configpb"
+	"github.com/ankitbisht23/spillway/internal/heavyhitters"
 )
 
 // Options configure a managed gateway.
@@ -39,7 +40,10 @@ type Options struct {
 	// it. Its ratelimit.replicas is the live replica count once one is
 	// known (RL-24).
 	Compile func(*configpb.Config) (*config.Snapshot, error)
-	Log     *slog.Logger
+	// HeavyHitters is the sketch the gateway counts throttled keys in;
+	// each heartbeat reports and resets it (RL-21, ADR-0041). Nil: none.
+	HeavyHitters *heavyhitters.Sketch
+	Log          *slog.Logger
 }
 
 // Client is a managed gateway's view of the control plane: the config and
