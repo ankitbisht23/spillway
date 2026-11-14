@@ -58,9 +58,27 @@ func (id *Identity) Lookup(key string) (*Consumer, bool) {
 	return k.consumer, true
 }
 
+// KeyFormatManaged is the key format of managed identity, which the control
+// plane sends (ADR-0038, ADR-0039).
+const KeyFormatManaged = "spw1"
+
 // CompileIdentity validates an identity section and builds its compiled
-// form. Errors name API keys by index, never by any part of the key.
+// form. Errors name API keys by index, never by any part of the key. Static
+// identity (key_format unset) has consumers and static keys only; managed
+// identity comes from the control plane.
 func CompileIdentity(c *configpb.Identity) (*Identity, error) {
+	switch c.GetKeyFormat() {
+	case "":
+		if err := staticOnly(c); err != nil {
+			return nil, err
+		}
+	case KeyFormatManaged:
+		// Interim until M5's keys-identity task (ADR-0035): managed
+		// identity has tenants and consumers, but no key resolves yet.
+		return &Identity{Version: c.GetVersion(), keys: map[string]apiKey{}}, nil
+	default:
+		return nil, fmt.Errorf("key_format %q: want none (static keys) or %q (managed keys)", c.GetKeyFormat(), KeyFormatManaged)
+	}
 	id := &Identity{Version: c.GetVersion(), keys: map[string]apiKey{}}
 	consumers := map[string]*Consumer{}
 	for _, cc := range c.GetConsumers() {
@@ -96,4 +114,24 @@ func CompileIdentity(c *configpb.Identity) (*Identity, error) {
 		id.keys[k.GetPrefix()] = apiKey{hash: [sha256.Size]byte(hash), consumer: owner}
 	}
 	return id, nil
+}
+
+// staticOnly rejects the managed-mode fields of an identity file: IDs,
+// tenants, statuses, JWT subjects, expiry, access lists and overrides come
+// from the control plane only (ADR-0038).
+func staticOnly(c *configpb.Identity) error {
+	if len(c.GetTenants()) > 0 || len(c.GetAccessLists()) > 0 || len(c.GetOverrides()) > 0 {
+		return errors.New("tenants, access_lists and overrides come from the control plane (managed mode) only")
+	}
+	for _, cc := range c.GetConsumers() {
+		if cc.GetId() != 0 || cc.GetTenantId() != 0 || cc.GetPlanId() != 0 || cc.GetStatus() != "" || cc.GetJwtSubject() != "" {
+			return fmt.Errorf("consumer %q: id, tenant_id, plan_id, status and jwt_subject come from the control plane (managed mode) only", cc.GetName())
+		}
+	}
+	for i, k := range c.GetApiKeys() {
+		if k.GetId() != 0 || k.GetConsumerId() != 0 || k.GetExpiresAt() != nil {
+			return fmt.Errorf("api_keys[%d]: id, consumer_id and expires_at come from the control plane (managed mode) only", i)
+		}
+	}
+	return nil
 }

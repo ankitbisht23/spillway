@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/ankitbisht23/spillway/internal/gen/configpb"
 )
 
 // ADR-0017's example keys, for tests only; files hold only their prefixes
@@ -90,7 +92,16 @@ func TestIdentityRejects(t *testing.T) {
 	}{
 		{"empty file", "", "identity: empty"},
 		{"not YAML", "consumers: [", "identity: yaml"},
-		{"unknown field", "tenants: []", `unknown field "tenants"`},
+		{"unknown field", "tenantz: []", `unknown field "tenantz"`},
+		// Managed identity's fields come from the control plane only
+		// (ADR-0038).
+		{"tenants", "tenants: [{id: 1, name: acme}]", "tenants, access_lists and overrides come from the control plane (managed mode) only"},
+		{"access list", "access_lists: [{id: 1, action: deny}]", "tenants, access_lists and overrides come from the control plane"},
+		{"override", "overrides: [{id: 1}]", "tenants, access_lists and overrides come from the control plane"},
+		{"consumer id", "consumers: [{name: a, id: 3}]", `consumer "a": id, tenant_id, plan_id, status and jwt_subject come from the control plane (managed mode) only`},
+		{"consumer jwt subject", "consumers: [{name: a, jwt_subject: s}]", `consumer "a": id, tenant_id`},
+		{"key expiry", "consumers: [{name: a}]\napi_keys: [{prefix: abcdefghijkl, hash: " + h + ", consumer: a, expires_at: '2030-01-01T00:00:00Z'}]", "api_keys[0]: id, consumer_id and expires_at come from the control plane (managed mode) only"},
+		{"key format", "key_format: spw2", `key_format "spw2": want none (static keys) or "spw1" (managed keys)`},
 		{"key in plain text", "api_keys: [{key: " + aliceKey + "}]", `unknown field "key"`},
 		{"consumer without a name", "consumers: [{tenant: acme}]", "consumer: name is required"},
 		{"consumer twice", "consumers: [{name: a}, {name: a}]", `consumer "a": defined twice`},
@@ -124,6 +135,23 @@ func TestIdentityRejects(t *testing.T) {
 				t.Errorf("error %q names part of a key", err)
 			}
 		})
+	}
+}
+
+// TestManagedIdentity checks the interim managed identity (ADR-0035): it
+// compiles with its version, and no key resolves until keys-identity.
+func TestManagedIdentity(t *testing.T) {
+	id, err := CompileIdentity(&configpb.Identity{
+		Version: 7, KeyFormat: KeyFormatManaged,
+		Tenants:   []*configpb.Tenant{{Id: 1, Name: "acme", PlanId: 2, Status: "active"}},
+		Consumers: []*configpb.Consumer{{Id: 3, TenantId: 1, Name: "alice", Status: "active"}},
+		ApiKeys:   []*configpb.ApiKey{{Id: 4, ConsumerId: 3, Prefix: "abcdefgh", Hash: hashHex("x")}},
+	})
+	if err != nil || id.Version != 7 {
+		t.Fatalf("CompileIdentity = %+v, %v", id, err)
+	}
+	if c, ok := id.Lookup("spw_abcdefgh_x"); ok {
+		t.Errorf("Lookup = %+v; want no key until keys-identity", c)
 	}
 }
 

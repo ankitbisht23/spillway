@@ -6,3 +6,8 @@ plugins:
     out: .
     opt:
       - module=github.com/ankitbisht23/spillway
+  # ConfigService's client and server (ADR-0038).
+  - local: protoc-gen-go-grpc
+    out: .
+    opt:
+      - module=github.com/ankitbisht23/spillway

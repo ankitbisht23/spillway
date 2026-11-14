@@ -14,6 +14,7 @@ package configpb
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
@@ -1662,14 +1663,23 @@ func (x *Limit) GetBurst() int64 {
 	return 0
 }
 
-// Identity is the identity section of a snapshot (ADR-0005, GW-17). Before
-// M5 it comes from its own YAML file, with its own version.
+// Identity is the identity section of a snapshot (ADR-0005, GW-17). In
+// static mode it comes from its own YAML file, with its own version; in
+// managed mode the control plane builds it from its identity tables
+// (CP-20, ADR-0037, ADR-0038).
 type Identity struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Identity version; each change increases it.
-	Version       int64       `protobuf:"varint,1,opt,name=version,proto3" json:"version,omitempty"`
-	Consumers     []*Consumer `protobuf:"bytes,2,rep,name=consumers,proto3" json:"consumers,omitempty"`
-	ApiKeys       []*ApiKey   `protobuf:"bytes,3,rep,name=api_keys,json=apiKeys,proto3" json:"api_keys,omitempty"`
+	Version   int64       `protobuf:"varint,1,opt,name=version,proto3" json:"version,omitempty"`
+	Consumers []*Consumer `protobuf:"bytes,2,rep,name=consumers,proto3" json:"consumers,omitempty"`
+	ApiKeys   []*ApiKey   `protobuf:"bytes,3,rep,name=api_keys,json=apiKeys,proto3" json:"api_keys,omitempty"`
+	// "" for static keys (ADR-0017); "spw1" for managed keys (ADR-0039),
+	// which the control plane sends.
+	KeyFormat string `protobuf:"bytes,4,opt,name=key_format,json=keyFormat,proto3" json:"key_format,omitempty"`
+	// Managed mode only, as are the fields below that carry IDs.
+	Tenants       []*Tenant          `protobuf:"bytes,5,rep,name=tenants,proto3" json:"tenants,omitempty"`
+	AccessLists   []*AccessListEntry `protobuf:"bytes,6,rep,name=access_lists,json=accessLists,proto3" json:"access_lists,omitempty"`
+	Overrides     []*Override        `protobuf:"bytes,7,rep,name=overrides,proto3" json:"overrides,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1725,14 +1735,50 @@ func (x *Identity) GetApiKeys() []*ApiKey {
 	return nil
 }
 
+func (x *Identity) GetKeyFormat() string {
+	if x != nil {
+		return x.KeyFormat
+	}
+	return ""
+}
+
+func (x *Identity) GetTenants() []*Tenant {
+	if x != nil {
+		return x.Tenants
+	}
+	return nil
+}
+
+func (x *Identity) GetAccessLists() []*AccessListEntry {
+	if x != nil {
+		return x.AccessLists
+	}
+	return nil
+}
+
+func (x *Identity) GetOverrides() []*Override {
+	if x != nil {
+		return x.Overrides
+	}
+	return nil
+}
+
 // Consumer is a client of the API.
 type Consumer struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Unique.
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	// Optional; empty leaves {tenant} unfilled. 1-64 characters from
-	// [A-Za-z0-9._-] (ADR-0021).
-	Tenant        string `protobuf:"bytes,2,opt,name=tenant,proto3" json:"tenant,omitempty"`
+	// [A-Za-z0-9._-] (ADR-0021). Static mode only.
+	Tenant string `protobuf:"bytes,2,opt,name=tenant,proto3" json:"tenant,omitempty"`
+	// Managed mode (ADR-0036): the consumer's ID, its tenant's, its plan's
+	// (0: the tenant's plan), active or suspended, and the JWT subject that
+	// resolves to it (ADR-0039).
+	Id            int64  `protobuf:"varint,3,opt,name=id,proto3" json:"id,omitempty"`
+	TenantId      int64  `protobuf:"varint,4,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	PlanId        int64  `protobuf:"varint,5,opt,name=plan_id,json=planId,proto3" json:"plan_id,omitempty"`
+	Status        string `protobuf:"bytes,6,opt,name=status,proto3" json:"status,omitempty"`
+	JwtSubject    string `protobuf:"bytes,7,opt,name=jwt_subject,json=jwtSubject,proto3" json:"jwt_subject,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1781,16 +1827,58 @@ func (x *Consumer) GetTenant() string {
 	return ""
 }
 
-// ApiKey is a static API key, stored as its prefix and hash, never the key
+func (x *Consumer) GetId() int64 {
+	if x != nil {
+		return x.Id
+	}
+	return 0
+}
+
+func (x *Consumer) GetTenantId() int64 {
+	if x != nil {
+		return x.TenantId
+	}
+	return 0
+}
+
+func (x *Consumer) GetPlanId() int64 {
+	if x != nil {
+		return x.PlanId
+	}
+	return 0
+}
+
+func (x *Consumer) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+func (x *Consumer) GetJwtSubject() string {
+	if x != nil {
+		return x.JwtSubject
+	}
+	return ""
+}
+
+// ApiKey is an API key, stored as its prefix and hash, never the key
 // (GW-17, SEC-03).
 type ApiKey struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The key's first 12 bytes; unique.
+	// Static keys: the key's first 12 bytes; managed keys: the 8-character
+	// public prefix (ADR-0039). Unique.
 	Prefix string `protobuf:"bytes,1,opt,name=prefix,proto3" json:"prefix,omitempty"`
-	// Lower-case hex SHA-256 of the whole key.
+	// Lower-case hex SHA-256: of the whole static key, of a managed key's
+	// secret part.
 	Hash string `protobuf:"bytes,2,opt,name=hash,proto3" json:"hash,omitempty"`
-	// Name of the consumer the key belongs to.
-	Consumer      string `protobuf:"bytes,3,opt,name=consumer,proto3" json:"consumer,omitempty"`
+	// Static mode: the name of the consumer the key belongs to.
+	Consumer string `protobuf:"bytes,3,opt,name=consumer,proto3" json:"consumer,omitempty"`
+	// Managed mode: the key's ID, its consumer's ID, and when it stops
+	// working (unset: never), on the gateway's clock (ADR-0039).
+	Id            int64                  `protobuf:"varint,4,opt,name=id,proto3" json:"id,omitempty"`
+	ConsumerId    int64                  `protobuf:"varint,5,opt,name=consumer_id,json=consumerId,proto3" json:"consumer_id,omitempty"`
+	ExpiresAt     *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1846,11 +1934,276 @@ func (x *ApiKey) GetConsumer() string {
 	return ""
 }
 
+func (x *ApiKey) GetId() int64 {
+	if x != nil {
+		return x.Id
+	}
+	return 0
+}
+
+func (x *ApiKey) GetConsumerId() int64 {
+	if x != nil {
+		return x.ConsumerId
+	}
+	return 0
+}
+
+func (x *ApiKey) GetExpiresAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ExpiresAt
+	}
+	return nil
+}
+
+// Tenant groups consumers and gives them a plan (managed mode, RL-08).
+type Tenant struct {
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Id     int64                  `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
+	Name   string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	PlanId int64                  `protobuf:"varint,3,opt,name=plan_id,json=planId,proto3" json:"plan_id,omitempty"`
+	// active or suspended.
+	Status        string `protobuf:"bytes,4,opt,name=status,proto3" json:"status,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Tenant) Reset() {
+	*x = Tenant{}
+	mi := &file_config_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Tenant) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Tenant) ProtoMessage() {}
+
+func (x *Tenant) ProtoReflect() protoreflect.Message {
+	mi := &file_config_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Tenant.ProtoReflect.Descriptor instead.
+func (*Tenant) Descriptor() ([]byte, []int) {
+	return file_config_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *Tenant) GetId() int64 {
+	if x != nil {
+		return x.Id
+	}
+	return 0
+}
+
+func (x *Tenant) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *Tenant) GetPlanId() int64 {
+	if x != nil {
+		return x.PlanId
+	}
+	return 0
+}
+
+func (x *Tenant) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+// AccessListEntry allows or denies one key, consumer or CIDR (ADR-0041).
+type AccessListEntry struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Id    int64                  `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
+	// allow or deny.
+	Action string `protobuf:"bytes,2,opt,name=action,proto3" json:"action,omitempty"`
+	// key, consumer or cidr; exactly the matching field below is set.
+	SubjectType   string `protobuf:"bytes,3,opt,name=subject_type,json=subjectType,proto3" json:"subject_type,omitempty"`
+	ApiKeyId      int64  `protobuf:"varint,4,opt,name=api_key_id,json=apiKeyId,proto3" json:"api_key_id,omitempty"`
+	ConsumerId    int64  `protobuf:"varint,5,opt,name=consumer_id,json=consumerId,proto3" json:"consumer_id,omitempty"`
+	Cidr          string `protobuf:"bytes,6,opt,name=cidr,proto3" json:"cidr,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AccessListEntry) Reset() {
+	*x = AccessListEntry{}
+	mi := &file_config_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AccessListEntry) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AccessListEntry) ProtoMessage() {}
+
+func (x *AccessListEntry) ProtoReflect() protoreflect.Message {
+	mi := &file_config_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AccessListEntry.ProtoReflect.Descriptor instead.
+func (*AccessListEntry) Descriptor() ([]byte, []int) {
+	return file_config_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *AccessListEntry) GetId() int64 {
+	if x != nil {
+		return x.Id
+	}
+	return 0
+}
+
+func (x *AccessListEntry) GetAction() string {
+	if x != nil {
+		return x.Action
+	}
+	return ""
+}
+
+func (x *AccessListEntry) GetSubjectType() string {
+	if x != nil {
+		return x.SubjectType
+	}
+	return ""
+}
+
+func (x *AccessListEntry) GetApiKeyId() int64 {
+	if x != nil {
+		return x.ApiKeyId
+	}
+	return 0
+}
+
+func (x *AccessListEntry) GetConsumerId() int64 {
+	if x != nil {
+		return x.ConsumerId
+	}
+	return 0
+}
+
+func (x *AccessListEntry) GetCidr() string {
+	if x != nil {
+		return x.Cidr
+	}
+	return ""
+}
+
+// Override replaces one policy's limits for one consumer, for a while
+// (a burst grant) or until removed (ADR-0041).
+type Override struct {
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Id         int64                  `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
+	ConsumerId int64                  `protobuf:"varint,2,opt,name=consumer_id,json=consumerId,proto3" json:"consumer_id,omitempty"`
+	PolicyId   int64                  `protobuf:"varint,3,opt,name=policy_id,json=policyId,proto3" json:"policy_id,omitempty"`
+	Limits     []*Limit               `protobuf:"bytes,4,rep,name=limits,proto3" json:"limits,omitempty"`
+	// Unset: from the start; unset ends_at: no end.
+	StartsAt      *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=starts_at,json=startsAt,proto3" json:"starts_at,omitempty"`
+	EndsAt        *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=ends_at,json=endsAt,proto3" json:"ends_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Override) Reset() {
+	*x = Override{}
+	mi := &file_config_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Override) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Override) ProtoMessage() {}
+
+func (x *Override) ProtoReflect() protoreflect.Message {
+	mi := &file_config_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Override.ProtoReflect.Descriptor instead.
+func (*Override) Descriptor() ([]byte, []int) {
+	return file_config_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *Override) GetId() int64 {
+	if x != nil {
+		return x.Id
+	}
+	return 0
+}
+
+func (x *Override) GetConsumerId() int64 {
+	if x != nil {
+		return x.ConsumerId
+	}
+	return 0
+}
+
+func (x *Override) GetPolicyId() int64 {
+	if x != nil {
+		return x.PolicyId
+	}
+	return 0
+}
+
+func (x *Override) GetLimits() []*Limit {
+	if x != nil {
+		return x.Limits
+	}
+	return nil
+}
+
+func (x *Override) GetStartsAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.StartsAt
+	}
+	return nil
+}
+
+func (x *Override) GetEndsAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.EndsAt
+	}
+	return nil
+}
+
 var File_config_proto protoreflect.FileDescriptor
 
 const file_config_proto_rawDesc = "" +
 	"\n" +
-	"\fconfig.proto\x12\x12spillway.config.v1\"\xbe\x02\n" +
+	"\fconfig.proto\x12\x12spillway.config.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xbe\x02\n" +
 	"\x06Config\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\x03R\aversion\x12:\n" +
 	"\tupstreams\x18\x02 \x03(\v2\x1c.spillway.config.v1.UpstreamR\tupstreams\x121\n" +
@@ -1974,18 +2327,56 @@ const file_config_proto_rawDesc = "" +
 	"\x05Limit\x12\x12\n" +
 	"\x04rate\x18\x01 \x01(\x03R\x04rate\x12\x16\n" +
 	"\x06period\x18\x02 \x01(\tR\x06period\x12\x14\n" +
-	"\x05burst\x18\x03 \x01(\x03R\x05burst\"\x97\x01\n" +
+	"\x05burst\x18\x03 \x01(\x03R\x05burst\"\xf0\x02\n" +
 	"\bIdentity\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\x03R\aversion\x12:\n" +
 	"\tconsumers\x18\x02 \x03(\v2\x1c.spillway.config.v1.ConsumerR\tconsumers\x125\n" +
-	"\bapi_keys\x18\x03 \x03(\v2\x1a.spillway.config.v1.ApiKeyR\aapiKeys\"6\n" +
+	"\bapi_keys\x18\x03 \x03(\v2\x1a.spillway.config.v1.ApiKeyR\aapiKeys\x12\x1d\n" +
+	"\n" +
+	"key_format\x18\x04 \x01(\tR\tkeyFormat\x124\n" +
+	"\atenants\x18\x05 \x03(\v2\x1a.spillway.config.v1.TenantR\atenants\x12F\n" +
+	"\faccess_lists\x18\x06 \x03(\v2#.spillway.config.v1.AccessListEntryR\vaccessLists\x12:\n" +
+	"\toverrides\x18\a \x03(\v2\x1c.spillway.config.v1.OverrideR\toverrides\"\xb5\x01\n" +
 	"\bConsumer\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
-	"\x06tenant\x18\x02 \x01(\tR\x06tenant\"P\n" +
+	"\x06tenant\x18\x02 \x01(\tR\x06tenant\x12\x0e\n" +
+	"\x02id\x18\x03 \x01(\x03R\x02id\x12\x1b\n" +
+	"\ttenant_id\x18\x04 \x01(\x03R\btenantId\x12\x17\n" +
+	"\aplan_id\x18\x05 \x01(\x03R\x06planId\x12\x16\n" +
+	"\x06status\x18\x06 \x01(\tR\x06status\x12\x1f\n" +
+	"\vjwt_subject\x18\a \x01(\tR\n" +
+	"jwtSubject\"\xbc\x01\n" +
 	"\x06ApiKey\x12\x16\n" +
 	"\x06prefix\x18\x01 \x01(\tR\x06prefix\x12\x12\n" +
 	"\x04hash\x18\x02 \x01(\tR\x04hash\x12\x1a\n" +
-	"\bconsumer\x18\x03 \x01(\tR\bconsumerB8Z6github.com/ankitbisht23/spillway/internal/gen/configpbb\x06proto3"
+	"\bconsumer\x18\x03 \x01(\tR\bconsumer\x12\x0e\n" +
+	"\x02id\x18\x04 \x01(\x03R\x02id\x12\x1f\n" +
+	"\vconsumer_id\x18\x05 \x01(\x03R\n" +
+	"consumerId\x129\n" +
+	"\n" +
+	"expires_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\"]\n" +
+	"\x06Tenant\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\x03R\x02id\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12\x17\n" +
+	"\aplan_id\x18\x03 \x01(\x03R\x06planId\x12\x16\n" +
+	"\x06status\x18\x04 \x01(\tR\x06status\"\xaf\x01\n" +
+	"\x0fAccessListEntry\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\x03R\x02id\x12\x16\n" +
+	"\x06action\x18\x02 \x01(\tR\x06action\x12!\n" +
+	"\fsubject_type\x18\x03 \x01(\tR\vsubjectType\x12\x1c\n" +
+	"\n" +
+	"api_key_id\x18\x04 \x01(\x03R\bapiKeyId\x12\x1f\n" +
+	"\vconsumer_id\x18\x05 \x01(\x03R\n" +
+	"consumerId\x12\x12\n" +
+	"\x04cidr\x18\x06 \x01(\tR\x04cidr\"\xf9\x01\n" +
+	"\bOverride\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\x03R\x02id\x12\x1f\n" +
+	"\vconsumer_id\x18\x02 \x01(\x03R\n" +
+	"consumerId\x12\x1b\n" +
+	"\tpolicy_id\x18\x03 \x01(\x03R\bpolicyId\x121\n" +
+	"\x06limits\x18\x04 \x03(\v2\x19.spillway.config.v1.LimitR\x06limits\x127\n" +
+	"\tstarts_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\bstartsAt\x123\n" +
+	"\aends_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\x06endsAtB8Z6github.com/ankitbisht23/spillway/internal/gen/configpbb\x06proto3"
 
 var (
 	file_config_proto_rawDescOnce sync.Once
@@ -1999,31 +2390,35 @@ func file_config_proto_rawDescGZIP() []byte {
 	return file_config_proto_rawDescData
 }
 
-var file_config_proto_msgTypes = make([]protoimpl.MessageInfo, 23)
+var file_config_proto_msgTypes = make([]protoimpl.MessageInfo, 26)
 var file_config_proto_goTypes = []any{
-	(*Config)(nil),            // 0: spillway.config.v1.Config
-	(*Upstream)(nil),          // 1: spillway.config.v1.Upstream
-	(*RetryBudget)(nil),       // 2: spillway.config.v1.RetryBudget
-	(*HealthCheck)(nil),       // 3: spillway.config.v1.HealthCheck
-	(*OutlierDetection)(nil),  // 4: spillway.config.v1.OutlierDetection
-	(*CircuitBreaker)(nil),    // 5: spillway.config.v1.CircuitBreaker
-	(*Endpoint)(nil),          // 6: spillway.config.v1.Endpoint
-	(*Route)(nil),             // 7: spillway.config.v1.Route
-	(*Retry)(nil),             // 8: spillway.config.v1.Retry
-	(*HeaderTransform)(nil),   // 9: spillway.config.v1.HeaderTransform
-	(*HeaderValue)(nil),       // 10: spillway.config.v1.HeaderValue
-	(*Timeouts)(nil),          // 11: spillway.config.v1.Timeouts
-	(*RouteMatch)(nil),        // 12: spillway.config.v1.RouteMatch
-	(*HeaderMatch)(nil),       // 13: spillway.config.v1.HeaderMatch
-	(*RateLimitSettings)(nil), // 14: spillway.config.v1.RateLimitSettings
-	(*Policy)(nil),            // 15: spillway.config.v1.Policy
-	(*Plan)(nil),              // 16: spillway.config.v1.Plan
-	(*PlanLimits)(nil),        // 17: spillway.config.v1.PlanLimits
-	(*PolicyMatch)(nil),       // 18: spillway.config.v1.PolicyMatch
-	(*Limit)(nil),             // 19: spillway.config.v1.Limit
-	(*Identity)(nil),          // 20: spillway.config.v1.Identity
-	(*Consumer)(nil),          // 21: spillway.config.v1.Consumer
-	(*ApiKey)(nil),            // 22: spillway.config.v1.ApiKey
+	(*Config)(nil),                // 0: spillway.config.v1.Config
+	(*Upstream)(nil),              // 1: spillway.config.v1.Upstream
+	(*RetryBudget)(nil),           // 2: spillway.config.v1.RetryBudget
+	(*HealthCheck)(nil),           // 3: spillway.config.v1.HealthCheck
+	(*OutlierDetection)(nil),      // 4: spillway.config.v1.OutlierDetection
+	(*CircuitBreaker)(nil),        // 5: spillway.config.v1.CircuitBreaker
+	(*Endpoint)(nil),              // 6: spillway.config.v1.Endpoint
+	(*Route)(nil),                 // 7: spillway.config.v1.Route
+	(*Retry)(nil),                 // 8: spillway.config.v1.Retry
+	(*HeaderTransform)(nil),       // 9: spillway.config.v1.HeaderTransform
+	(*HeaderValue)(nil),           // 10: spillway.config.v1.HeaderValue
+	(*Timeouts)(nil),              // 11: spillway.config.v1.Timeouts
+	(*RouteMatch)(nil),            // 12: spillway.config.v1.RouteMatch
+	(*HeaderMatch)(nil),           // 13: spillway.config.v1.HeaderMatch
+	(*RateLimitSettings)(nil),     // 14: spillway.config.v1.RateLimitSettings
+	(*Policy)(nil),                // 15: spillway.config.v1.Policy
+	(*Plan)(nil),                  // 16: spillway.config.v1.Plan
+	(*PlanLimits)(nil),            // 17: spillway.config.v1.PlanLimits
+	(*PolicyMatch)(nil),           // 18: spillway.config.v1.PolicyMatch
+	(*Limit)(nil),                 // 19: spillway.config.v1.Limit
+	(*Identity)(nil),              // 20: spillway.config.v1.Identity
+	(*Consumer)(nil),              // 21: spillway.config.v1.Consumer
+	(*ApiKey)(nil),                // 22: spillway.config.v1.ApiKey
+	(*Tenant)(nil),                // 23: spillway.config.v1.Tenant
+	(*AccessListEntry)(nil),       // 24: spillway.config.v1.AccessListEntry
+	(*Override)(nil),              // 25: spillway.config.v1.Override
+	(*timestamppb.Timestamp)(nil), // 26: google.protobuf.Timestamp
 }
 var file_config_proto_depIdxs = []int32{
 	1,  // 0: spillway.config.v1.Config.upstreams:type_name -> spillway.config.v1.Upstream
@@ -2050,11 +2445,18 @@ var file_config_proto_depIdxs = []int32{
 	19, // 21: spillway.config.v1.PlanLimits.limits:type_name -> spillway.config.v1.Limit
 	21, // 22: spillway.config.v1.Identity.consumers:type_name -> spillway.config.v1.Consumer
 	22, // 23: spillway.config.v1.Identity.api_keys:type_name -> spillway.config.v1.ApiKey
-	24, // [24:24] is the sub-list for method output_type
-	24, // [24:24] is the sub-list for method input_type
-	24, // [24:24] is the sub-list for extension type_name
-	24, // [24:24] is the sub-list for extension extendee
-	0,  // [0:24] is the sub-list for field type_name
+	23, // 24: spillway.config.v1.Identity.tenants:type_name -> spillway.config.v1.Tenant
+	24, // 25: spillway.config.v1.Identity.access_lists:type_name -> spillway.config.v1.AccessListEntry
+	25, // 26: spillway.config.v1.Identity.overrides:type_name -> spillway.config.v1.Override
+	26, // 27: spillway.config.v1.ApiKey.expires_at:type_name -> google.protobuf.Timestamp
+	19, // 28: spillway.config.v1.Override.limits:type_name -> spillway.config.v1.Limit
+	26, // 29: spillway.config.v1.Override.starts_at:type_name -> google.protobuf.Timestamp
+	26, // 30: spillway.config.v1.Override.ends_at:type_name -> google.protobuf.Timestamp
+	31, // [31:31] is the sub-list for method output_type
+	31, // [31:31] is the sub-list for method input_type
+	31, // [31:31] is the sub-list for extension type_name
+	31, // [31:31] is the sub-list for extension extendee
+	0,  // [0:31] is the sub-list for field type_name
 }
 
 func init() { file_config_proto_init() }
@@ -2068,7 +2470,7 @@ func file_config_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_config_proto_rawDesc), len(file_config_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   23,
+			NumMessages:   26,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

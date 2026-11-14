@@ -8,6 +8,8 @@ import (
 	"os"
 	"sync/atomic"
 	"time"
+
+	"github.com/ankitbisht23/spillway/internal/gen/configpb"
 )
 
 // Watcher serves the snapshot compiled from a config file and reloads it when
@@ -26,17 +28,7 @@ func NewWatcher(path string, log *slog.Logger, apply func(*Snapshot) error) (*Wa
 		if err != nil {
 			return nil, err
 		}
-		s, err := Compile(c)
-		if err != nil {
-			return nil, fmt.Errorf("config: %w", err)
-		}
-		if apply != nil {
-			if err := apply(s); err != nil {
-				return nil, fmt.Errorf("config: %w", err)
-			}
-		}
-		warnClientChosenKeys(s, log)
-		return s, nil
+		return Prepare(c, log, apply)
 	}
 	w.describe = func(s *Snapshot) []any {
 		return []any{"version", s.Version, "routes", len(s.Routes), "upstreams", len(s.Upstreams), "policies", len(s.Policies)}
@@ -45,6 +37,24 @@ func NewWatcher(path string, log *slog.Logger, apply func(*Snapshot) error) (*Wa
 		return nil, err
 	}
 	return w, nil
+}
+
+// Prepare compiles c and runs apply, if not nil, on the result, as a reload
+// does before it swaps the snapshot in; an error rejects c. Static mode's
+// file reloads and managed mode's stream updates both go through it
+// (GW-21, GW-29, ADR-0038).
+func Prepare(c *configpb.Config, log *slog.Logger, apply func(*Snapshot) error) (*Snapshot, error) {
+	s, err := Compile(c)
+	if err != nil {
+		return nil, fmt.Errorf("config: %w", err)
+	}
+	if apply != nil {
+		if err := apply(s); err != nil {
+			return nil, fmt.Errorf("config: %w", err)
+		}
+	}
+	warnClientChosenKeys(s, log)
+	return s, nil
 }
 
 // Snapshot returns the current snapshot. A request calls it once and uses the
