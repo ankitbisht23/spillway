@@ -18,7 +18,8 @@ import (
 // rules; references from routes to upstreams and from policies to routes;
 // refs, the identity rows that refer to plans and policies; SEC-06's
 // allow-list for every endpoint; and, when all of those pass, the gateway's
-// own compile of c, routing table included, and policy conflicts.
+// own compile of c, routing table and plan rules included, policy
+// conflicts, and the overrides' limits against their policies (ADR-0041).
 func (s *Server) validateConfig(ctx context.Context, c *configpb.Config, refs []store.IdentityRef) []apiv1.ErrorDetail {
 	var errs []apiv1.ErrorDetail
 	add := func(entity string, id int64, name, path, msg string) {
@@ -110,6 +111,16 @@ func (s *Server) validateConfig(ctx context.Context, c *configpb.Config, refs []
 	}
 	for _, cf := range conflicts(c, snap) {
 		add("policy", cf.policy.GetId(), cf.policy.GetName(), "match", cf.msg)
+	}
+	// Overrides that have not ended must still fit their policies (RL-08,
+	// ADR-0041); those whose policy goes are reported above.
+	for _, ref := range refs {
+		if ref.Limits == nil || !slices.ContainsFunc(c.GetPolicies(), func(p *configpb.Policy) bool { return p.GetId() == ref.Ref }) {
+			continue
+		}
+		if err := snap.CheckOverride(ref.Ref, ref.Limits); err != nil {
+			add(ref.Entity, ref.ID, "", "limits", fmt.Sprintf("override %d no longer fits its policy: %v; change or delete the override first", ref.ID, err))
+		}
 	}
 	return errs
 }

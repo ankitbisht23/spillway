@@ -9,22 +9,26 @@ import (
 	"github.com/jackc/pgx/v5"
 	"google.golang.org/protobuf/encoding/protojson"
 
+	"github.com/ankitbisht23/spillway/internal/config"
 	"github.com/ankitbisht23/spillway/internal/controlplane/store/db"
 	"github.com/ankitbisht23/spillway/internal/gen/configpb"
 )
 
-// configRefs are the config entities an identity change refers to by ID.
+// configRefs are the config entities an identity change refers to by ID,
+// and an override's limits, which must fit its policy.
 type configRefs struct {
 	plans    []int64
 	policies []int64
+	limits   []byte // an override's stored limits; checked against policies[0]
 }
 
 // checkPublished checks that the plans and policies an identity change
-// refers to exist in the latest published config version (ADR-0037). It
+// refers to exist in the latest published config version (ADR-0037), and
+// that an override's limits fit its policy there (RL-08, ADR-0041). It
 // first takes a share lock on the working set, which waits for a publish or
-// rollback in progress, so none can remove what the change refers to before
-// it commits. The lock order, identity version then working set, is the only
-// one that holds both.
+// rollback in progress, so none can remove or change what the change refers
+// to before it commits. The lock order, identity version then working set,
+// is the only one that holds both.
 func checkPublished(ctx context.Context, q *db.Queries, refs configRefs) error {
 	if len(refs.plans) == 0 && len(refs.policies) == 0 {
 		return nil
@@ -51,6 +55,19 @@ func checkPublished(ctx context.Context, q *db.Queries, refs configRefs) error {
 	for _, id := range refs.policies {
 		if !slices.ContainsFunc(c.GetPolicies(), func(p *configpb.Policy) bool { return p.GetId() == id }) {
 			return &InvalidError{Path: "policy_id", Msg: fmt.Sprintf("policy_id: policy %d is not in the published config version %d", id, latest.Version)}
+		}
+	}
+	if refs.limits != nil {
+		limits, err := parseLimits(refs.limits)
+		if err != nil {
+			return err
+		}
+		snap, err := config.Compile(c)
+		if err != nil {
+			return fmt.Errorf("config version %d does not compile: %w", latest.Version, err)
+		}
+		if err := snap.CheckOverride(refs.policies[0], limits); err != nil {
+			return &InvalidError{Path: "limits", Msg: fmt.Sprintf("override for policy %d of the published config version %d: %v", refs.policies[0], latest.Version, err)}
 		}
 	}
 	return nil
@@ -328,7 +345,7 @@ func (s *Store) GetOverride(ctx context.Context, id int64) (db.Override, error) 
 func (s *Store) CreateOverride(ctx context.Context, a Audit, in db.CreateOverrideParams) (db.Override, error) {
 	var out db.Override
 	err := s.inIdentityTx(ctx, func(q *db.Queries, v int64) error {
-		if err := checkPublished(ctx, q, configRefs{policies: optional(in.PolicyID)}); err != nil {
+		if err := checkPublished(ctx, q, configRefs{policies: optional(in.PolicyID), limits: in.Limits}); err != nil {
 			return err
 		}
 		in.Version = v
@@ -354,7 +371,7 @@ func (s *Store) UpdateOverride(ctx context.Context, a Audit, id, ifMatch int64, 
 		if err := checkVersion(cur.Version, ifMatch); err != nil {
 			return err
 		}
-		if err := checkPublished(ctx, q, configRefs{policies: optional(in.PolicyID)}); err != nil {
+		if err := checkPublished(ctx, q, configRefs{policies: optional(in.PolicyID), limits: in.Limits}); err != nil {
 			return err
 		}
 		o, err := q.UpdateOverride(ctx, db.UpdateOverrideParams{
