@@ -155,7 +155,7 @@ func serve(log *slog.Logger, getenv func(string) string) error {
 		(&stream.Elector{
 			Open: func(ctx context.Context) (stream.Lock, error) { return st.OpenLockSession(ctx) },
 			Active: func(ctx context.Context) {
-				if err := stream.Serve(ctx, s.grpcAddr, st, log, func(d int) { streams.Add(float64(d)) }); err != nil {
+				if err := stream.Serve(ctx, s.grpcAddr, st, st, log, func(d int) { streams.Add(float64(d)) }); err != nil {
 					log.Error("config stream failed", "err", err)
 				}
 			},

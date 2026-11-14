@@ -25,10 +25,16 @@ import (
 // real options, codec included, and returns a client and the broadcaster.
 func watchServer(t *testing.T, src *fakeSource) (configpb.ConfigServiceClient, *Broadcaster) {
 	t.Helper()
+	return configServer(t, src, &fakeRecorder{})
+}
+
+// configServer is watchServer with heartbeats recorded in rec.
+func configServer(t *testing.T, src *fakeSource, rec Recorder) (configpb.ConfigServiceClient, *Broadcaster) {
+	t.Helper()
 	b := started(t, src)
 	ln := bufconn.Listen(1 << 20)
 	gs := grpc.NewServer(serverOptions()...)
-	configpb.RegisterConfigServiceServer(gs, NewService(b, discard()))
+	configpb.RegisterConfigServiceServer(gs, NewService(b, rec, discard()))
 	go func() { _ = gs.Serve(ln) }()
 	t.Cleanup(gs.Stop)
 	conn, err := grpc.NewClient("passthrough:///bufconn", grpc.WithTransportCredentials(insecure.NewCredentials()),

@@ -143,6 +143,27 @@ type Policy struct {
 	UpdatedAt time.Time
 }
 
+type Replica struct {
+	ID                    string
+	ConfigVersion         int64
+	IdentityVersion       int64
+	SchemaMajor           int32
+	SchemaMinor           int32
+	WatchConnected        bool
+	FirstSeenAt           time.Time
+	LastHeartbeatAt       time.Time
+	LastSyncedAt          *time.Time
+	RejectedConfigVersion *int64
+	RejectedReason        *string
+}
+
+type ReplicaVersion struct {
+	ReplicaID       string
+	Stream          string
+	Version         int64
+	FirstReportedAt time.Time
+}
+
 type Route struct {
 	ID        int64
 	Name      string
