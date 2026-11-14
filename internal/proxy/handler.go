@@ -49,6 +49,10 @@ type Handler struct {
 	// inFlight counts requests being handled against maxInFlight (GW-26).
 	inFlight    resilience.Gate
 	maxInFlight int64
+
+	// needIdentity refuses requests while identity returns nil (managed
+	// mode): access lists and statuses live in the identity.
+	needIdentity bool
 }
 
 // NewHandler returns a Handler that reads the current snapshot from snapshot
@@ -71,6 +75,12 @@ func NewHandler(snapshot func() *config.Snapshot, identity func() *config.Identi
 // would-deny in s, which heartbeats report (RL-21, ADR-0041); managed mode
 // only, as static policies have no IDs. Call it before serving.
 func (h *Handler) SetHeavyHitters(s *heavyhitters.Sketch) { h.hitters = s }
+
+// RequireIdentity makes the handler answer 503 while it has no identity, as
+// it does while it has no config, so no request is served before the
+// access lists and suspensions it carries apply (managed mode, ADR-0038).
+// Call it before serving.
+func (h *Handler) RequireIdentity() { h.needIdentity = true }
 
 // InFlight returns the number of requests being handled.
 func (h *Handler) InFlight() int64 {
@@ -174,6 +184,14 @@ func (h *Handler) serve(w *responseRecorder, r *http.Request, body *countingBody
 		jsonError(w, http.StatusServiceUnavailable, "no config loaded yet")
 		return
 	}
+	id := h.identity()
+	if id == nil && h.needIdentity {
+		// A managed gateway before its first identity, or whose stream
+		// identity was rejected: CIDR deny lists and suspensions would
+		// not apply (ADR-0038); /readyz fails meanwhile.
+		jsonError(w, http.StatusServiceUnavailable, "no identity loaded yet")
+		return
+	}
 	route, _, ok := s.Match(r.Host, r.Method, path, r.Header)
 	if !ok {
 		http.Error(w, "no route", http.StatusNotFound)
@@ -191,7 +209,6 @@ func (h *Handler) serve(w *responseRecorder, r *http.Request, body *countingBody
 	// request skips every policy that has not run yet (D3).
 	peer, _ := netip.ParseAddrPort(r.RemoteAddr)
 	ip := h.trusted.ClientIP(peer.Addr(), r.Header.Values("X-Forwarded-For"))
-	id := h.identity()
 	deny, exempt := id.CIDR(ip)
 	if deny {
 		forbidden(w)

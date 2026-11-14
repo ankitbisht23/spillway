@@ -449,3 +449,50 @@ func waitSpans(t *testing.T, sr *tracetest.SpanRecorder, n int) []sdktrace.ReadO
 		}
 	}
 }
+
+// TestManagedNeedsIdentity: a managed gateway with a config but no
+// identity yet (or a rejected one) answers 503, so a client on a CIDR
+// deny list is never served before the list applies (ADR-0038); once an
+// identity applies, the deny list holds and other clients are served.
+func TestManagedNeedsIdentity(t *testing.T) {
+	u := newUpstream(t, "orders")
+	tp, err := ParseTrustedProxies("127.0.0.1/32")
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := newGatewayBehind(t, newResolver(u), oneUpstream(u), tp)
+	g.swap(t, managedSnapshot(t, oneUpstream(u)))
+	g.h.RequireIdentity()
+	get := func(ip string) (int, string) {
+		t.Helper()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, g.URL+"/orders", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("X-Forwarded-For", ip)
+		resp, err := g.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		return resp.StatusCode, string(body)
+	}
+	if status, body := get("203.0.113.7"); status != http.StatusServiceUnavailable || body != `{"error":"no identity loaded yet"}` {
+		t.Errorf("no identity: %d %s, want 503 no identity loaded yet", status, body)
+	}
+	id, err := config.CompileIdentity(&configpb.Identity{
+		Version: 1, KeyFormat: config.KeyFormatManaged,
+		AccessLists: []*configpb.AccessListEntry{{Id: 1, Action: "deny", SubjectType: "cidr", Cidr: "203.0.113.0/24"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.identity.Store(id)
+	if status, _ := get("203.0.113.7"); status != http.StatusForbidden {
+		t.Errorf("denied CIDR with the identity: %d, want 403", status)
+	}
+	if status, _ := get("192.0.2.1"); status != http.StatusOK {
+		t.Errorf("other IP with the identity: %d, want 200", status)
+	}
+}
