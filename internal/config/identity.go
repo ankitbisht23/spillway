@@ -61,7 +61,7 @@ func (id *Identity) Lookup(key string) (*Consumer, bool) {
 	if id == nil {
 		return nil, false
 	}
-	prefix, hashed := key, key
+	var prefix, hashed string
 	if id.managed {
 		var ok bool
 		if prefix, hashed, ok = apikey.Parse(key); !ok {
@@ -70,7 +70,7 @@ func (id *Identity) Lookup(key string) (*Consumer, bool) {
 	} else if len(key) < KeyPrefixLen {
 		return nil, false
 	} else {
-		prefix = key[:KeyPrefixLen]
+		prefix, hashed = key[:KeyPrefixLen], key
 	}
 	k, ok := id.keys[prefix]
 	if !ok {
