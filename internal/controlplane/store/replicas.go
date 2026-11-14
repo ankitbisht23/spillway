@@ -24,8 +24,10 @@ const maxReason = 2000
 
 // RecordHeartbeat records replica's heartbeat hb in one transaction (CP-08,
 // ADR-0038): its row in replicas, the first report of each of its
-// versions in replica_versions, and returns live_replicas, the replicas
-// whose last heartbeat is under 15 s old, replica included (RL-24).
+// versions in replica_versions, its top_keys in the current minute's
+// heavy_hitters windows (RL-21, ADR-0041), and returns live_replicas, the
+// replicas whose last heartbeat is under 15 s old, replica included
+// (RL-24).
 func (s *Store) RecordHeartbeat(ctx context.Context, replica string, hb *configpb.HeartbeatRequest) (int32, error) {
 	var live int32
 	err := s.inTx(ctx, func(q *db.Queries) error {
@@ -48,6 +50,11 @@ func (s *Store) RecordHeartbeat(ctx context.Context, replica string, hb *configp
 			ReplicaID: replica, ConfigVersion: hb.GetConfigVersion(), IdentityVersion: hb.GetIdentityVersion(),
 		}); err != nil {
 			return err
+		}
+		if hh := heavyHitters(hb.GetTopKeys()); len(hh.PolicyIds) > 0 {
+			if err := q.AddHeavyHitters(ctx, hh); err != nil {
+				return err
+			}
 		}
 		var err error
 		live, err = q.LiveReplicas(ctx)
@@ -76,13 +83,14 @@ func (s *Store) ConfigVersionApplied(ctx context.Context, v int64) ([]Applied, e
 	return db.New(s.pool).ConfigVersionApplied(ctx, v)
 }
 
-// PruneReplicas deletes the first reports older than 7 days and the
-// replicas without a heartbeat for 7 days, in batches of 10,000 rows
-// (CP-22, ADR-0038), and returns how many rows it deleted.
+// PruneReplicas deletes the first reports older than 7 days, the replicas
+// without a heartbeat for 7 days and the heavy-hitter windows older than
+// 7 days, in batches of 10,000 rows (CP-22, ADR-0038, ADR-0041), and
+// returns how many rows it deleted.
 func (s *Store) PruneReplicas(ctx context.Context) (int64, error) {
 	q := db.New(s.pool)
 	var total int64
-	for _, prune := range []func(context.Context) (int64, error){q.PruneReplicaVersions, q.PruneReplicas} {
+	for _, prune := range []func(context.Context) (int64, error){q.PruneReplicaVersions, q.PruneReplicas, q.PruneHeavyHitters} {
 		for {
 			n, err := prune(ctx)
 			total += n
