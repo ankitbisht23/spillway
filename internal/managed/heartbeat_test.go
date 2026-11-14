@@ -93,12 +93,13 @@ func TestHeartbeatReportsRejected(t *testing.T) {
 			t.Fatalf("after a refused version 4: %v", r)
 		}
 		time.Sleep(heartbeatEvery)
-		if r := cp.heartbeats()[len(cp.heartbeats())-1].req; r.GetRejectedConfigVersion() != 4 {
+		synctest.Wait()
+		if r := lastHeartbeat(cp).req; r.GetRejectedConfigVersion() != 4 {
 			t.Errorf("the next heartbeat forgot the refusal: %v", r)
 		}
 		s.msgs <- configMsg(config.SchemaMajor, cfg(5))
 		synctest.Wait()
-		if r := cp.heartbeats()[len(cp.heartbeats())-1].req; r.GetConfigVersion() != 5 || r.GetRejectedConfigVersion() != 0 || r.GetRejectedReason() != "" {
+		if r := lastHeartbeat(cp).req; r.GetConfigVersion() != 5 || r.GetRejectedConfigVersion() != 0 || r.GetRejectedReason() != "" {
 			t.Errorf("after version 5 applied: %v", r)
 		}
 	})
@@ -254,6 +255,7 @@ func TestSyncAge(t *testing.T) {
 		// The periodic heartbeats sync too; between them it grows.
 		applied := time.Now()
 		time.Sleep(heartbeatEvery)
+		synctest.Wait()
 		last := lastHeartbeat(cp)
 		if age := c.SyncAge(); !last.at.After(applied) || age != time.Since(last.at) || age >= heartbeatEvery {
 			t.Errorf("5 s after the apply: %v, last heartbeat %v after it", age, last.at.Sub(applied))
@@ -269,6 +271,7 @@ func TestSyncAge(t *testing.T) {
 		// Heartbeats answer but the stream is down: it still grows.
 		cp.answer(2, nil)
 		time.Sleep(heartbeatEvery)
+		synctest.Wait()
 		last = lastHeartbeat(cp)
 		if age := c.SyncAge(); age != time.Since(last.at) || !last.req.GetWatchConnected() {
 			t.Errorf("heartbeats answered again: %v", age)
