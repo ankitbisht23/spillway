@@ -257,7 +257,7 @@ func TestControlPlaneIdentityCRUD(t *testing.T) {
 		t.Errorf("tenant before any publish: %+v", e)
 	}
 	owner := pgConnect(t, pgURL(t, "spillway", db), pgOwnerPassword)
-	publish(t, owner, `{"plans": [{"id": 1, "name": "free"}, {"id": 2, "name": "pro"}], "policies": [{"id": 5, "name": "per-consumer"}]}`)
+	publish(t, owner, `{"plans": [{"id": 1, "name": "free"}, {"id": 2, "name": "pro"}], "policies": [{"id": 5, "name": "per-consumer", "level": "consumer", "match": {"routes": ["*"]}, "key_template": "{consumer}", "algorithm": "gcra", "limits": [{"rate": 100, "period": "1s"}]}]}`)
 
 	var ten apiv1.Tenant
 	created := c.must(201, "POST", "/tenants", tenant)
