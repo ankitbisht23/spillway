@@ -667,11 +667,18 @@ func analyzeOutage(o outageOptions, gateways []string, scrapes []outageScrape, t
 	if healthy.IsZero() {
 		healthy = time.Unix(1<<40, 0) // never: every scrape after the stop is in the outage
 	}
-	// The baseline: each replica's last scrape before the stop.
-	baseline := map[string][2]int64{}
+	// The baseline: each replica's last scrape before the stop, which must
+	// have succeeded and shown it ready.
+	lastBefore := map[string]outageScrape{}
 	for _, s := range scrapes {
-		if s.OK && s.Ready == http.StatusOK && s.Sent.Before(t.Stop) {
-			baseline[s.Gateway] = [2]int64{s.Config, s.Identity}
+		if s.Sent.Before(t.Stop) {
+			lastBefore[s.Gateway] = s
+		}
+	}
+	baseline := map[string][2]int64{}
+	for g, s := range lastBefore {
+		if s.OK && s.Ready == http.StatusOK {
+			baseline[g] = [2]int64{s.Config, s.Identity}
 		}
 	}
 	// The restarted replica's first ready scrape after its restart, and
@@ -745,7 +752,7 @@ func analyzeOutage(o outageOptions, gateways []string, scrapes []outageScrape, t
 	case t.StopCode != 0:
 		c2.Measured = fmt.Sprintf("docker compose stop exited %d", t.StopCode)
 	case len(missing) > 0:
-		c2.Measured = "no ready scrape before the stop of " + strings.Join(missing, ", ")
+		c2.Measured = "the last scrape before the stop failed, was unready or missing on " + strings.Join(missing, ", ")
 	case bad2 > 0:
 		c2.Measured = fmt.Sprintf("%d of %d scrapes in the outage failed, unready or at other versions; first: %s", bad2, n, first2)
 	case n == 0:

@@ -735,6 +735,13 @@ func TestAnalyzeOutage(t *testing.T) {
 	check("a failed scrape", s, tl, load, [5]bool{true, false, false, true, true})
 
 	s = good()
+	if s[2].Gateway != "gateway-1" || s[2].Sent != stop.Add(-5*time.Second) {
+		t.Fatalf("scrape 2 is %s at %v", s[2].Gateway, s[2].Sent.Sub(stop))
+	}
+	s[2].Err, s[2].OK = "metrics: timeout", false // gateway-1's last scrape before the stop: no baseline
+	check("a failed last scrape before the stop", s, tl, load, [5]bool{true, false, true, true, false})
+
+	s = good()
 	s[41].Config = 42 // gateway-3 at another version before its pause
 	check("another version", s, tl, load, [5]bool{true, false, true, true, true})
 
