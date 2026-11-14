@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strconv"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -151,14 +152,18 @@ func (s *Store) inConfigTx(ctx context.Context, fn func(q *db.Queries, revision 
 // identity version first, whose row lock orders identity changes so that
 // versions follow commit order, and fn writes rows with that version and the
 // change's audit record (ADR-0040). Every identity change goes through here,
-// and so will its NOTIFY (ADR-0038).
+// and so does its NOTIFY, which reaches the Watch streams at commit
+// (ADR-0038).
 func (s *Store) inIdentityTx(ctx context.Context, fn func(q *db.Queries, version int64) error) error {
 	return s.inTx(ctx, func(q *db.Queries) error {
 		v, err := q.BumpIdentityVersion(ctx)
 		if err != nil {
 			return err
 		}
-		return fn(q, v)
+		if err := fn(q, v); err != nil {
+			return err
+		}
+		return q.NotifyIdentity(ctx, strconv.FormatInt(v, 10))
 	})
 }
 

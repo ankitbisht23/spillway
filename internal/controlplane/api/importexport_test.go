@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"net/http"
 	"os"
@@ -9,8 +10,12 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	"go.yaml.in/yaml/v3"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/ankitbisht23/spillway/internal/config"
 	"github.com/ankitbisht23/spillway/internal/gen/configpb"
@@ -253,4 +258,59 @@ func TestImportRejects(t *testing.T) {
 	if a := do(t, h, http.MethodPost, BasePath+"/routes", "name: r\n", "Content-Type", "application/yaml"); a.status != 415 {
 		t.Errorf("YAML to a JSON operation: %d", a.status)
 	}
+}
+
+// TestIdentityYAML checks identity export's form (ADR-0037): the Identity
+// message's set fields in proto order, 64-bit integers as integers, times
+// in RFC 3339.
+func TestIdentityYAML(t *testing.T) {
+	id := &configpb.Identity{
+		Version: 12, KeyFormat: config.KeyFormatManaged,
+		Tenants:   []*configpb.Tenant{{Id: 1, Name: "acme", PlanId: 2, Status: "active"}},
+		Consumers: []*configpb.Consumer{{Id: 3, TenantId: 1, Name: "alice", Status: "active"}},
+		ApiKeys:   []*configpb.ApiKey{{Id: 4, ConsumerId: 3, Prefix: "abcdefgh", Hash: "00ff", ExpiresAt: timestamppb.New(time.Date(2026, 11, 15, 9, 30, 0, 0, time.UTC))}},
+	}
+	y, err := messageYAML(id.ProtoReflect())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `version: 12
+consumers:
+  - name: alice
+    id: 3
+    tenant_id: 1
+    status: active
+api_keys:
+  - prefix: abcdefgh
+    hash: 00ff
+    id: 4
+    consumer_id: 3
+    expires_at: "2026-11-15T09:30:00Z"
+key_format: spw1
+tenants:
+  - id: 1
+    name: acme
+    plan_id: 2
+    status: active
+`
+	if string(y) != want {
+		t.Errorf("identity YAML:\n%s\nwant:\n%s", y, want)
+	}
+	back := &configpb.Identity{}
+	if err := load(y, back); err != nil || !proto.Equal(back, id) {
+		t.Errorf("the YAML reads back as %v, %v", back, err)
+	}
+}
+
+// load reads YAML as the gateway's loader does: YAML → JSON → protojson.
+func load(y []byte, m proto.Message) error {
+	var doc any
+	if err := yaml.Unmarshal(y, &doc); err != nil {
+		return err
+	}
+	j, err := json.Marshal(doc)
+	if err != nil {
+		return err
+	}
+	return protojson.Unmarshal(j, m)
 }

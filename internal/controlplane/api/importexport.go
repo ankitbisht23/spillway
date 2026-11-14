@@ -57,6 +57,21 @@ func (s *Server) ExportConfig(ctx context.Context, req apiv1.ExportConfigRequest
 	return apiv1.ExportConfig200ApplicationyamlResponse{Body: bytes.NewReader(b), ContentLength: int64(len(b)), Headers: apiv1.ExportConfig200ResponseHeaders{ETag: tag}}, nil
 }
 
+// ExportIdentity writes the identity snapshot that gateways receive, in the
+// shape of the Identity message (ADR-0037, ADR-0038); the spec allows it to
+// admin only, as it holds key hashes.
+func (s *Server) ExportIdentity(ctx context.Context, _ apiv1.ExportIdentityRequestObject) (apiv1.ExportIdentityResponseObject, error) {
+	id, err := s.store.Identity(ctx)
+	if err != nil {
+		return nil, err
+	}
+	b, err := messageYAML(id.ProtoReflect())
+	if err != nil {
+		return nil, err
+	}
+	return apiv1.ExportIdentity200ApplicationyamlResponse{Body: bytes.NewReader(b), ContentLength: int64(len(b))}, nil
+}
+
 // ImportConfig replaces the working set from YAML in export's shape, if it
 // is at the revision If-Match names. Each entity's rules and SEC-06 are
 // checked first; references between entities wait for validate and publish

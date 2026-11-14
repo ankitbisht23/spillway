@@ -1197,6 +1197,25 @@ paths:
         '422': { $ref: '#/components/responses/ValidationFailed' }
         '428': { $ref: '#/components/responses/PreconditionRequired' }
         default: { $ref: '#/components/responses/Error' }
+  /identity/export:
+    get:
+      operationId: exportIdentity
+      tags: [identity]
+      summary: >-
+        The identity snapshot that gateways receive, as YAML in the shape of
+        config.proto's Identity message (ADR-0037, ADR-0038): the identity
+        version, tenants, consumers, keys that are neither revoked nor
+        expired as their prefix and SHA-256, access lists, overrides that
+        have not ended. For backup and inspection; there is no identity
+        import
+      x-spillway-roles: [admin]
+      responses:
+        '200':
+          description: The identity as YAML
+          content:
+            application/yaml:
+              schema: { type: string }
+        default: { $ref: '#/components/responses/Error' }
   /audit:
     get:
       operationId: listAudit

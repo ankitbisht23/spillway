@@ -63,7 +63,8 @@ var matrix = map[string][]string{
 	"publishConfig": {"publisher", "admin"}, "rollbackConfig": {"publisher", "admin"},
 	"exportConfig": all, "importConfig": {"editor", "admin"},
 	"getConfigSettings": all, "updateConfigSettings": {"editor", "admin"}, // ADR-0045
-	"listAudit": {"admin"},
+	"exportIdentity": {"admin"},
+	"listAudit":      {"admin"},
 }
 
 // specOp is one operation of the spec as a request.

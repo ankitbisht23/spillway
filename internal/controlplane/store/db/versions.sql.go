@@ -317,6 +317,26 @@ func (q *Queries) InsertConfigVersion(ctx context.Context, arg InsertConfigVersi
 	return i, err
 }
 
+const latestVersions = `-- name: LatestVersions :one
+SELECT (SELECT coalesce(max(version), 0) FROM config_versions)::bigint AS config_version,
+       (SELECT version FROM identity_state WHERE id = 1)::bigint AS identity_version
+`
+
+type LatestVersionsRow struct {
+	ConfigVersion   int64
+	IdentityVersion int64
+}
+
+// config_versions_pkey backward scan and identity_state_pkey: the newest
+// config and identity versions, which the broadcaster compares with what it
+// holds every 10 s (ADR-0038).
+func (q *Queries) LatestVersions(ctx context.Context) (LatestVersionsRow, error) {
+	row := q.db.QueryRow(ctx, latestVersions)
+	var i LatestVersionsRow
+	err := row.Scan(&i.ConfigVersion, &i.IdentityVersion)
+	return i, err
+}
+
 const listConfigVersions = `-- name: ListConfigVersions :many
 SELECT version, published_at, published_by, note, kind, rollback_of, working_set_revision, schema_major, schema_minor
 FROM config_versions WHERE version < $1::bigint ORDER BY version DESC LIMIT $2
