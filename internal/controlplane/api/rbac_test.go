@@ -62,6 +62,7 @@ var matrix = map[string][]string{
 	"validateConfig": all, "listConfigVersions": all, "getConfigVersion": all, "diffConfigVersion": all,
 	"publishConfig": {"publisher", "admin"}, "rollbackConfig": {"publisher", "admin"},
 	"exportConfig": all, "importConfig": {"editor", "admin"},
+	"getConfigSettings": all, "updateConfigSettings": {"editor", "admin"}, // ADR-0045
 	"listAudit": {"admin"},
 }
 

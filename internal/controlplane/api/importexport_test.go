@@ -36,11 +36,11 @@ func exampleConfigs(t *testing.T) []string {
 	return files
 }
 
-// canonical is c as the control plane keeps it: no version, no ratelimit
-// section (ADR-0044), entities sorted by name.
+// canonical is c as the control plane keeps it: no version, entities
+// sorted by name.
 func canonical(c *configpb.Config) *configpb.Config {
 	c = proto.Clone(c).(*configpb.Config)
-	c.Version, c.Ratelimit = 0, nil
+	c.Version = 0
 	slices.SortFunc(c.Upstreams, func(a, b *configpb.Upstream) int { return strings.Compare(a.GetName(), b.GetName()) })
 	slices.SortFunc(c.Routes, func(a, b *configpb.Route) int { return strings.Compare(a.GetName(), b.GetName()) })
 	slices.SortFunc(c.Policies, func(a, b *configpb.Policy) int { return strings.Compare(a.GetName(), b.GetName()) })
@@ -50,7 +50,7 @@ func canonical(c *configpb.Config) *configpb.Config {
 
 // TestImportParsesTheExamples checks that every example config parses as an
 // import, with what the gateway's loader reads (CP-05, CP-21): the same
-// entities, version dropped, ratelimit reported as not kept; and that
+// entities and ratelimit section (ADR-0045), version dropped; and that
 // export's YAML of it reads back the same and is stable.
 func TestImportParsesTheExamples(t *testing.T) {
 	for _, f := range exampleConfigs(t) {
@@ -63,15 +63,12 @@ func TestImportParsesTheExamples(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			got, ignored, err := parseImport(data)
+			got, err := parseImport(data)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !proto.Equal(canonical(got), canonical(want)) || got.Version != 0 || got.Ratelimit != nil {
+			if !proto.Equal(canonical(got), canonical(want)) || got.Version != 0 {
 				t.Errorf("parsed\n%v\nthe loader read\n%v", got, want)
-			}
-			if wantIgnored := want.Ratelimit != nil; wantIgnored != (len(ignored) == 1 && strings.HasPrefix(ignored[0], "ratelimit: not kept")) || !wantIgnored && len(ignored) != 0 {
-				t.Errorf("ignored %q", ignored)
 			}
 			if errs := checkImportOf(t, got); len(errs) > 0 {
 				t.Errorf("entity rules: %v", errs)
@@ -159,9 +156,9 @@ routes:
 	if string(y) != want {
 		t.Errorf("export:\n%s\nwant:\n%s", y, want)
 	}
-	got, ignored, err := parseImport(y)
-	if err != nil || len(ignored) != 0 {
-		t.Fatal(err, ignored)
+	got, err := parseImport(y)
+	if err != nil {
+		t.Fatal(err)
 	}
 	c.Version = 0
 	if !proto.Equal(got, canonical(c)) {
@@ -170,7 +167,7 @@ routes:
 	if y, err := exportYAML(&configpb.Config{}); err != nil || string(y) != "{}\n" {
 		t.Errorf("empty export %q, %v", y, err)
 	}
-	if got, _, err := parseImport([]byte("{}\n")); err != nil || proto.Size(got) != 0 {
+	if got, err := parseImport([]byte("{}\n")); err != nil || proto.Size(got) != 0 {
 		t.Errorf("empty import: %v, %v", got, err)
 	}
 }
@@ -211,6 +208,9 @@ func TestImportRejects(t *testing.T) {
 		{"id twice", "plans: [{name: free, id: 4}, {name: gold, id: 4}]\n", nil, 422, "validation_failed", "id 4 is given twice"},
 		{"negative id", "plans: [{name: free, id: -1}]\n", nil, 422, "validation_failed", "ids are positive"},
 		{"SEC-06", "upstreams: [{name: meta, endpoints: [{address: '169.254.169.254:80'}]}]\n", nil, 422, "validation_failed", "not in the allowed upstream networks"},
+		// The ratelimit section is the config settings (ADR-0045).
+		{"settings field", "ratelimit: {replica: 2}\n", nil, 400, "invalid_request", `body: ratelimit: unknown field "replica"`},
+		{"settings rule", "ratelimit: {redis_budget: 2s}\n", nil, 422, "validation_failed", `ratelimit.redis_budget: "2s" is not a duration greater than 0 and at most 1s`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			a := imp(c.body, c.header...)

@@ -267,6 +267,24 @@ func (q *Queries) GetRoute(ctx context.Context, id int64) (Route, error) {
 	return i, err
 }
 
+const getSettings = `-- name: GetSettings :one
+SELECT id, spec, version, created_at, updated_at FROM config_settings WHERE id = 1
+`
+
+// config_settings_pkey.
+func (q *Queries) GetSettings(ctx context.Context) (ConfigSetting, error) {
+	row := q.db.QueryRow(ctx, getSettings)
+	var i ConfigSetting
+	err := row.Scan(
+		&i.ID,
+		&i.Spec,
+		&i.Version,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getUpstream = `-- name: GetUpstream :one
 SELECT id, name, spec, version, created_at, updated_at FROM upstreams WHERE id = $1
 `
@@ -616,6 +634,30 @@ func (q *Queries) UpdateRoute(ctx context.Context, arg UpdateRouteParams) (Route
 	err := row.Scan(
 		&i.ID,
 		&i.Name,
+		&i.Spec,
+		&i.Version,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const updateSettings = `-- name: UpdateSettings :one
+UPDATE config_settings SET spec = $1, version = $2, updated_at = clock_timestamp()
+WHERE id = 1 RETURNING id, spec, version, created_at, updated_at
+`
+
+type UpdateSettingsParams struct {
+	Spec    []byte
+	Version int64
+}
+
+// config_settings_pkey.
+func (q *Queries) UpdateSettings(ctx context.Context, arg UpdateSettingsParams) (ConfigSetting, error) {
+	row := q.db.QueryRow(ctx, updateSettings, arg.Spec, arg.Version)
+	var i ConfigSetting
+	err := row.Scan(
+		&i.ID,
 		&i.Spec,
 		&i.Version,
 		&i.CreatedAt,

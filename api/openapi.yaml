@@ -1103,8 +1103,8 @@ paths:
         publish. Entities are matched by id, then by name, else created;
         rows matched by nothing are deleted. Each entity's rules apply;
         references between entities are checked by validate and publish
-        (ADR-0037). Identity is refused, the ratelimit section is not kept
-        (ADR-0044)
+        (ADR-0037). Identity is refused; the ratelimit section replaces the
+        config settings (ADR-0045)
       x-spillway-roles: [editor, admin]
       parameters:
         - $ref: '#/components/parameters/RevisionIfMatch'
@@ -1149,6 +1149,52 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
+        '428': { $ref: '#/components/responses/PreconditionRequired' }
+        default: { $ref: '#/components/responses/Error' }
+  /config/settings:
+    get:
+      operationId: getConfigSettings
+      tags: [config]
+      summary: >-
+        Read the config settings: the ratelimit section of the working set
+        (RL-31, ADR-0045)
+      x-spillway-roles: [viewer, editor, publisher, key-admin, admin]
+      responses:
+        '200':
+          description: The config settings
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConfigSettings' }
+        default: { $ref: '#/components/responses/Error' }
+    put:
+      operationId: updateConfigSettings
+      tags: [config]
+      summary: >-
+        Replace the config settings in the working set; they ship with the
+        next publish and roll back with config (CP-02, ADR-0045)
+      x-spillway-roles: [editor, admin]
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ConfigSettings' }
+      responses:
+        '200':
+          description: The replaced config settings
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConfigSettings' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
         '428': { $ref: '#/components/responses/PreconditionRequired' }
         default: { $ref: '#/components/responses/Error' }
   /audit:
@@ -1543,6 +1589,28 @@ components:
         rate: { type: integer, format: int64 }
         period: { type: string }
         burst: { type: integer, format: int64 }
+    ConfigSettings:
+      type: object
+      additionalProperties: false
+      required: [ratelimit, version, updated_at]
+      description: The config settings (ADR-0045); unset fields mean their defaults.
+      properties:
+        ratelimit: { $ref: '#/components/schemas/RateLimitSettings' }
+        version: { type: integer, format: int64, readOnly: true }
+        updated_at: { type: string, format: date-time, readOnly: true }
+    RateLimitSettings:
+      type: object
+      additionalProperties: false
+      properties:
+        replicas:
+          type: integer
+          format: int32
+          description: >-
+            Gateway replicas sharing every limit until managed gateways have a
+            live replica count (RL-24, RL-31); unset means 1.
+        redis_budget:
+          type: string
+          description: One Redis time budget per request (RL-22), a Go duration greater than 0 and at most 1s; unset means 5ms.
     Plan:
       type: object
       additionalProperties: false
@@ -1729,7 +1797,7 @@ components:
         ignored:
           type: array
           items: { type: string }
-          description: Sections of the file that the control plane does not keep, each with its reason (ADR-0044).
+          description: Sections of the file that the control plane does not keep, each with its reason (ADR-0044); none since the config settings keep the ratelimit section (ADR-0045).
 
     # The audit log (CP-13, ADR-0040).
     AuditRecord:

@@ -427,11 +427,18 @@ type ConfigDiff struct {
 type ConfigImport struct {
 	Changes []ConfigChange `json:"changes"`
 
-	// Ignored Sections of the file that the control plane does not keep, each with its reason (ADR-0044).
+	// Ignored Sections of the file that the control plane does not keep, each with its reason (ADR-0044); none since the config settings keep the ratelimit section (ADR-0045).
 	Ignored []string `json:"ignored"`
 
 	// WorkingSetRevision The revision after the import, what validate and publish's If-Match carry; unchanged when the import changed nothing.
 	WorkingSetRevision int64 `json:"working_set_revision"`
+}
+
+// ConfigSettings The config settings (ADR-0045); unset fields mean their defaults.
+type ConfigSettings struct {
+	Ratelimit RateLimitSettings `json:"ratelimit"`
+	UpdatedAt *time.Time        `json:"updated_at,omitempty"`
+	Version   *int64            `json:"version,omitempty"`
 }
 
 // ConfigValidation defines model for ConfigValidation.
@@ -683,6 +690,15 @@ type PolicyList struct {
 type PolicyMatch struct {
 	Methods *[]string `json:"methods,omitempty"`
 	Routes  *[]string `json:"routes,omitempty"`
+}
+
+// RateLimitSettings defines model for RateLimitSettings.
+type RateLimitSettings struct {
+	// RedisBudget One Redis time budget per request (RL-22), a Go duration greater than 0 and at most 1s; unset means 5ms.
+	RedisBudget *string `json:"redis_budget,omitempty"`
+
+	// Replicas Gateway replicas sharing every limit until managed gateways have a live replica count (RL-24, RL-31); unset means 1.
+	Replicas *int32 `json:"replicas,omitempty"`
 }
 
 // Retry defines model for Retry.
@@ -951,6 +967,12 @@ type PublishConfigParams struct {
 	IfMatch RevisionIfMatch `json:"If-Match"`
 }
 
+// UpdateConfigSettingsParams defines parameters for UpdateConfigSettings.
+type UpdateConfigSettingsParams struct {
+	// IfMatch The entity's ETag, as its GET answered it (CP-14). Missing is 428; any other value than the current one is 412.
+	IfMatch IfMatch `json:"If-Match"`
+}
+
 // ListConfigVersionsParams defines parameters for ListConfigVersions.
 type ListConfigVersionsParams struct {
 	// Limit Page size.
@@ -1170,6 +1192,9 @@ type UpdateAccessListJSONRequestBody = AccessListEntry
 // PublishConfigJSONRequestBody defines body for PublishConfig for application/json ContentType.
 type PublishConfigJSONRequestBody = ChangeNote
 
+// UpdateConfigSettingsJSONRequestBody defines body for UpdateConfigSettings for application/json ContentType.
+type UpdateConfigSettingsJSONRequestBody = ConfigSettings
+
 // RollbackConfigJSONRequestBody defines body for RollbackConfig for application/json ContentType.
 type RollbackConfigJSONRequestBody = ChangeNote
 
@@ -1238,12 +1263,18 @@ type ServerInterface interface {
 	// ExportConfig The config working set, or a published version, as the declarative YAML that static mode reads (CP-05): entities sorted by name with their ids, fields in proto order; a published version also carries its version. Identity is not part of it (ADR-0037)
 	// (GET /config/export)
 	ExportConfig(w http.ResponseWriter, r *http.Request, params ExportConfigParams)
-	// ImportConfig Replace the config working set from YAML in export's shape (CP-05), if it is still at the revision If-Match names; config still needs a publish. Entities are matched by id, then by name, else created; rows matched by nothing are deleted. Each entity's rules apply; references between entities are checked by validate and publish (ADR-0037). Identity is refused, the ratelimit section is not kept (ADR-0044)
+	// ImportConfig Replace the config working set from YAML in export's shape (CP-05), if it is still at the revision If-Match names; config still needs a publish. Entities are matched by id, then by name, else created; rows matched by nothing are deleted. Each entity's rules apply; references between entities are checked by validate and publish (ADR-0037). Identity is refused; the ratelimit section replaces the config settings (ADR-0045)
 	// (POST /config/import)
 	ImportConfig(w http.ResponseWriter, r *http.Request, params ImportConfigParams)
 	// PublishConfig Publish the config working set as a new config version with a change note, if it is still at the revision the preview showed (CP-02); the working set must pass validation (CP-03)
 	// (POST /config/publish)
 	PublishConfig(w http.ResponseWriter, r *http.Request, params PublishConfigParams)
+	// GetConfigSettings Read the config settings: the ratelimit section of the working set (RL-31, ADR-0045)
+	// (GET /config/settings)
+	GetConfigSettings(w http.ResponseWriter, r *http.Request)
+	// UpdateConfigSettings Replace the config settings in the working set; they ship with the next publish and roll back with config (CP-02, ADR-0045)
+	// (PUT /config/settings)
+	UpdateConfigSettings(w http.ResponseWriter, r *http.Request, params UpdateConfigSettingsParams)
 	// ValidateConfig Validate the config working set as a publish would (CP-03, SEC-06) and preview it against the latest published version (UI-02). Validation errors are data: the answer is 200 either way, and its ETag is the working-set revision that publish's If-Match carries (CP-02)
 	// (POST /config/validate)
 	ValidateConfig(w http.ResponseWriter, r *http.Request)
@@ -1839,6 +1870,65 @@ func (siw *ServerInterfaceWrapper) PublishConfig(w http.ResponseWriter, r *http.
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.PublishConfig(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetConfigSettings operation middleware
+func (siw *ServerInterfaceWrapper) GetConfigSettings(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetConfigSettings(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateConfigSettings operation middleware
+func (siw *ServerInterfaceWrapper) UpdateConfigSettings(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params UpdateConfigSettingsParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "If-Match" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("If-Match")]; found {
+		var IfMatch IfMatch
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "If-Match", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "If-Match", valueList[0], &IfMatch, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "If-Match", Err: err})
+			return
+		}
+
+		params.IfMatch = IfMatch
+
+	} else {
+		err := fmt.Errorf("Header parameter If-Match is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "If-Match", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateConfigSettings(w, r, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -3793,6 +3883,8 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/config/versions/{v}/rollback", wrapper.RollbackConfig)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/config/export", wrapper.ExportConfig)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/config/import", wrapper.ImportConfig)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/config/settings", wrapper.GetConfigSettings)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/config/settings", wrapper.UpdateConfigSettings)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/audit", wrapper.ListAudit)
 
 	return m
@@ -4743,6 +4835,192 @@ type PublishConfigdefaultJSONResponse struct {
 }
 
 func (response PublishConfigdefaultJSONResponse) VisitPublishConfigResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetConfigSettingsRequestObject struct {
+}
+
+type GetConfigSettingsResponseObject interface {
+	VisitGetConfigSettingsResponse(w http.ResponseWriter) error
+}
+
+type GetConfigSettings200ResponseHeaders struct {
+	ETag *string
+}
+
+type GetConfigSettings200JSONResponse struct {
+	Body    ConfigSettings
+	Headers GetConfigSettings200ResponseHeaders
+}
+
+func (response GetConfigSettings200JSONResponse) VisitGetConfigSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.ETag != nil {
+		w.Header().Set("ETag", fmt.Sprint(*response.Headers.ETag))
+	}
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetConfigSettingsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetConfigSettingsdefaultJSONResponse) VisitGetConfigSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateConfigSettingsRequestObject struct {
+	Params UpdateConfigSettingsParams
+	Body   *UpdateConfigSettingsJSONRequestBody
+}
+
+type UpdateConfigSettingsResponseObject interface {
+	VisitUpdateConfigSettingsResponse(w http.ResponseWriter) error
+}
+
+type UpdateConfigSettings200ResponseHeaders struct {
+	ETag *string
+}
+
+type UpdateConfigSettings200JSONResponse struct {
+	Body    ConfigSettings
+	Headers UpdateConfigSettings200ResponseHeaders
+}
+
+func (response UpdateConfigSettings200JSONResponse) VisitUpdateConfigSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.ETag != nil {
+		w.Header().Set("ETag", fmt.Sprint(*response.Headers.ETag))
+	}
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateConfigSettings400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response UpdateConfigSettings400JSONResponse) VisitUpdateConfigSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateConfigSettings412JSONResponse struct{ PreconditionFailedJSONResponse }
+
+func (response UpdateConfigSettings412JSONResponse) VisitUpdateConfigSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(412)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateConfigSettings413JSONResponse struct{ PayloadTooLargeJSONResponse }
+
+func (response UpdateConfigSettings413JSONResponse) VisitUpdateConfigSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(413)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateConfigSettings415JSONResponse struct {
+	UnsupportedMediaTypeJSONResponse
+}
+
+func (response UpdateConfigSettings415JSONResponse) VisitUpdateConfigSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(415)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateConfigSettings422JSONResponse struct{ ValidationFailedJSONResponse }
+
+func (response UpdateConfigSettings422JSONResponse) VisitUpdateConfigSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateConfigSettings428JSONResponse struct {
+	PreconditionRequiredJSONResponse
+}
+
+func (response UpdateConfigSettings428JSONResponse) VisitUpdateConfigSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(428)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateConfigSettingsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response UpdateConfigSettingsdefaultJSONResponse) VisitUpdateConfigSettingsResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -8809,12 +9087,18 @@ type StrictServerInterface interface {
 	// ExportConfig The config working set, or a published version, as the declarative YAML that static mode reads (CP-05): entities sorted by name with their ids, fields in proto order; a published version also carries its version. Identity is not part of it (ADR-0037)
 	// (GET /config/export)
 	ExportConfig(ctx context.Context, request ExportConfigRequestObject) (ExportConfigResponseObject, error)
-	// ImportConfig Replace the config working set from YAML in export's shape (CP-05), if it is still at the revision If-Match names; config still needs a publish. Entities are matched by id, then by name, else created; rows matched by nothing are deleted. Each entity's rules apply; references between entities are checked by validate and publish (ADR-0037). Identity is refused, the ratelimit section is not kept (ADR-0044)
+	// ImportConfig Replace the config working set from YAML in export's shape (CP-05), if it is still at the revision If-Match names; config still needs a publish. Entities are matched by id, then by name, else created; rows matched by nothing are deleted. Each entity's rules apply; references between entities are checked by validate and publish (ADR-0037). Identity is refused; the ratelimit section replaces the config settings (ADR-0045)
 	// (POST /config/import)
 	ImportConfig(ctx context.Context, request ImportConfigRequestObject) (ImportConfigResponseObject, error)
 	// PublishConfig Publish the config working set as a new config version with a change note, if it is still at the revision the preview showed (CP-02); the working set must pass validation (CP-03)
 	// (POST /config/publish)
 	PublishConfig(ctx context.Context, request PublishConfigRequestObject) (PublishConfigResponseObject, error)
+	// GetConfigSettings Read the config settings: the ratelimit section of the working set (RL-31, ADR-0045)
+	// (GET /config/settings)
+	GetConfigSettings(ctx context.Context, request GetConfigSettingsRequestObject) (GetConfigSettingsResponseObject, error)
+	// UpdateConfigSettings Replace the config settings in the working set; they ship with the next publish and roll back with config (CP-02, ADR-0045)
+	// (PUT /config/settings)
+	UpdateConfigSettings(ctx context.Context, request UpdateConfigSettingsRequestObject) (UpdateConfigSettingsResponseObject, error)
 	// ValidateConfig Validate the config working set as a publish would (CP-03, SEC-06) and preview it against the latest published version (UI-02). Validation errors are data: the answer is 200 either way, and its ETag is the working-set revision that publish's If-Match carries (CP-02)
 	// (POST /config/validate)
 	ValidateConfig(ctx context.Context, request ValidateConfigRequestObject) (ValidateConfigResponseObject, error)
@@ -9232,6 +9516,63 @@ func (sh *strictHandler) PublishConfig(w http.ResponseWriter, r *http.Request, p
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(PublishConfigResponseObject); ok {
 		if err := validResponse.VisitPublishConfigResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetConfigSettings operation middleware
+func (sh *strictHandler) GetConfigSettings(w http.ResponseWriter, r *http.Request) {
+	var request GetConfigSettingsRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetConfigSettings(ctx, request.(GetConfigSettingsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetConfigSettings")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetConfigSettingsResponseObject); ok {
+		if err := validResponse.VisitGetConfigSettingsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdateConfigSettings operation middleware
+func (sh *strictHandler) UpdateConfigSettings(w http.ResponseWriter, r *http.Request, params UpdateConfigSettingsParams) {
+	var request UpdateConfigSettingsRequestObject
+
+	request.Params = params
+
+	var body UpdateConfigSettingsJSONRequestBody
+	if err := runtime.BindJSONBody(r, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateConfigSettings(ctx, request.(UpdateConfigSettingsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateConfigSettings")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpdateConfigSettingsResponseObject); ok {
+		if err := validResponse.VisitUpdateConfigSettingsResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -10444,132 +10785,138 @@ func (sh *strictHandler) DrainEndpoint(w http.ResponseWriter, r *http.Request, i
 // const string: with thousands of chunks the chained `+` fold is several
 // times slower for the Go compiler than parsing a slice literal.
 var swaggerSpec = []string{
-	"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",
+	"7D3bchu3kr+Cmt0qW1UjiZKVnHOkJ8d2sjpxHJcsJ7ubuFjQTFNENAQmAEYyT0pV+zX7YfslW43LXEgM",
+	"yaF4k60nXWYGaDT63o3GX1EiRrngwLWKTv+KhkBTkObXN5f0Gn+moBLJcs0Ej06jyyEQ4Jrp8TNFbkEq",
+	"JjihilCitBT8muBnMfk9+r3o9V4k7g3zB/wekeev3u8fnewdRHGkkiGMKM6gxzlEp5HSkvHr6P4+jt6K",
+	"hNoJQ/MnEqiGtILj48XbeSNewC1DSNpXlQg+YNfkTsgbxq/3FWgi3UczFuhfaaywdzxnhfdxlFNJR6Ad",
+	"sl8mCMn3LNMgp8H7mWdjXK1koMgd00Oih0wRaj7CmRi+9WcBchzFEacjnMw+bYABvBhFp79FNMvEXRRH",
+	"KfBx9CkOoOuVQcYvdvfeFaMrkDOx5va5hCWneliBchvFkYQ/CyYhjU61LKAO1UDIEdXRacS4/vYkKsFh",
+	"XMM1SA+PKkYgz9OZODJoSdy7zxQRtyAlS0G1Icm/22dp1BWm83QOe5y/bsEHSx+MkPPBT1QnwzkQWFql",
+	"ijCtyA9vLgnl6g4kpITpkhfJT0wpxq8JU+Tk+O9nhPIxEXoIktzSrACih5QTjZtdSAlcE8HBvHx0XC7Q",
+	"Co5qieeDfQvgrIVO0907OoI5O+yXV2MEnLNth82P2ZO+p9fwqpBKtNA4h8+6n5gXiBgYEHLke1EoktNr",
+	"OCMip38WrSDYTxcA4i0bMT0NAz4iiv2rdYLMfFcfP4UBLTIdnX7Tixv09OI4iqMR/cxGKAq+6fXiaMS4",
+	"/esoSGnvRcaS8VzGg4rZLJKYIrn5tA1q+3QZzvPCfCYTrEaeG+65pRlLqYYp9ukdL8M+JRjr4aEPxdUf",
+	"kOjLcQ4dFYqyXxIcs23X3Dt9M29IudwAvu0FK/7KUhnWMpfAKdeLyHRt3nxWCfdWiW7f7E5V94hklQuu",
+	"wGjk72h6AX8WoAxDJoJr4OZXmucZs+bJ4R/K2ijVRP8uYRCdRv92WNlVh/apOnwjpXBTNdf5E80QQEjJ",
+	"Pz/8/C4mlJOC33Bxx8mAQZYSIQklVzQlpdVAnjNuyLIvLZR7UaW2LbmiQUFZBun6F2CkpNBGK4wcOwhJ",
+	"tBAkE/w6tuRvGXJAWVayFHKBYaQXMfnw5tV+79u92BIk6pgUNGUZyUESwKljiwgpsuyKJjfPFFGc5moo",
+	"NEko50KTKyASaEquHN1YyMnzarr+wOCkRFfGkg3s8EujowjNELox0fQGuF0N9+pMaZZlhHFSKCDPEwea",
+	"gdMOu34gS8FlsH1KuKgo7wqoBNzSG+DkecFpoYcIeYKmeExOekdu43799df9l7WHezGh7jN8LgpttxCs",
+	"0shBWjLImNKKPB8IecXSFNFz0nuxFxNkUclpFpOC01vKMnqVAWLlndDfi4JvgLzfCaKKZOh36jkXuj/A",
+	"qc3uvKfjTND0Uoi3VF7DZrjtSqRj5DZUuuSI/MS+I89zC0hfC9HPEBQLnoRE8JRtUh54zYUQIlvWtZ9z",
+	"FWJyN2TJ0PG4IgmVRhs9z2vw1pm1vo6LUh1uciVesjVB9Kp5L6pZJruG9JAV1LIDp+ZD9wHBD5Ih5deQ",
+	"EsV4ApX5C3ftm/WRqyLPhdSQ/gQpo5dG3W6SMRADk1Og3Crh6o8QMGPHGJC3ozWdSLmSQG+smyaLDJTR",
+	"DRIGIBXRgtwNqSapALss+MyUDuu0e2/0uKhCAkq9ZUq/4VqOzTJSu1k0ey9R9moGKjod0ExBHOW1f/3l",
+	"AwiLxw3iiOasfwPGpp8y5j4AQk4TnY3J3RA4qVuSuGM3YFyFKVONF5mV+c72nTTdnIXZfUL8LLaSnSpy",
+	"3Htx0Ds4Onpx0Ds8Pjlon7habj16sMT07utlF22jYH2qGwYu+in7mhmnF40NtKFbF8DSxrd+8pbvapNz",
+	"oQ0/z0VRfdHLeAlxVOTpg9fpdM5Si72ve1+/2dhNFVtrekN+nsbuNJZQrVCYLxG6CTbFXxDSJjcyDaPm",
+	"L7NkzsSQ0X05LZWSmr9rUY0FdnISCwaI5iDBpeXsRxhPM8dLTl6+P0eWR9ZD0w/SM8IBrRlUMPhASCMP",
+	"h1QNkUWa6Jhgvbn+3UL8MkU38DlnEtSsb+ZywMIA5hIG7HPAp0fU34obSB8EhxTarH8gxSgI0XyRswAr",
+	"dmK9RVitGaF1OFqa0ww5roTBzEjb46siZfplooWcXogNhIRCYsYLe6bQfBuAlJD2CwXSR08DFJNNoGbq",
+	"lcnFq+Jq9tSquArMNYEFHCX2kVsLRSsSVrKZONAFJEKm291RB8PUcipTrIlZG7O0NqT5HQ7KvNuV/Udl",
+	"4EhRaDiw7BIT4GkuGNcHqaSMGz/f6Iw+CuODFDLQYaqgnurmYtTSJ37SQV7YKFG/JjbmJZ2so2N8FDKi",
+	"KSxpT6VsMGi3kO1XTVD++j26goGQ8Ht0Sv7vf/4Xo8h0oEG6v+8J47WExTNFLt58uCQScgkKuDa2+xmx",
+	"YxifpcgyIjjxe2QGw3/Y7cDAYEqo+wvjyhj3UglNQRGapopIGIlbDMfgrOevFWHa/w9DYjeMpwfkndGy",
+	"FHVsXGrYKkhjIj45VepOyPQgCpCqXU5QHthHTimvTjWy1A08kyz8WysmjIVtXReJDXoDlyUozxT5z30X",
+	"Wt4/T+dLQ2tx6sizXs38dDtRx7sjZAd2A6gp5gogNiSaXhm43zk0dPAgPeaaqPgV6ba2NUyRgZBnRGkh",
+	"IfXpCCh3EYneMRJFsUIycU2efzz3afYR/fwW+LUeRqfHPZfQ8v84modcA2Jw0UwmBdPfoWMOsuPCTfy0",
+	"L6ldfiX4RIH0U87GbWL9Po6GNBv0RQ68n0txBarxmU/bTZPmiH7uJ4K7KE+3jzgYKuoyVQ48RSQu+AXj",
+	"Pjmx6CQGAwOrXqbY647xVNyFc17T22co3VJuwP3wKsQJDJqmKDW9qBTSx7zO7BsMBaxEKaKToZWlLI2J",
+	"EhjKBhPaZ5hStF8FvJUSjjKUgjMa9jRTRrF7Jw36wJXE9d8XudIS6AiHQL0exS6fir9klAeHWVjetpuQ",
+	"Zq1WL1UsXOkwjaxskDIStzSbL9xKCWbkkzP5HLo+te7ra6erQ1he3Oxr0EjA7vMWwSTtFJwNGKQEn/uC",
+	"gIRywVlCM/JfL3966/+r74QXYypoTKEz1u/iIsWRFv0H+FSNCRuDxSX+3Mrb0X8+yoXU698Ads2Fi/JP",
+	"xtas7PJ4HrDM2UMu0ailyAjyAVRh0xuAPCZAk6HVMSbYCtTEhV++vtjv9U5O9s4IFxxqoW4nKBRozfi1",
+	"MqOYByjdTeEFURaacpRvjFpa3Glysfa+At33wfkw91UFDCUHMrMXsQ0R1woVUpIXVxlTQyxE8pmBhEo5",
+	"PiMF9yF9E5ishilD/VzoIePXQYtpDoUFV1MnLr+r7fT1wSF7rtZtdQ3K7ar2BJetQNuMuiIjsFUZTBJX",
+	"LKOm5Xa5x/Mo+YJqW71Tgr57kctqMfXwyZyIyWRFwTTTX1EFs+3yjGpQ2tMjpF4knlmHx+kOy8dS6WXj",
+	"4bsj/VHIkjpeMIczkVU7IzDKtUsNOHbz7BdUFcamXHx5Juv02qT2QqszkqImna6EyIDyxcWRseJbRAwD",
+	"FdzE5SRHg8A85CU+OqitXyoi7WDLo9Nct7zcmm1kytShBG0t7/tMPSjZoFMYtfrqahzmMv8G1r1aTz4c",
+	"a6vg7osAgX/fKLGJG54Y0yQRedvuzmdRS5t1YTGLgj+Yn37T8HNX7NMtSmOKyAyXoWIvl2J0f2qT3ZVk",
+	"suojdj8Pcim0eKaIpR8yAqWwFtOYD+aZq89Cu1WZQqbjoz0bVKl7rxhwGVdRIIb+bJIVKfoX357sXzFN",
+	"HJasm4FVYMQ6hyoYgelmMS5uXwSLJesUcEdVDVso55Zh9IqZG8wwQeVlCMNwYJNs4zZhMUFic4XBKsLH",
+	"jQG3FkD2JfIdxdtW08h/3Om+S6GGCfKfv16iGLO2vQQlsltQVpvWMuho2jFXgD03Shf2bT+aAQxnu1iT",
+	"LSQ9I0f7356gYpY00cigRrn/9nL/v+n+v3r7/zjo738KSln0PoKhwJfGMfGmw5RxZEWPs43QSlU1cDB5",
+	"k1G+rPzVVBeqUR9uYom3EMWlfiv/oQqVA09bQhJVne1iQmgX0/j1WmF/TsCiaNkEo2fCFYkVM9bWJMob",
+	"lyLqWjeUphKUmib8oVD61HqrxRS7+YBWkJdMjspFHieZyT8rM1rkGjR6/ITDHfEByNqwNVM3xJ4/Qq4x",
+	"wEfJ+4+XVvCgz2+50K0tyH8dKdCjKYh5X/A7WfSQNoKIEyXgSJ7NulwLpq2ntfrU1q26VICpfY6jQBEf",
+	"/neymtQMHyqf80Y5nRggVCUZxZEv6LXglhW9ISHjShNX5fSAR+skDXnDDoOXOYg8a0mIz0nwuOedMzwW",
+	"rtjub2OaVuJwi5wikRm5uYVFtcNGcBCvPacemBNuQaxYE5lqYlVOHPmE9BBopof9ZAjJzYGhChMyPkVp",
+	"Nlv6T7ssJ0fHQUO0nn2dqECenKnOqFNI/w9zNqc8btQlF4Q1gN1wKeEaPi+Y6LCAXUrKFa6+u6xemLns",
+	"TL/gmaYQc9lMRsdyEdCrmb4dM/aDblhp3ZhbP9hiG5Pp4Ssk7o7TW74YL5gz84wzkyunHqDJJYowXRa8",
+	"CwShtZcHGTus+qqQSi9aKgeSiTTMO5NJ1xk+6RTcPxc6Y4DCFcqKmy5LwEgV/FF9G6wYhqRAC9soykJ2",
+	"yvWasSHt5yCTbgnfGVAFEeHOcnZ1JtdRlTnXLQCe+hLN6RJsm480xEWuJeWaPL94u9/7+17DhltFRed8",
+	"d9dE3xe3ZiwXhaz/RStSqiO2IS/UPJzjhy4U3jFuk9QPq5PdRQdxovi0dmDZbeWyfqLnr1X4iX6srfmJ",
+	"7zPKtxB1cjGMfkeuQmjf2k8CCFuat2eFlZYPIu0iU7hIyXKEX8N+N4pZley0TNySQjHPnlUNJRbQlHZB",
+	"D+diHGd7HFwipYvvkF0LyfRwNI3M60TSmKiMpRiit4VbMRmwz5C6v0yNla9csz0ipo2lFQgJZ2T1Ry50",
+	"0oQTn5qyu9gcS+8nmVC2/iuFa0nTllSsKaLJndSbICN6AzZUZAnWcrorJPFtafDTuhnSFphaQgzh6TsN",
+	"ozyjLenHDG4hC+xYJq7wjLUNicYltIgLWzgeQsSqmDITScOBqWFi5F3umcxj6Nd65/hNcLOBD4RMICZq",
+	"SB0FisHAl4XYSLt7J7jYJwm/mIQ3e7ESkWhG2rJQXCbkMwI9FGnHozOGyzp9E1JH04VI3UCXkDLVvyrS",
+	"a9ChhixALvANgqRJ7GumP4eLWRqpdnxsej78IEhauOYO14aApO2F07PnGDQZCaXJkWqy4Dcj1RJ8NQew",
+	"A3mFH6iGOzom/g1kcGkyAibvbov0Cq5ZRkaUU6xvu7af4NmHWyCUZOwW/PckEYVzE49PYnLxdv/F0V4T",
+	"xqNJt2jhyMgFLHEQW6NEX7iImgvMO8IoF/7s+qRUbQXsu3Lfu1A74xiQ6CtIFqx2N0Sx0LtBSJFRusc5",
+	"+zPOV2LSpMVE4IJDTNzB9pj8cadRcQDTQ5BNosA3yfMfft0/7u2F7RmxcIBrFabPUGnVx9hPWyx/aSNj",
+	"IZ1stqlSyfRzH1sz9K/GGlRw3nDgyjbFCn/WxgBrUdS5ZEK63MoCQPgkTq2j5vzodhXGr7WjetAQTtrM",
+	"3ChwJ8RxrfksNnFB47mQXPr3VmTflIcdgl6bf9rut63NQhq59my10xjLGU2GWVZhM5mBtmYy1Xi+c8rD",
+	"k3iHZFApXSYXO3SSdooOlrLMWpMo+KCdX0K6q1nT2L28vex3ZhFR1uWZXp7WmZxQzvQPISfJvv3A1oLv",
+	"TpCHncQPECIM2+nvMZWmrUmJPKgobPFg/MrKvHbYPfW4fHDRliXOVUhfO9LWxO9lTT93y9pxaKlRYGnW",
+	"Uu8Bsu+Mi6lnWuhgPjokET/WdHsXmO3x3Lk1dM1TvKtLOJpKsw6FSe6LoLKiatgP1bUkgiumNHDdx3ee",
+	"mRZZxEf3gvKlXlKzgA4tCxQelNUMtPyQWGXWl+KK8Zjkx4kL99aX03Se8B30nXp/29tg8E3YfH8/rSf8",
+	"Z+baJgsEvJFdC5nMtbWdl73b0rWi8WXFqufsVQhWP9aWRKspVUoKdP+MBefKPUxL1Oq37z36//nrZTTd",
+	"AfZHGCeZoDeu0Yo7pIP1Cb61AfAEiMpZlt3R8b47xmpOscZoGVBSKBuRN38Ym8D0b6AZSTIGpjxcgbxl",
+	"CeAkNoyFluHR3gE5t8dds1Hfzn9gGuvYA932DFuWmeyE+f8pwQaPIGMCKdNCxtX5ohjF0D5NR8jb5oed",
+	"pHbpgYk2WeyUuBxqndsuiIwPxDQvv6qdyDeNQL1TpWKbgVCxTdAx81tGudrzLST0VL9v07jSxvyoB/2s",
+	"6hBSzWITHqrKeCizPhVX/cxjv2OmRe2eaSs5xvil4ImtYSbUFBtPNiAxModppMXog9vW5unkGnOdRkcH",
+	"vYOeb4NAcxadRtiS8EVkPQ1Dc4cWlH0DCv7DCZ2yjy7eShAhy1Ut4FTUvG7itzCvVa8cVs3o7+OFXnbt",
+	"8xd4u3HTxQLvT3czv/800ar7uNdbWbPOUC++YD/nHOuFkQ+r/fAd1XELT3q9tqlK2A9rPcareob5n/mG",
+	"omi7j0ZUjt2Oh2CJba8KQlXimnfEkabXyop7S64o8D7vl3LHtf36LbISIIojKwJq57Pw91IIRHFkf34y",
+	"6XUVoMdXRm1UuK2KnL8T6XhdmxfdN6U96oP7Kdo5Wu/0E0LO6s8oDt20ExrbvXZo3pm4GWfW++V79/fL",
+	"UeNJ7x/zPykbqOMHRy/mfzDZK9t8983874L9hPHj4+P5H0919n0os9ldJJRPcdz4zGgH0y9mvn6wJ0Z7",
+	"ex14MsR193FTLRz+xdJ7q2Az0DDNjq/N/xvs2E0/+Is3AqL4ZFqz2+lSS1Un81FeNnZfjgwXoIhAe25D",
+	"TH/v9mnZhvyhBGUxtDMEFYetih9AT4jwzSjhtt7ZU7haVqzeL0OZD9rwC6BpcLvXrZ67sXlqODwvAsTw",
+	"0Th/K5MhO2IMbJyGJeQZTSBdNTEvoe93WTI/Kttie3rkwlLTblkmRWrjtO2eqnljkz5qoEOINK13q7vL",
+	"HD4weDHRQrfqnWvPHquymwcpeAqycZQ5dEVV2fNuxi1eU+12cK/shzER/sq1MNCz5528Gmvu1D+3zWba",
+	"kZaNY6vmzi23UQrZt42du87t56Wm9Ma3PnNFaG0Tmg5u4TvAZjTamQNB2apqzuQm8NR98rUGNspm2bPD",
+	"GfiaX+/2Ahl1KGKUUKC07Q5mY40v6pLJvN0mluqiyIYID+Gzb18YFElvzGMbjpyWSlOIm+xqRrQgdgbC",
+	"uNJo6Lmsbi002UY4VaR9xt11My9s7EZDYzrKmjQUuKq2tcseVabf2QH5XsjJFdrOUWiSEOYutpm4d4hy",
+	"13Uw0D6su/HTuOB3c0bQIjZCy618D+WUy2DQ292RN0WW5iJL3JIUkowiud+C2T3b4kJpqllCsAbSNMay",
+	"3ax63+ydVrFyZWwkDCiapIFv1MwkYcilrrEi4641lpAplkgGYCE0U8Jvdb1b1gE594aIu8Ipp1Ij/zDt",
+	"Wzm++Fud9y0CVuci1cQEq7qcBoOatgtqm5yYY5BMXmE6rXheciJymw23dyvWM0VeOJb9LXt7bSLFNdGq",
+	"OLxjv+yF3bNpWTKxIF/w3cPr6kLHqzbqoDVa2bZ6Zy39Vk0Fu2m5ysqmqSuUWZu9Jg2lgBEbQ3MvruHj",
+	"Rge8qodu8NbRhRy7GTfjVQ7epu9N7M26ONE5j9u7sg4ZauaVdU77rPtW0LZL6pBk7KWtzxQxd8MZdxM9",
+	"AqMghDStDhW5ZrfAib5jibnDAv/LTcdELvzYRsQr524JWXV1HgqjVFLv+7ReDtt2yev2vfGW7LQpUjEa",
+	"mHFnMT4zZ1dy8Mo3JsyoPqbc9bCuw3Upl0q7yeDzzE9jX+YAqar07wF5M6OXvR4C96o9JpApcNeQpGdE",
+	"ijtVf9+3q8VhbI4hPSBvaHlD6jNPICZTfmYvMgSeAHpQ+g6AN9vqm3IlO3Sog3VN8zcNBAmDQiGA4X7c",
+	"Lramgn28q8bQC1sTpRERMBYcqO3Wwnv7wqrMhTUFTWtXfWxFHZdNNMOSEkNVzct/ogdlN9d9bbBlEy08",
+	"JcdTd6sOqZX703esuhrgMiDXuBF6dSp3B2Oq7f7S9mS5Y982WW4Mp2nq9CFWu7vGjJ8r0uv366qhuIPU",
+	"aoPjvbMp6hkVSpu7mqbvU19crNVdooBkU7WDpG1pwYm2/WsXE+VMs+MTqgJo6VTKw9N8Ae1z2qKxpgNF",
+	"5hjqi6OYdFdXS+UH21N9U3u8W+m+EGFsWnvNI8sy2bdC+lxG+T0l4rZg+peWJ+OTTG4E+5ioIcur68+w",
+	"Irm0gNEaxv7nBBug23fcsFY3LCMfZpmz3gxvt2cdvqE0aNdtGZb728ZdNRUoQRWZDdLU1OkqAjQPogqP",
+	"s5lWhN/yO1FkTvW/iJ2fvWfdImcdME3oNWVc6fChsdJ0dHflkQqH1mW23ldKNbUKiXJ1BxJNk+Nez51x",
+	"J3d0bC+eZFqV8XzdflnAzGtBvCmzmQiuQ8DsOumG47HBUulPm3Km5if9mkarskEWUWgX3feHTreXD5w8",
+	"CFkDdSo3uHHqOvzr9n6+cfxLmdnbrgsdcp83X/nWuqPV1WzlUef1b2pXnm8g+p1rVfKphTQO/UVSQfrA",
+	"mwwnCWRmxvmydhuLFgQBRCGOaDvzN5mR2/2jA9LzgtpeNOXwPHnbVv2sSrBww2qYBTPSvQdnpJcheURi",
+	"K73b26Hc1cn1y7uiDeWIH57kdUswAWOKwVeQ4boDU5hi2tCgyv/28fJMebUW2p8rmKftYMqFm+cpLLsj",
+	"Ydmu9RdPcdDtxEHx+Glu0naUE6AyYyAnVXkZFK3fhSZBgW5zgLQgzCl8vIqV1YtBzK31KBcgtV6wK1H1",
+	"t+J7kWFdkPJTG2Q1GSiFoVJdSxytIkRqz4zO8zDcWzt0DtO2qjhPFz+J+Y6ONnIEs3GH0jy/xSF2W45J",
+	"7dDw7pyz9AiM1hZptcNv+Hhlc96nc5Vf7rnK2sV+2zmzULL1gkcpaxz3dJByFw5SbpWC4lmhoEoyr1l9",
+	"zggAeRge1WHJOuCP6YjkimTDtvX45gi0niVdAaU+nYT8qk9C7pgtcYi9hRbyFn/EF7+IbNTLnP0IC7TS",
+	"Mah5DEFZe0atfqPHy/fnrmvUhBt4Rmx/WHNmM3ZRDIx+YCs/IU2mA7vh7Z5SQ9otW2DNpNify7d2KL7h",
+	"2ahLhMPe+FB9sU6maNwANpMtqk3YVpSj1gltd6IcHoFrinKUw284ytGc9ynK8SV3j/J8tS3TpOTrBcMc",
+	"NZZ7CnPsRr+obZJQe5yjIZvXrEDb3EhRwfDImkLVIH9MgY4VSYdtq/LNUWgZ6FgNqT4FOr7ylk/bNidM",
+	"T+aZnuJ788YOeYmbymmXt8TO9PQsArdWZIuzz/Lw1lBCNsO/Q5StybczQ2/Yr6vmfPLpvuDMNTKRP+Ez",
+	"XeB0Rpg2x3xUyzmfrrXOwTM8hpEXdOkclz25czuRtd429bR7dKU0XqOCbLOTczv348pWO6B3pfx6vvu2",
+	"AkmwTU29GVIsXbaH0+STu/Z156V3wlJw9+nMdtr8S1+j31ZdZj/bc/M42przVt6MtDP+m0Hdujw4O/im",
+	"fbjarE9e3JfsxZmN3hXpvKgr5xnuyZnbDWdu60Q0w52rhPNaNWerS+fnf2ROnQf7Ebl1q5AK21XgmyLK",
+	"yrlbAXU+uXdfuXu3EyaEvTh1pnt3YV/5Cp07s/L5vp3D4bY8O3/37a74dQZra3Lr7Ngb9upqkz45dV+w",
+	"U2cYaTcE8oIenWe1J4duJxy6rRNQuz9XCeV16spWw9nN/ricOQ/14/HlViEPtqq0N0WP3pFbAWE++XFf",
+	"tx+3E1aDNs16Zvtxl+6dr9CRs0uf78l5NG7LlXPz79IpOou6NblzbvAN+3P1WZ8cui/YobPstO5q94Ac",
+	"XtB9K3nryX/bCf9ts/TS7qzVZO5aFWKbeaz9/I/LXyvBfkyH4lYiA7armTdFlqXXtgr6fHLbvm63bfO2",
+	"gb/1f7aX9rF86yv00/zi53tqFTK35auVEOxO5s2jb03eWjn8hv215rxPHtuX3PHEc9W2A2oldy/oytVY",
+	"78mZ243OJ7tASu0+XkNWr1mdthnURQXDI+uAUoP88WTnViQjtq3YN0efpcO3GkJ9cvm+8v4nu2lcHAJP",
+	"c8FM2Bjw71RSxrtfbIQCKA7dBubHx+sWX5fXeOVUD6tbvICl0STrz7zRK3SLV9g3eY3LeeNgWKV9tHlF",
+	"GVe3z9Wurdmo+nyURtlPVN4gA3pKJIbEkeeW5sQD8pGbUXzE5v3HS389dmfrYJpLEXxICsn02FDpFVAJ",
+	"Mjr97RMSogJ56+m3kFl0Gh3SnB3eHhkydXP+1X65YuP+7lKiOFZ0oE7z8rkLNsUuaJWWQasqMOXGKONS",
+	"YYlAi5Rpkgl7O/DRi9qX5hF29/3/AQA=",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,

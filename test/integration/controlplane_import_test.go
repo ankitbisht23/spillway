@@ -140,14 +140,14 @@ plans:
 	res := importResult(t, importYAML(t, r.editor, 200, file, tag, "?note=from+git+abc123"))
 	if res.WorkingSetRevision != 2 || !slices.Equal(changeList(res.Changes), []string{
 		"added upstream catalog", "added upstream orders", "added route catalog-api", "added route orders-api", "added policy per-consumer", "added plan free",
-	}) || len(res.Ignored) != 1 || !strings.HasPrefix(res.Ignored[0], "ratelimit: not kept") {
+	}) || len(res.Ignored) != 0 {
 		t.Fatalf("first import: %+v", res)
 	}
 
 	// Export → import → export: the same bytes, and the import writes
 	// nothing (no revision, no record).
 	e1, tag := exportYAML(t, r.viewer, "")
-	if tag != `"2"` || strings.Contains(e1, "version") || strings.Contains(e1, "ratelimit") || !strings.HasPrefix(e1, "upstreams:\n  - name: catalog\n") ||
+	if tag != `"2"` || strings.Contains(e1, "version") || !strings.Contains(e1, "\nratelimit:\n  replicas: 3\n") || !strings.HasPrefix(e1, "upstreams:\n  - name: catalog\n") ||
 		!strings.Contains(e1, "        draining: true\n") {
 		t.Fatalf("export, ETag %s:\n%s", tag, e1)
 	}
@@ -262,7 +262,8 @@ plans:
 	}
 
 	// One audit record per import that changed something: the editor, the
-	// revision, the note, the changes and what was ignored.
+	// revision, the note, the changes, and the settings before and after
+	// when they change (ADR-0045).
 	records := auditPage(t, r.admin, "?entity=config")
 	var imports []apiv1.AuditRecord
 	for _, rec := range records.Items {
@@ -277,7 +278,7 @@ plans:
 	diff, _ := json.Marshal(first.Diff)
 	if first.Actor.Sub != "sub-editor" || *first.EntityId != "2" || first.Note == nil || *first.Note != "from git abc123" || first.ConfigVersion != nil ||
 		!strings.Contains(string(diff), `"from_revision":1`) || !strings.Contains(string(diff), `"to_revision":2`) ||
-		!strings.Contains(string(diff), `{"change":"added","entity":"upstream","id":`) || !strings.Contains(string(diff), `"ignored":["ratelimit: not kept`) {
+		!strings.Contains(string(diff), `{"change":"added","entity":"upstream","id":`) || !strings.Contains(string(diff), `"settings":{"after":{"replicas":3},"before":{}}`) || strings.Contains(string(diff), "ignored") {
 		t.Errorf("first import record %+v, diff %s", first, diff)
 	}
 	var n int
@@ -299,7 +300,7 @@ plans:
 // TestControlPlaneImportsTheExamples imports every static config file in
 // the repo, one after another (CP-05): each import succeeds, the export
 // reads back through the gateway's loader as the file's config (entities
-// by name, with ids, without version and ratelimit), and the working set
+// by name, with ids, without version), and the working set
 // validates as a publish would.
 func TestControlPlaneImportsTheExamples(t *testing.T) {
 	db := migratedDatabase(t)
@@ -348,10 +349,10 @@ func TestControlPlaneImportsTheExamples(t *testing.T) {
 }
 
 // sortedByName is c as the control plane keeps it: entities by name, no
-// version and no ratelimit section (ADR-0044).
+// version; the ratelimit section is the config settings (ADR-0045).
 func sortedByName(c *configpb.Config) *configpb.Config {
 	c = proto.Clone(c).(*configpb.Config)
-	c.Version, c.Ratelimit = 0, nil
+	c.Version = 0
 	slices.SortFunc(c.Upstreams, func(a, b *configpb.Upstream) int { return strings.Compare(a.GetName(), b.GetName()) })
 	slices.SortFunc(c.Routes, func(a, b *configpb.Route) int { return strings.Compare(a.GetName(), b.GetName()) })
 	slices.SortFunc(c.Policies, func(a, b *configpb.Policy) int { return strings.Compare(a.GetName(), b.GetName()) })
