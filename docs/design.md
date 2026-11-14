@@ -675,7 +675,7 @@ Exit (`make verify-m4`): with one of three endpoints failing, ≥ 99% of request
 - [x] Identity changes applied immediately with their own version, audited, never rolled back, and sent on the Watch stream as separate messages (CP-20)
 - [x] gRPC Watch and Heartbeat (every 5 s plus immediately on apply), `replicas` table and `live_replicas`, `gw_config_sync_age_seconds`, on-disk last-good snapshot on a writable volume, versioned snapshot schema guarded by `buf breaking` (CP-06–CP-09, CP-18, RL-24)
 - [x] One active control-plane replica with its state in Postgres; `LISTEN/NOTIFY` on publish (CP-22)
-- [ ] Heavy hitters in heartbeats’ `top_keys`, shadow would-denies included, kept as `heavy_hitters` windows (RL-21)
+- [x] Heavy hitters in heartbeats’ `top_keys`, shadow would-denies included, kept as `heavy_hitters` windows (RL-21)
 - [x] mTLS for the gRPC stream: dev certs from `make certs`, certs from a Secret in Helm; control-plane API bound to internal networks (SEC-02)
 - [x] Key issue, list, rotate, revoke (revocation through identity); managed API keys from the control plane replace static ones (CP-15–CP-17, GW-17)
 - [x] JWT / JWKS with an algorithm allowlist, `iss` checked against the browser-facing issuer, JWKS from its own URL; identity → tenant and plan (GW-18–GW-20, SEC-04)
