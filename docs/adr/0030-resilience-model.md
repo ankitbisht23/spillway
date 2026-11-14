@@ -1,6 +1,6 @@
 # 0030. Resilience model
 
-- **Status:** Accepted; connection-cap answer timing superseded by 0032; connection cap at capacity, round-robin retries and the order of retry checks superseded by 0033; the breaker column of the attempt-outcome table superseded by 0034
+- **Status:** Accepted; connection-cap answer timing superseded by 0032; connection cap at capacity, round-robin retries and the order of retry checks superseded by 0033; the breaker column of the attempt-outcome table superseded by 0034; the `authn` span's results extended by [0049](0049-gateway-jwt-and-auth-modes-details.md)
 - **Date:** 2026-11-12
 - **Requirement IDs:** GW-07, GW-08, GW-09, GW-11, GW-12, GW-13, GW-14, GW-15, GW-22, GW-23, GW-26, GW-29, OB-01, OB-02, OB-03, NFR-03, NFR-04, NFR-11
 

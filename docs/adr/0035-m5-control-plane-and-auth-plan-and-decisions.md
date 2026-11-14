@@ -1,6 +1,6 @@
 # 0035. M5 control plane and auth: plan and decisions
 
-- **Status:** Accepted
+- **Status:** Accepted; the `auth_mode` interim ended by [ADR-0049](0049-gateway-jwt-and-auth-modes-details.md)
 - **Date:** 2026-11-13
 - **Requirement IDs:** CP-01 – CP-22, GW-17 – GW-20, RL-08, RL-09, RL-21, RL-24, RL-31, SEC-02, SEC-04, SEC-06, SEC-08, SEC-09, NFR-08, NFR-09, NFR-12
 
