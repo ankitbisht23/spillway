@@ -192,7 +192,7 @@ func TestRejects(t *testing.T) {
 		{"unknown retry field", route("retry: {on: [503]}"), `unknown field "on"`},
 		{"unknown auth_mode", route("auth_mode: basic"), `route "r": auth_mode "basic": want none, api_key, jwt or either`},
 		{"auth_mode in upper case", route("auth_mode: JWT"), `auth_mode "JWT": want none, api_key, jwt or either`},
-		{"plan with default_limits before the plans task", "plans: [{name: free, default_limits: [{policy: p, limits: [{rate: 1, period: 1s}]}]}]", `plan "free": default_limits are not supported until M5's plans task`},
+		{"plan with default_limits for an undefined policy", "plans: [{name: free, default_limits: [{policy: p, limits: [{rate: 1, period: 1s}]}]}]", `plan "free": default_limits[0]: policy "p" is not defined`},
 		{"plan without a name", "plans: [{}]", `plan "": name must be`},
 		{"plan twice", "plans: [{name: free}, {name: free}]", `plan "free": defined twice`},
 	}
