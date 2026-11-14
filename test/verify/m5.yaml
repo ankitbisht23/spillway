@@ -1,0 +1,24 @@
+# The config make verify-m5 imports and publishes before its checks (ADR-0042),
+# served by gateway-1 … gateway-5 in managed mode: one upstream of the three
+# mock upstreams with no health check, two routes with the default timeouts
+# (connect 5 s, total and per try 15 s) and no retries, a plan with no
+# entries for the m5-verify tenant, and no rate-limit policy, so Redis is not
+# in the path. Check (a) edits m5-propagation's response headers before each
+# of its publishes; check (b) and (c) send their keys to m5-probe.
+upstreams:
+  - name: m5
+    endpoints:
+      - address: upstream-1:8080
+      - address: upstream-2:8080
+      - address: upstream-3:8080
+routes:
+  - name: m5-propagation
+    match: { path_prefix: /anything/m5 }
+    upstream: m5
+    auth_mode: none
+  - name: m5-probe
+    match: { path: /status/200 }
+    upstream: m5
+    auth_mode: api_key
+plans:
+  - name: m5-verify

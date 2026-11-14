@@ -1,6 +1,6 @@
 # 0042. The M5 exit check
 
-- **Status:** Accepted
+- **Status:** Accepted; t_healthy, the outage windows' edges and what a run leaves in Postgres superseded by [0052](0052-make-verify-m5-details.md)
 - **Date:** 2026-11-13
 - **Requirement IDs:** NFR-08, NFR-09, NFR-12, CP-07, CP-08, CP-09, CP-17, CP-20, CP-22
 

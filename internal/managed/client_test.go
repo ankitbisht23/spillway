@@ -3,9 +3,11 @@ package managed
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -459,5 +461,38 @@ func TestWriteSnapshot(t *testing.T) {
 	}
 	if _, err := ReadSnapshot(filepath.Join(dir, "none.pb")); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("a missing file: %v", err)
+	}
+}
+
+// TestTargetResolvesOnDial: the ConfigService target reaches the dialer as
+// the name itself, so a name that does not resolve yet, as a stopped
+// compose service's, is tried again on every reconnect instead of after
+// the dns resolver's own backoff of up to 120 s (ADR-0052). Under the dns
+// resolver the dialer is never called for a name that does not resolve.
+func TestTargetResolvesOnDial(t *testing.T) {
+	const addr = "controlplane.test:9090" // .test never resolves (RFC 2606)
+	dialed := make(chan string, 16)
+	conn, err := grpc.NewClient(Target(addr), append(DialOptions(&tls.Config{ServerName: "controlplane", MinVersion: tls.VersionTLS13}),
+		grpc.WithContextDialer(func(_ context.Context, a string) (net.Conn, error) {
+			select {
+			case dialed <- a:
+			default:
+			}
+			return nil, errors.New("the control plane is down")
+		}))...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	conn.Connect()
+	for range 2 { // the first attempt and a reconnect, 100 ms later
+		select {
+		case a := <-dialed:
+			if a != addr {
+				t.Fatalf("dialed %q, want %q", a, addr)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("the dialer was not called: the name went to a resolver first")
+		}
 	}
 }
