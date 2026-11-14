@@ -110,20 +110,25 @@ func requestIDOf(ctx context.Context) string {
 type bodyKey struct{}
 
 // readBody reads a request's body, at most MaxBody bytes of JSON, so
-// strictBody can decode it again strictly.
+// strictBody can decode it again strictly; an import's is at most
+// MaxImportBody bytes of YAML.
 func (s *Server) readBody(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.ContentLength == 0 || r.Method == http.MethodGet || r.Method == http.MethodHead {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || mt != "application/json" {
-			s.writeError(w, r, &apiError{http.StatusUnsupportedMediaType, apiv1.ErrorCodeUnsupportedMediaType, "the body must be application/json", nil})
+		mediaType, limit := "application/json", int64(MaxBody)
+		if r.Method+" "+r.URL.Path == importOperation {
+			mediaType, limit = "application/yaml", MaxImportBody
+		}
+		if mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || mt != mediaType {
+			s.writeError(w, r, &apiError{http.StatusUnsupportedMediaType, apiv1.ErrorCodeUnsupportedMediaType, "the body must be " + mediaType, nil})
 			return
 		}
-		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxBody))
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
 		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
-			s.writeError(w, r, &apiError{http.StatusRequestEntityTooLarge, apiv1.ErrorCodePayloadTooLarge, fmt.Sprintf("the body is over %d bytes", MaxBody), nil})
+			s.writeError(w, r, &apiError{http.StatusRequestEntityTooLarge, apiv1.ErrorCodePayloadTooLarge, fmt.Sprintf("the body is over %d bytes", limit), nil})
 			return
 		}
 		if err != nil {
