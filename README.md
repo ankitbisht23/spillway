@@ -2,7 +2,7 @@
 
 A horizontally scalable API gateway in Go with a Redis-backed distributed rate limiter, a Postgres-backed control plane and a React admin UI.
 
-Status: M0 (foundations), M1 (proxy core), M2 (local rate limiting), M3 (distributed rate limiting) and M4 (resilience) are done; M5 (control plane and auth) is next.
+Status: M0 (foundations), M1 (proxy core), M2 (local rate limiting), M3 (distributed rate limiting), M4 (resilience) and M5 (control plane and auth) are done; M6 (admin UI) is next.
 
 - [Requirements and build plan](docs/design.md)
 - [Prerequisites and setup](docs/setup.md)
@@ -43,6 +43,16 @@ Upstream endpoint failures (GW-08, GW-09, GW-12, GW-13, OB-02, [Chaos scenarios]
 | Endpoint refuses connections | `upstream-fault` closes its listener and connections | the same, with connect errors retried: 5,001/5,001 answered 2xx, 5 retries | PASS in 6 of 6 runs |
 
 With one endpoint of three failing, outlier ejection after 5 consecutive failures removes it, and each of those failed attempts is retried on another endpoint, so no client sees the failure. The breaker opens only when most attempts to an upstream fail, which one bad endpoint of three never causes (ADR-0031).
+
+Control-plane propagation and outage (NFR-08, NFR-09, NFR-12, CP-07, [Chaos scenarios](docs/design.md#chaos-scenarios), ADR-0042, ADR-0052), measured on the same laptop with `make verify-m5`: gateway-1 … gateway-5 in managed mode against the compose control plane over mTLS, each check run once per run.
+
+| Check | Injected | Measured | Result |
+| --- | --- | --- | --- |
+| Publish reaches every replica (NFR-08) | 60 publishes, each a route edit, validate and publish | from `published_at` to the last of the five replicas' first apply heartbeat, both on Postgres's clock: p50 3–4 ms, p99 (the maximum at N = 60) 6–8 ms, against 5 s | PASS in 4 of 4 runs |
+| Revoked key rejected everywhere (NFR-09) | 20 keys, each issued, seen working on all five, then revoked | from just before the revoke request to the last replica's first 401, probes every 50 ms: p50 51–52 ms, max 54–59 ms, against 5 s; the identity path itself (revocation to the last apply heartbeat, Postgres clock) p50 3 ms, max 5–6 ms | PASS in 4 of 4 runs |
+| Control plane down for 10 minutes (NFR-12) | `docker compose stop` of the control plane and Postgres for 600 s under 500 rps over the five gateways; gateway-3 restarted at +300 s | 347,882–347,899 requests, all 2xx; every scrape in the outage at the versions from before it, ready, with the sync age growing (603–630 s at the end); gateway-3 ready from its on-disk snapshot 5.0 s after its restart; after the control plane was back, all five live again in 8.1 s and synced within 11.3 s | PASS in 3 of 3 runs with the reconnect fix; the first run, before it, failed only its recovery rule (below) |
+
+The first full run found a real defect: three gateways had not reconnected 60 s after the control plane came back. While the control plane is stopped its name does not resolve, and gRPC's default DNS resolver retries with its own backoff of up to 120 s, so after 10 minutes a gateway could stay away for 2 minutes. Managed gateways now resolve the control plane's name on every dial and reconnect within the 5 s backoff (ADR-0052). Every timeout in the check is at least 4× the 820 ms worst stall measured on this laptop, and no check is ever run again (ADR-0042).
 
 ## Licence
 
