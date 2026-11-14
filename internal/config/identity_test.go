@@ -78,6 +78,12 @@ func TestIdentityLookup(t *testing.T) {
 	if c, ok := none.Lookup(aliceKey); ok {
 		t.Errorf("nil identity: Lookup = %+v, want no key", c)
 	}
+	// Static identity has no JWT subjects (ADR-0045).
+	for _, i := range []*Identity{id, none} {
+		if c, ok := i.Subject("alice"); ok {
+			t.Errorf("static identity: Subject = %+v, want none", c)
+		}
+	}
 }
 
 func TestKeyHash(t *testing.T) {
@@ -168,18 +174,32 @@ func TestManagedIdentity(t *testing.T) {
 	bob, bobEntry := managedKey(t, 5, 6, time.Time{})
 	id, err := CompileIdentity(&configpb.Identity{
 		Version: 7, KeyFormat: KeyFormatManaged,
-		Tenants:   []*configpb.Tenant{{Id: 1, Name: "acme", PlanId: 2, Status: "active"}, {Id: 2, Name: "globex", PlanId: 2, Status: "active"}},
-		Consumers: []*configpb.Consumer{{Id: 3, TenantId: 1, Name: "alice", Status: "active"}, {Id: 6, TenantId: 2, Name: "bob", Status: "active"}},
-		ApiKeys:   []*configpb.ApiKey{aliceEntry, bobEntry},
+		Tenants: []*configpb.Tenant{{Id: 1, Name: "acme", PlanId: 2, Status: "active"}, {Id: 2, Name: "globex", PlanId: 2, Status: "active"}},
+		Consumers: []*configpb.Consumer{
+			{Id: 3, TenantId: 1, Name: "alice", Status: "active", JwtSubject: "svc-alice"},
+			{Id: 6, TenantId: 2, Name: "bob", Status: "active", PlanId: 5},
+		},
+		ApiKeys: []*configpb.ApiKey{aliceEntry, bobEntry},
 	})
 	if err != nil || id.Version != 7 {
 		t.Fatalf("CompileIdentity = %+v, %v", id, err)
 	}
-	if c, ok := id.Lookup(alice); !ok || *c != (Consumer{Name: "3", Tenant: "1", TenantName: "acme"}) {
-		t.Errorf("alice's key: Lookup = %+v, %v; want consumer 3 of tenant 1 (acme)", c, ok)
+	// Identity resolution (GW-19): consumer, tenant and plan, the
+	// consumer's own plan or else its tenant's.
+	if c, ok := id.Lookup(alice); !ok || *c != (Consumer{Name: "3", Tenant: "1", TenantName: "acme", Plan: 2}) {
+		t.Errorf("alice's key: Lookup = %+v, %v; want consumer 3 of tenant 1 (acme), plan 2", c, ok)
 	}
-	if c, ok := id.Lookup(bob); !ok || c.Name != "6" || c.TenantName != "globex" {
-		t.Errorf("bob's key: Lookup = %+v, %v", c, ok)
+	if c, ok := id.Lookup(bob); !ok || c.Name != "6" || c.TenantName != "globex" || c.Plan != 5 {
+		t.Errorf("bob's key: Lookup = %+v, %v; want consumer 6 of globex, its own plan 5", c, ok)
+	}
+	// A token's subject finds the same consumer as its key (ADR-0039).
+	if c, ok := id.Subject("svc-alice"); !ok || *c != (Consumer{Name: "3", Tenant: "1", TenantName: "acme", Plan: 2}) {
+		t.Errorf("Subject(svc-alice) = %+v, %v; want consumer 3", c, ok)
+	}
+	for _, sub := range []string{"", "svc-Alice", "svc-alice ", "bob", "6"} {
+		if c, ok := id.Subject(sub); ok {
+			t.Errorf("Subject(%q) = %+v; want no consumer", sub, c)
+		}
 	}
 	_, other := managedKey(t, 9, 3, time.Time{})
 	for name, key := range map[string]string{
@@ -261,6 +281,9 @@ func TestManagedIdentityErrors(t *testing.T) {
 		{"unknown tenant", &configpb.Identity{Consumers: consumers}, "consumer 3: tenant 1 is not defined"},
 		{"consumer without id", &configpb.Identity{Tenants: tenants, Consumers: []*configpb.Consumer{{TenantId: 1, Name: "x"}}}, `consumer "x": want a unique id`},
 		{"tenant without id", &configpb.Identity{Tenants: []*configpb.Tenant{{Name: "acme"}}}, `tenant "acme": id is required`},
+		{"two consumers, one subject", &configpb.Identity{Tenants: tenants, Consumers: []*configpb.Consumer{
+			{Id: 3, TenantId: 1, Name: "a", JwtSubject: "secret-subject"}, {Id: 4, TenantId: 1, Name: "b", JwtSubject: "secret-subject"},
+		}}, "consumer 4: its jwt_subject is another consumer's"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			tt.id.KeyFormat = KeyFormatManaged
@@ -268,8 +291,8 @@ func TestManagedIdentityErrors(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("error = %v, want %q", err, tt.want)
 			}
-			if strings.Contains(err.Error(), k.GetPrefix()) || strings.Contains(err.Error(), k.GetHash()[:12]) {
-				t.Errorf("error %q names part of a key", err)
+			if strings.Contains(err.Error(), k.GetPrefix()) || strings.Contains(err.Error(), k.GetHash()[:12]) || strings.Contains(err.Error(), "secret-subject") {
+				t.Errorf("error %q names part of a key or a subject", err)
 			}
 		})
 	}

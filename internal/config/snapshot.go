@@ -49,6 +49,7 @@ type Route struct {
 	HSTS            string // Strict-Transport-Security value for TLS responses; empty means none
 	Cost            int64  // cost units each request deducts (RL-07)
 	Retry           Retry  // attempts, and whether every method retries (GW-12)
+	AuthMode        string // AuthNone, AuthAPIKey, AuthJWT or AuthEither (GW-20, ADR-0039)
 	strip           int    // leading path segments that strip_prefix removes
 }
 
@@ -158,11 +159,10 @@ func compileRoute(r *configpb.Route, heads map[string]bool) (Route, router.Route
 		return Route{}, router.Route{}, err
 	}
 	switch mode := r.GetAuthMode(); mode {
-	case "", AuthNone:
-	case AuthAPIKey, AuthJWT, AuthEither:
-		// Interim until the jwt task (ADR-0035): nothing half-built can be
-		// published.
-		return Route{}, router.Route{}, fmt.Errorf("auth_mode %q is not supported until M5's jwt task", mode)
+	case "":
+		route.AuthMode = AuthNone
+	case AuthNone, AuthAPIKey, AuthJWT, AuthEither:
+		route.AuthMode = mode
 	default:
 		return Route{}, router.Route{}, fmt.Errorf("auth_mode %q: want none, api_key, jwt or either", mode)
 	}
