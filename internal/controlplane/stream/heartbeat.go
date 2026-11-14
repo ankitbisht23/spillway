@@ -24,13 +24,13 @@ type Recorder interface {
 const heartbeatErrorEvery = time.Minute
 
 // Heartbeat records what a gateway runs and answers the live replica count
-// (CP-08, RL-24, ADR-0038). Until M5's mtls-secrets task the replica name
-// is the request's, as for Watch. A heartbeat of any schema version is
-// recorded: the replicas list shows a gateway that cannot watch.
+// (CP-08, RL-24, ADR-0038), under the replica name of the client
+// certificate, as for Watch (ADR-0040). A heartbeat of any schema version
+// is recorded: the replicas list shows a gateway that cannot watch.
 func (s *Service) Heartbeat(ctx context.Context, req *configpb.HeartbeatRequest) (*configpb.HeartbeatResponse, error) {
-	name := req.GetReplicaId()
-	if !replicaName.MatchString(name) {
-		return nil, status.Error(codes.InvalidArgument, "replica_id: want a DNS label, such as gateway-1")
+	name, err := s.replica(ctx, "Heartbeat", req.GetReplicaId())
+	if err != nil {
+		return nil, err
 	}
 	live, err := s.rec.RecordHeartbeat(ctx, name, req)
 	if err != nil {

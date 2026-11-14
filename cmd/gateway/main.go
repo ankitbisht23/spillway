@@ -23,11 +23,11 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/ankitbisht23/spillway/internal/config"
 	"github.com/ankitbisht23/spillway/internal/gen/configpb"
 	"github.com/ankitbisht23/spillway/internal/managed"
+	"github.com/ankitbisht23/spillway/internal/mtls"
 	"github.com/ankitbisht23/spillway/internal/proxy"
 	"github.com/ankitbisht23/spillway/internal/ratelimit"
 	"github.com/ankitbisht23/spillway/internal/ratelimit/local"
@@ -152,7 +152,7 @@ func serve(ctx context.Context, s settings, log *slog.Logger, tracer trace.Trace
 	// (GW-24, ADR-0024).
 	var rl proxy.Redis
 	if len(s.redisAddrs) > 0 {
-		c := redis.NewClient(s.redisAddrs, s.redisAddrMap, ratelimit.SystemClock, log)
+		c := redis.NewClient(s.redisAddrs, s.redisAddrMap, s.redisAuth, ratelimit.SystemClock, log)
 		defer func() { _ = c.Close() }()
 		go c.Warm(bg, time.Second)
 		rl = c
@@ -191,18 +191,23 @@ func serve(ctx context.Context, s settings, log *slog.Logger, tracer trace.Trace
 			go ids.Run(bg, time.Second)
 		}
 	} else {
-		// Plaintext inside the compose network until M5's mtls-secrets
-		// task (ADR-0035, ADR-0045).
-		conn, err := grpc.NewClient(s.controlPlane, managed.DialOptions(grpc.WithTransportCredentials(insecure.NewCredentials()))...)
+		// mTLS only; the replica name is the client certificate's (SEC-02,
+		// D7, ADR-0040).
+		streamCerts, replica, err := mtls.LoadGateway(s.streamTLS, log)
+		if err != nil {
+			return fmt.Errorf("config stream mTLS: %w", err)
+		}
+		go streamCerts.Run(bg, time.Second)
+		conn, err := grpc.NewClient(s.controlPlane, managed.DialOptions(streamCerts.ClientConfig(s.cpServerName))...)
 		if err != nil {
 			return fmt.Errorf("SPILLWAY_GATEWAY_CONTROL_PLANE: %w", err)
 		}
 		defer func() { _ = conn.Close() }()
 		m := managed.New(configpb.NewConfigServiceClient(conn), managed.Options{
-			ReplicaID: s.replicaID, SnapshotPath: s.snapshot, Log: log,
+			ReplicaID: replica, SnapshotPath: s.snapshot, Log: log,
 			Compile: func(c *configpb.Config) (*config.Snapshot, error) { return config.Prepare(c, log, apply) },
 		})
-		log.Info("managed mode", "control_plane", s.controlPlane, "replica", s.replicaID, "snapshot", s.snapshot)
+		log.Info("managed mode", "control_plane", s.controlPlane, "server_name", s.cpServerName, "replica", replica, "snapshot", s.snapshot)
 		go m.Run(bg)
 		go m.Boot(bg) // the stream gets 5 s, then the on-disk snapshot is served (D9)
 		snapshot, identity, syncAge = m.Snapshot, m.Identity, m.SyncAge

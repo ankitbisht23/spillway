@@ -45,13 +45,23 @@ func TestLoadSettings(t *testing.T) {
 		s.maxConnections != 8192 || s.maxInFlight != 4096 || s.traceSampleRatio != 1 {
 		t.Errorf("settings = %+v", s)
 	}
-	managedEnv := map[string]string{"SPILLWAY_GATEWAY_CONFIG": "", "SPILLWAY_GATEWAY_CONTROL_PLANE": "controlplane:9090", "SPILLWAY_GATEWAY_REPLICA_ID": "gateway-3"}
-	if s, err := loadSettings(env(managedEnv)); err != nil || s.controlPlane != "controlplane:9090" || s.snapshot != "/var/lib/spillway/snapshot.pb" || s.replicaID != "gateway-3" {
+	streamCerts := map[string]string{"SPILLWAY_GATEWAY_CP_CERT": "/s/cert.pem", "SPILLWAY_GATEWAY_CP_KEY": "/s/key.pem", "SPILLWAY_GATEWAY_CP_CA": "/s/ca.pem"}
+	managedEnv := map[string]string{"SPILLWAY_GATEWAY_CONFIG": "", "SPILLWAY_GATEWAY_CONTROL_PLANE": "controlplane:9090"}
+	for k, v := range streamCerts {
+		managedEnv[k] = v
+	}
+	if s, err := loadSettings(env(managedEnv)); err != nil || s.controlPlane != "controlplane:9090" || s.snapshot != "/var/lib/spillway/snapshot.pb" ||
+		s.streamTLS.Cert != "/s/cert.pem" || s.streamTLS.Key != "/s/key.pem" || s.streamTLS.CA != "/s/ca.pem" || s.cpServerName != "controlplane" {
 		t.Errorf("managed mode: %+v, %v", s, err)
 	}
-	s = settings{controlPlane: "cp:9090"}
-	if err := s.mode(func() (string, error) { return "Gateway-2", nil }); err != nil || s.replicaID != "gateway-2" {
-		t.Errorf("replica name from the host name: %q, %v", s.replicaID, err)
+	managedEnv["SPILLWAY_GATEWAY_CP_SERVER_NAME"] = "cp.internal"
+	if s, err := loadSettings(env(managedEnv)); err != nil || s.cpServerName != "cp.internal" {
+		t.Errorf("server name: %+v, %v", s, err)
+	}
+	// Static mode ignores the stream's settings, which compose sets on
+	// every gateway.
+	if s, err := loadSettings(env(streamCerts)); err != nil || s.controlPlane != "" {
+		t.Errorf("static mode with stream certificates: %+v, %v", s, err)
 	}
 	tlsOnly := map[string]string{"SPILLWAY_GATEWAY_HTTP_ADDR": "", "SPILLWAY_GATEWAY_TLS_CERT": "/c.pem", "SPILLWAY_GATEWAY_TLS_KEY": "/k.pem"}
 	if s, err := loadSettings(env(tlsOnly)); err != nil || s.httpAddr != "" || s.tlsAddr != ":8443" || s.tlsCert != "/c.pem" || s.tlsKey != "/k.pem" {
@@ -67,8 +77,8 @@ func TestLoadSettings(t *testing.T) {
 	if s, err := loadSettings(env(map[string]string{"SPILLWAY_GATEWAY_TRUSTED_PROXIES": "10.0.0.0/8, 2001:db8::/32"})); err != nil || len(s.trusted) != 2 {
 		t.Errorf("trusted proxies: %+v, %v", s, err)
 	}
-	if s.redisAddrs != nil || s.redisAddrMap != nil {
-		t.Errorf("Redis by default: %v, %v; want none", s.redisAddrs, s.redisAddrMap)
+	if s.redisAddrs != nil || s.redisAddrMap != nil || s.redisAuth.Username != "" || s.redisAuth.Password.IsSet() {
+		t.Errorf("Redis by default: %v, %v, %+v; want none", s.redisAddrs, s.redisAddrMap, s.redisAuth)
 	}
 	redis := map[string]string{
 		"SPILLWAY_GATEWAY_REDIS_ADDRS": "redis-0:6379, redis-1:6379,",
@@ -128,8 +138,12 @@ func TestLoadSettings(t *testing.T) {
 		{map[string]string{"SPILLWAY_GATEWAY_CONTROL_PLANE": "controlplane:9090"}, "SPILLWAY_GATEWAY_CONFIG and SPILLWAY_GATEWAY_IDENTITY: not with SPILLWAY_GATEWAY_CONTROL_PLANE"},
 		{map[string]string{"SPILLWAY_GATEWAY_CONFIG": "", "SPILLWAY_GATEWAY_IDENTITY": "/i.yaml", "SPILLWAY_GATEWAY_CONTROL_PLANE": "controlplane:9090"}, "SPILLWAY_GATEWAY_CONFIG and SPILLWAY_GATEWAY_IDENTITY"},
 		{map[string]string{"SPILLWAY_GATEWAY_CONFIG": "", "SPILLWAY_GATEWAY_CONTROL_PLANE": "controlplane"}, `SPILLWAY_GATEWAY_CONTROL_PLANE: "controlplane" is not host:port`},
-		{map[string]string{"SPILLWAY_GATEWAY_CONFIG": "", "SPILLWAY_GATEWAY_CONTROL_PLANE": "cp:9090", "SPILLWAY_GATEWAY_REPLICA_ID": "Gateway_1"}, `SPILLWAY_GATEWAY_REPLICA_ID: "Gateway_1" is not a DNS label`},
-		{map[string]string{"SPILLWAY_GATEWAY_SNAPSHOT": "/s.pb"}, "SPILLWAY_GATEWAY_SNAPSHOT and SPILLWAY_GATEWAY_REPLICA_ID: managed mode only"},
+		{map[string]string{"SPILLWAY_GATEWAY_CONFIG": "", "SPILLWAY_GATEWAY_CONTROL_PLANE": "cp:9090"}, "SPILLWAY_GATEWAY_CP_CERT, SPILLWAY_GATEWAY_CP_KEY and SPILLWAY_GATEWAY_CP_CA: required"},
+		{map[string]string{"SPILLWAY_GATEWAY_CONFIG": "", "SPILLWAY_GATEWAY_CONTROL_PLANE": "cp:9090", "SPILLWAY_GATEWAY_CP_CERT": "/c", "SPILLWAY_GATEWAY_CP_KEY": "/k"}, "SPILLWAY_GATEWAY_CP_CERT, SPILLWAY_GATEWAY_CP_KEY and SPILLWAY_GATEWAY_CP_CA: required"},
+		{map[string]string{"SPILLWAY_GATEWAY_SNAPSHOT": "/s.pb"}, "SPILLWAY_GATEWAY_SNAPSHOT: managed mode only"},
+		{map[string]string{"SPILLWAY_GATEWAY_REDIS_USERNAME": "spillway"}, "SPILLWAY_GATEWAY_REDIS_USERNAME: set with SPILLWAY_GATEWAY_REDIS_PASSWORD"},
+		{map[string]string{"SPILLWAY_GATEWAY_REDIS_PASSWORD": "a", "SPILLWAY_GATEWAY_REDIS_PASSWORD_FILE": "/p"}, "set SPILLWAY_GATEWAY_REDIS_PASSWORD or SPILLWAY_GATEWAY_REDIS_PASSWORD_FILE, not both"},
+		{map[string]string{"SPILLWAY_GATEWAY_REDIS_PASSWORD_FILE": "/nonexistent/p"}, "SPILLWAY_GATEWAY_REDIS_PASSWORD_FILE: cannot read the file"},
 		{map[string]string{"SPILLWAY_GATEWAY_HTTP_ADDR": ""}, "no listener"},
 		{map[string]string{"SPILLWAY_GATEWAY_TLS_CERT": "/c.pem"}, "SPILLWAY_GATEWAY_TLS_CERT and SPILLWAY_GATEWAY_TLS_KEY"},
 		{map[string]string{"SPILLWAY_GATEWAY_TLS_KEY": "/k.pem"}, "SPILLWAY_GATEWAY_TLS_CERT and SPILLWAY_GATEWAY_TLS_KEY"},

@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -25,6 +26,7 @@ import (
 	"github.com/ankitbisht23/spillway/internal/gen/apiv1"
 	"github.com/ankitbisht23/spillway/internal/gen/configpb"
 	"github.com/ankitbisht23/spillway/internal/managed"
+	"github.com/ankitbisht23/spillway/internal/testcert"
 )
 
 // Managed mode end to end, with host processes (CP-06, CP-07, CP-18,
@@ -169,17 +171,65 @@ type hostCP struct {
 	rest cpClient // as admin
 }
 
+// streamCA is the stream CA of the package's host processes (ADR-0040),
+// made once.
+var streamCA struct {
+	once sync.Once
+	ca   *testcert.CA
+}
+
+// issueStream writes a certificate of the stream CA for l, its key and the
+// CA to a new directory, as make certs lays them out, and returns the
+// directory.
+func issueStream(t *testing.T, l testcert.Leaf) string {
+	t.Helper()
+	streamCA.once.Do(func() { streamCA.ca = testcert.NewCA(t, "integration stream CA") })
+	dir := t.TempDir()
+	streamCA.ca.Issue(t, dir, l)
+	return dir
+}
+
+// noSecretsLogged fails the test if the process logged a password or PEM
+// key material (SEC-09, ADR-0040). Registered before the process starts,
+// it runs after the process has stopped.
+func noSecretsLogged(t *testing.T, p **proc) {
+	t.Helper()
+	t.Cleanup(func() {
+		if *p == nil {
+			return
+		}
+		out := (*p).out.String()
+		for _, s := range []string{pgAppPassword, pgOwnerPassword, "PRIVATE KEY"} {
+			if strings.Contains(out, s) {
+				t.Errorf("%s logged a secret (%q)", (*p).name, s)
+			}
+		}
+	})
+}
+
 // startCP runs a control plane on database db with its gRPC listener at
-// grpcAddr and bearer tokens from iss; it waits until it is ready.
+// grpcAddr (mTLS with a certificate of the stream CA for 127.0.0.1) and
+// bearer tokens from iss; it waits until it is ready. Its database
+// password comes from a file (SEC-09).
 func startCP(t *testing.T, name, db, grpcAddr string, iss *testIssuer) *hostCP {
 	t.Helper()
 	httpAddr, admin := freeAddr(t), freeAddr(t)
-	p := start(t, name, binary(t, "controlplane"), admin, []string{
+	certs := issueStream(t, testcert.Leaf{DNSNames: []string{"localhost"}, IPs: []net.IP{net.IPv4(127, 0, 0, 1)}})
+	pw := filepath.Join(t.TempDir(), "database-password")
+	if err := os.WriteFile(pw, []byte(pgAppPassword+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var p *proc
+	noSecretsLogged(t, &p)
+	p = start(t, name, binary(t, "controlplane"), admin, []string{
 		"SPILLWAY_CP_DATABASE_URL=" + pgURL(t, "spillway_app", db),
-		"SPILLWAY_CP_DATABASE_PASSWORD=" + pgAppPassword,
+		"SPILLWAY_CP_DATABASE_PASSWORD_FILE=" + pw,
 		"SPILLWAY_CP_HTTP_ADDR=" + httpAddr,
 		"SPILLWAY_CP_ADMIN_ADDR=" + admin,
 		"SPILLWAY_CP_GRPC_ADDR=" + grpcAddr,
+		"SPILLWAY_CP_GRPC_TLS_CERT=" + filepath.Join(certs, "cert.pem"),
+		"SPILLWAY_CP_GRPC_TLS_KEY=" + filepath.Join(certs, "key.pem"),
+		"SPILLWAY_CP_GRPC_CLIENT_CA=" + filepath.Join(certs, "ca.pem"),
 		"SPILLWAY_CP_ALLOWED_NETWORKS=127.0.0.0/8",
 		"SPILLWAY_CP_OIDC_ISSUER=" + testIssuerURL,
 		"SPILLWAY_CP_OIDC_JWKS_URL=" + iss.jwks.URL,
@@ -195,14 +245,20 @@ type hostGW struct {
 	url string
 }
 
-// startManaged runs a managed gateway named name against the control
-// plane at cp, its snapshot in dir; it does not wait for readiness.
+// startManaged runs a managed gateway against the control plane at cp,
+// its snapshot in dir; its client certificate names it name (D7). It does
+// not wait for readiness.
 func startManaged(t *testing.T, name, cp, dir string) *hostGW {
 	t.Helper()
 	httpAddr, admin := freeAddr(t), freeAddr(t)
-	p := start(t, name, binary(t, "gateway"), admin, []string{
+	certs := issueStream(t, testcert.Leaf{DNSNames: []string{name}, Client: true})
+	var p *proc
+	noSecretsLogged(t, &p)
+	p = start(t, name, binary(t, "gateway"), admin, []string{
 		"SPILLWAY_GATEWAY_CONTROL_PLANE=" + cp,
-		"SPILLWAY_GATEWAY_REPLICA_ID=" + name,
+		"SPILLWAY_GATEWAY_CP_CERT=" + filepath.Join(certs, "cert.pem"),
+		"SPILLWAY_GATEWAY_CP_KEY=" + filepath.Join(certs, "key.pem"),
+		"SPILLWAY_GATEWAY_CP_CA=" + filepath.Join(certs, "ca.pem"),
 		"SPILLWAY_GATEWAY_SNAPSHOT=" + filepath.Join(dir, "snapshot.pb"),
 		"SPILLWAY_GATEWAY_HTTP_ADDR=" + httpAddr,
 		"SPILLWAY_GATEWAY_ADMIN_ADDR=" + admin,

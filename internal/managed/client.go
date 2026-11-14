@@ -7,6 +7,7 @@ package managed
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -18,6 +19,7 @@ import (
 
 	"google.golang.org/grpc"
 	grpcbackoff "google.golang.org/grpc/backoff"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -27,7 +29,8 @@ import (
 
 // Options configure a managed gateway.
 type Options struct {
-	// ReplicaID is the gateway's replica name, a DNS label.
+	// ReplicaID is the gateway's replica name, its client certificate's
+	// (D7, ADR-0040); sent as replica_id and used in logs.
 	ReplicaID string
 	// SnapshotPath is the on-disk snapshot file.
 	SnapshotPath string
@@ -78,21 +81,22 @@ func New(cs configpb.ConfigServiceClient, opts Options) *Client {
 }
 
 // DialOptions are the gRPC client options of the ConfigService connection
-// (ADR-0038): keepalive pings after 10 s idle with a 5 s timeout, messages
-// up to 64 MiB, then extra (M5's mtls-secrets task adds transport
-// credentials there). The connection's own redials back off from 100 ms
-// doubling to 5 s, as the Watch stream's reconnects do; gRPC's default
-// grows to 120 s, which would keep a gateway away from a control plane
-// that is back for up to 2 minutes after a long outage.
-func DialOptions(extra ...grpc.DialOption) []grpc.DialOption {
-	return append([]grpc.DialOption{
+// (ADR-0038, ADR-0040): mTLS with tlsConfig (there is no plaintext),
+// keepalive pings after 10 s idle with a 5 s timeout, messages up to
+// 64 MiB. The connection's own redials back off from 100 ms doubling to
+// 5 s, as the Watch stream's reconnects do; gRPC's default grows to 120 s,
+// which would keep a gateway away from a control plane that is back for up
+// to 2 minutes after a long outage.
+func DialOptions(tlsConfig *tls.Config) []grpc.DialOption {
+	return []grpc.DialOption{
+		grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)),
 		grpc.WithKeepaliveParams(keepalive.ClientParameters{Time: 10 * time.Second, Timeout: 5 * time.Second, PermitWithoutStream: true}),
 		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(64<<20), grpc.MaxCallSendMsgSize(64<<20)),
 		grpc.WithConnectParams(grpc.ConnectParams{
 			Backoff:           grpcbackoff.Config{BaseDelay: backoffMin, Multiplier: 2, Jitter: 0.2, MaxDelay: backoffMax},
 			MinConnectTimeout: 20 * time.Second, // gRPC's default
 		}),
-	}, extra...)
+	}
 }
 
 // Snapshot returns the config in use, nil before the first.

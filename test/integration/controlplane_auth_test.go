@@ -28,6 +28,7 @@ import (
 	"github.com/ankitbisht23/spillway/internal/controlplane/api"
 	"github.com/ankitbisht23/spillway/internal/controlplane/store"
 	"github.com/ankitbisht23/spillway/internal/gen/apiv1"
+	"github.com/ankitbisht23/spillway/internal/secret"
 )
 
 // Bearer tokens, RBAC and the audit log (CP-11, CP-12, CP-13, SEC-08,
@@ -464,8 +465,12 @@ func TestAuditLogAppendOnly(t *testing.T) {
 func keycloakToken(t *testing.T, grant, client, username string) string {
 	t.Helper()
 	form := url.Values{"grant_type": {grant}, "client_id": {client}, "client_secret": {"dev-only-not-secret"}}
-	if client == "spillway-ci" {
-		form.Set("client_secret", cmp.Or(os.Getenv("SPILLWAY_CI_CLIENT_SECRET"), "dev-only-not-secret"))
+	if client == "spillway-ci" { // from env or a file (SEC-09, ADR-0040)
+		s, err := secret.FromEnv(os.Getenv, "SPILLWAY_CI_CLIENT_SECRET")
+		if err != nil {
+			t.Fatal(err)
+		}
+		form.Set("client_secret", cmp.Or(s.Reveal(), "dev-only-not-secret"))
 	}
 	if username != "" {
 		form.Set("username", username)
