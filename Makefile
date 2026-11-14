@@ -11,7 +11,7 @@ FUZZTIME ?= 5s
 # Committed dev defaults first, then local overrides if present (ADR-0004).
 COMPOSE := docker compose --env-file .env.example $(if $(wildcard .env.local),--env-file .env.local)
 
-.PHONY: tools hooks certs dev test fuzz test-integration proto api sqlc lint lint-go lint-web lint-proto lint-api lint-sql bench verify-m0 verify-m0-stack verify-m1 verify-m1-reload verify-m2 verify-m2-shadow verify-m3 verify-m4 accuracy chaos-redis-outage chaos-redis-primary
+.PHONY: tools hooks certs dev test fuzz test-integration proto api sqlc lint lint-go lint-web lint-proto lint-api lint-sql bench verify-m0 verify-m0-stack verify-m1 verify-m1-reload verify-m2 verify-m2-shadow verify-m3 verify-m4 verify-m5 accuracy chaos-redis-outage chaos-redis-primary chaos-cp-outage
 
 # Host-run processes and tests reach Redis Cluster nodes through this map
 # (ADR-0004). Set only here, never in compose or .env files.
@@ -234,6 +234,17 @@ verify-m3: dev
 verify-m4: dev
 	@test/verify/m4.sh
 
+# M5 exit checks (docs/design.md, ADR-0042): gateway-1 … gateway-5 in
+# managed mode; (a) 60 publishes each reach all five in < 5 s p99 (NFR-08),
+# (b) 20 revoked keys each rejected on all five in < 5 s (NFR-09), (c) a
+# 10-minute control-plane and Postgres outage under 500 rps with gateway-3
+# restarted from its snapshot: zero failed requests, config frozen, sync
+# age growing, recovery within 60 s (NFR-12). About 18 minutes; the
+# gateways run at compose's trace ratio of 1 and go back to static mode
+# after. CI runs none of it: it takes the control plane down for 10 minutes.
+verify-m5: dev
+	@test/verify/m5.sh all
+
 # Accuracy harness v1 (NFR-06, ADR-0021): gateway-1 … gateway-$(REPLICAS)
 # (1 to 5) run test/accuracy/gateway.yaml and cmd/accuracy drives them from
 # the compose network for about 3 minutes. Prints its JSON report.
@@ -250,3 +261,8 @@ chaos-redis-outage: dev
 
 chaos-redis-primary: dev
 	@test/chaos/redis-primary.sh
+
+# NFR-12's control-plane outage alone, rule (c) of make verify-m5
+# (ADR-0042): about 14 minutes with its setup.
+chaos-cp-outage: dev
+	@test/verify/m5.sh outage
