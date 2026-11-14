@@ -1,0 +1,52 @@
+# 0047. Config stream mTLS and secrets: details
+
+- **Status:** Accepted
+- **Date:** 2026-11-14
+- **Requirement IDs:** SEC-02, SEC-09, CP-06, CP-08
+
+## Context
+
+M5's mtls-secrets task builds what ADR-0040 decides for the config stream's mTLS (SEC-02, D7) and for secrets (SEC-09), ends the interim of ADR-0045 (plaintext gRPC, the replica name from `SPILLWAY_GATEWAY_REPLICA_ID` and the request), and generalizes the `X` / `X_FILE` rule that the schema task wrote for the two database passwords. The user approved, at the M5 checkpoint, ticking the SEC-02 box for the compose part plus ADR-0040's written Helm contract (ADR-0035 P9), and keeping the compose Redis Cluster without a password while testing the gateway's Redis password on a single-node testcontainer (P11). Building it raised points ADR-0040 leaves open or gets wrong:
+
+- **Where the stream certificates live.** ADR-0040 puts the stream CA at `deploy/certs/stream-ca` and the certificates under `deploy/certs/stream/`. But every gateway, and the load generator, already mounts all of `deploy/certs` at `/etc/spillway-certs` for the traffic certificate (ADR-0012). That would mount the stream CA's private key into those containers, which ADR-0040 forbids, and give each gateway every other gateway's key, so any gateway could act as any replica.
+- **Refused handshakes.** gRPC drops a failed server handshake without a log line (only its own logger at a level compose never enables), so "no certificate", "another CA" and "expired" would be silent.
+- **An empty `replica_id`.** ADR-0040 says a differing one is refused; ADR-0038 says "empty or equal".
+- **A reloaded gateway certificate that names another replica.** The gateway reports its name on every call; a mid-run change would split one process into two replicas.
+- **The gateway's server check with a reloading CA.** crypto/tls fixes `RootCAs` per config, and a client cannot swap configs per handshake as `GetConfigForClient` lets a server.
+- What happens to the stream settings in static mode, where compose sets them on every gateway.
+
+## Decision
+
+### Certificates (SEC-02, D7)
+
+- **Layout.** `make certs` writes the stream's files to the gitignored **`deploy/stream-certs/`**, not under `deploy/certs/`: `ca/` holds the stream CA (`rootCA.pem`, `rootCA-key.pem`; mkcert's `CAROOT`, never installed, never mounted); `controlplane/` and `gateway-1/` … `gateway-5/` each hold `cert.pem`, `key.pem` and `ca.pem` (a copy of the CA's certificate). Names, key usages and the reissue rule are ADR-0040's: the control plane's certificate names `controlplane`, `localhost` and `127.0.0.1`; each gateway's is `mkcert -client gateway-N`, its only DNS name the replica name. Keys are mode 0644 for ADR-0012's reason. Deleting `deploy/stream-certs/ca` and running `make certs` makes a new CA and reissues every certificate (Make sees each certificate older than the CA), which is M5's only revocation.
+- **Mounts.** The control plane mounts `deploy/stream-certs/controlplane` and gateway-N mounts `deploy/stream-certs/gateway-N`, read-only at `/etc/spillway-stream`; no container mounts another's directory or `ca/`. The directories, not the files, are mounted, so a reissue reaches running containers.
+- **Server** (`internal/mtls`, `internal/controlplane/stream`). TLS 1.3 only, `RequireAndVerifyClientCert` against the stream CA from `SPILLWAY_CP_GRPC_CLIENT_CA` only, via `GetConfigForClient`, which reads the current set on every handshake. Session tickets are off, so every connection is verified in full against the CA of its time. The control plane refuses to start without the three files (`SPILLWAY_CP_GRPC_TLS_CERT`, `_KEY`, `SPILLWAY_CP_GRPC_CLIENT_CA`) or with a set that does not load; there is no plaintext listener and no setting to make one.
+- **Refused handshakes are logged** by a wrapper around gRPC's TLS credentials: `config stream: TLS handshake refused`, with the peer's address and crypto/tls's reason (for example `tls: client didn't provide a certificate`, `x509: certificate signed by unknown authority`, `certificate has expired`, `incompatible key usage`), which carries no key material. One line per refused connection; a misconfigured gateway retries at most every 5 s (ADR-0046).
+- **The replica name.** Unary and stream interceptors take it from the verified leaf certificate (exactly one DNS name, a DNS label); otherwise `PERMISSION_DENIED`, logged as `config stream: client certificate refused` with the address, serial and DNS names. Watch and Heartbeat use that name. A request's `replica_id` may be **empty** (ADR-0038) or equal to it; a differing one is `PERMISSION_DENIED`, logged with both names (the request's cut to 64 bytes). A call with no verified certificate at all, which the listener cannot produce, is `UNAUTHENTICATED`.
+- **Gateway.** `SPILLWAY_GATEWAY_CP_CERT`, `_KEY`, `SPILLWAY_GATEWAY_CP_CA` are required in managed mode, and `SPILLWAY_GATEWAY_CP_SERVER_NAME` defaults to the host of `SPILLWAY_GATEWAY_CONTROL_PLANE`. TLS 1.3 only; the client certificate comes from `GetClientCertificate` (the current one), and the server's chain and name are checked in `VerifyConnection` against the current stream CA with the server-auth usage, because crypto/tls's own check cannot change roots per handshake (its `InsecureSkipVerify` is set only so that `VerifyConnection` does the same check with the CA of the moment). The replica name is the certificate's, read at start; a reloaded certificate that names another replica is refused like any set that does not load (logged, the current one kept), so the name holds until a restart. **`SPILLWAY_GATEWAY_REPLICA_ID` is removed**, as is the host-name default (ADR-0045's interim). A gateway whose files do not load at start does not start.
+- **Static mode ignores** the four stream settings, so compose sets them on every gateway; `SPILLWAY_GATEWAY_SNAPSHOT` stays managed-only.
+- **Reload.** Both ends poll their three files every second and compare SHA-256 of the content, like ADR-0012; a failed set is logged once per distinct content and the current one kept; open streams keep their connection until they reconnect.
+- **Compose and Prometheus.** The control plane publishes `127.0.0.1:9090` beside 8080 and 8081, per docs/ports.md (no port changes); inside the network each listens on all interfaces. Prometheus gets the `controlplane` job on `controlplane:8081`, deferred here from the watch task.
+- **Helm (M7).** ADR-0040's contract stands: each workload mounts a Secret with `cert.pem`, `key.pem` and `ca.pem` at `/etc/spillway-stream`, which matches these settings' compose values; one certificate per gateway replica (P10, decided in M7). The Helm Secret itself is built with the chart in M7; the SEC-02 box is ticked on the compose part plus this contract (P9).
+
+### Secrets (SEC-09)
+
+- **One package**, `internal/secret`: `FromEnv(getenv, X)` reads `X` or the file named by `X_FILE` (one trailing `\n` or `\r\n` trimmed); both set, an unreadable file or an empty one is an error that names the setting and the file, never the value; neither set is "unset", and `Required` makes that an error too. The value is a `secret.Value`, whose `String`, `GoString`, `Format` (every verb), `LogValue`, `MarshalJSON` and `MarshalText` give `[redacted]`. It keeps the value behind a pointer, so even `fmt` printing a struct whose unexported field holds one (where `fmt` does not call `String`) shows an address, not the value. Only `Reveal` returns it, at the call that hands it to Postgres or Redis.
+- **Settings that use it:** `SPILLWAY_CP_DATABASE_PASSWORD`, `SPILLWAY_CP_MIGRATE_PASSWORD` (required), `SPILLWAY_GATEWAY_REDIS_PASSWORD` (optional; `SPILLWAY_GATEWAY_REDIS_USERNAME` without it is an error), and the test helper's `SPILLWAY_CI_CLIENT_SECRET` (default `dev-only-not-secret`). The limiter's request clients and its health-check clients send the same `AUTH`, so a password never trips the breakers with `NOAUTH`. Spillway holds no Keycloak secret (ADR-0040); `KEYCLOAK_ADMIN_PASSWORD` and `POSTGRES_PASSWORD` stay compose-only env, and compose passes Spillway's secrets as env from `.env.example`, which the `_FILE` form can replace.
+- **Tests that hold the rule:** the secret type under every `fmt` verb, slog's JSON and text handlers and JSON; each setting from env and from a file; settings dumps (`%v`, `%+v`, `%#v`, slog) of both binaries; the gateway against a Redis that refuses the password (the password reaches Redis, no log line shows it); the control plane's existing database-down runs; the integration tests' host control planes, which now read their database password from a file and fail the test if their output holds a password or PEM key material; and `TestRedisAuth`, a one-node Redis Cluster testcontainer (`redis:8.10.3`, compose's image) with `requirepass` and an ACL user, announcing a host name that the address map resolves (ADR-0004): the default user's and the ACL user's passwords warm the limiter and decide calls, a wrong password or none is refused, and no log line shows any of them.
+
+## Consequences
+
+- No container can read the stream CA's key or another replica's key, and the traffic certificate's mount is unchanged.
+- An operator sees why a gateway cannot connect in the control plane's log, not only in the gateway's.
+- Managed mode now needs `make certs` (which `make dev` runs) and its files; a gateway's replica name changes only with a new certificate and a restart.
+- `deploy/stream-certs/` joins `deploy/certs/` as a gitignored local directory; docs/setup.md says what it is and how to revoke.
+
+## Alternatives considered
+
+- **ADR-0040's paths under `deploy/certs/`, masking `stream/` and `stream-ca/` with tmpfs mounts inside the gateways' `deploy/certs` mount** — relies on Docker's mount ordering and leaves the keys one changed mount away from every gateway.
+- **Moving the traffic certificate out of `deploy/certs/`** — churns ADR-0012's paths, the verify scripts and docs for no gain.
+- **`RequestClientCert` and verifying in `VerifyConnection` on the server too, to log every refusal from one place** — weaker by default than crypto/tls's own verification; the credentials wrapper logs the same refusals.
+- **Rejecting an empty `replica_id`** — ADR-0038 makes it optional; the certificate is the identity.
+- **Following a reloaded certificate's new name** — one process would appear as two replicas, and the live count would be wrong until the first name expired.

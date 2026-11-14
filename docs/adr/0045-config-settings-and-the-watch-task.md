@@ -1,6 +1,6 @@
 # 0045. Config settings, and the watch task's details
 
-- **Status:** Accepted
+- **Status:** Accepted; the interim until mtls-secrets ended by [ADR-0047](0047-stream-mtls-and-secrets-details.md)
 - **Date:** 2026-11-14
 - **Requirement IDs:** CP-02, CP-05, CP-06, CP-07, CP-18, CP-20, CP-22, RL-22, RL-24, RL-31, SEC-02
 
