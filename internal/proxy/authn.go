@@ -52,9 +52,11 @@ func (f *authFailure) write(w http.ResponseWriter) {
 // such a config before it applies (ADR-0039). Call it before serving.
 func (h *Handler) SetTokens(v *auth.Verifier) { h.tokens = v }
 
-// authenticate resolves a request's credential as its route's auth mode
-// says (GW-17 - GW-20, ADR-0039) and returns its consumer, nil for an
-// anonymous request, and the API key that resolved it, empty for a token.
+// authenticate resolves a request's credential against identity id as its
+// route's auth mode says (GW-17 - GW-20, ADR-0039) and returns its
+// consumer, nil for an anonymous request, and the API key that resolved
+// it, empty for a token, with the key's ID (0 for a static key or a
+// token).
 //
 //   - An X-API-Key that is sent is resolved on every mode but jwt, and
 //     decides: one value that resolves gives its consumer, anything else is
@@ -64,52 +66,59 @@ func (h *Handler) SetTokens(v *auth.Verifier) { h.tokens = v }
 //   - With neither, none is anonymous and the others are 401.
 //
 // The other credential's header is not read and goes upstream unchanged.
-func (h *Handler) authenticate(ctx context.Context, mode string, header http.Header, q *telemetry.Request) (*config.Consumer, string, *authFailure) {
+func (h *Handler) authenticate(ctx context.Context, id *config.Identity, mode string, header http.Header, q *telemetry.Request) (*config.Consumer, string, int64, *authFailure) {
 	if mode != config.AuthJWT {
 		if keys := header.Values("X-API-Key"); len(keys) > 0 {
 			q.KeyHash = config.KeyHash(keys[0])
 			if len(keys) != 1 {
-				return nil, "", errInvalidKey
+				return nil, "", 0, errInvalidKey
 			}
-			c, ok := h.identity().Lookup(keys[0])
+			c, keyID, ok := id.Resolve(keys[0])
 			if !ok {
-				return nil, "", errInvalidKey
+				return nil, "", 0, errInvalidKey
 			}
-			return c, keys[0], nil
+			return c, keys[0], keyID, nil
 		}
 	}
 	switch mode {
 	case config.AuthAPIKey:
-		return nil, "", errKeyRequired
+		return nil, "", 0, errKeyRequired
 	case config.AuthJWT, config.AuthEither:
 	default:
-		return nil, "", nil
+		return nil, "", 0, nil
 	}
 	values := header.Values("Authorization")
 	if len(values) == 0 {
 		if mode == config.AuthJWT {
-			return nil, "", errTokenRequired
+			return nil, "", 0, errTokenRequired
 		}
-		return nil, "", errCredentialRequired
+		return nil, "", 0, errCredentialRequired
 	}
 	scheme, token, _ := strings.Cut(values[0], " ")
 	token = strings.TrimSpace(token)
 	if len(values) > 1 || !strings.EqualFold(scheme, "Bearer") || token == "" {
-		return nil, "", errInvalidToken
+		return nil, "", 0, errInvalidToken
 	}
 	if h.tokens == nil {
-		return nil, "", errTokenKeys
+		return nil, "", 0, errTokenKeys
 	}
 	claims, err := h.tokens.Verify(ctx, token)
 	switch {
 	case errors.Is(err, auth.ErrUnavailable):
-		return nil, "", errTokenKeys
+		return nil, "", 0, errTokenKeys
 	case err != nil:
-		return nil, "", errInvalidToken
+		return nil, "", 0, errInvalidToken
 	}
-	c, ok := h.identity().Subject(claims.Subject)
+	c, ok := id.Subject(claims.Subject)
 	if !ok {
-		return nil, "", errInvalidToken
+		return nil, "", 0, errInvalidToken
 	}
-	return c, "", nil
+	return c, "", 0, nil
+}
+
+// forbidden answers a request that an access list denies, or whose
+// consumer or tenant is suspended: 403, a gateway answer with reason none
+// that says nothing about why (ADR-0039, ADR-0041).
+func forbidden(w http.ResponseWriter) {
+	jsonError(w, http.StatusForbidden, "forbidden")
 }
