@@ -1,6 +1,6 @@
 # 0044. Config import and export: details
 
-- **Status:** Accepted
+- **Status:** Accepted; the `ratelimit` section superseded by [0045](0045-config-settings-and-the-watch-task.md)
 - **Date:** 2026-11-14
 - **Requirement IDs:** CP-05, CP-02, CP-13, CP-14, CP-21, SEC-06, RL-24, RL-31
 
