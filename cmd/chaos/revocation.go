@@ -118,7 +118,21 @@ func runRevocation(ctx context.Context, args []string, stdin io.Reader, stdout, 
 		_, _ = fmt.Fprintln(stderr, "chaos revocation: no bearer token on stdin", err)
 		return 2
 	}
-	r := revocationRun{o: o, token: token, client: &http.Client{Transport: &http.Transport{MaxIdleConnsPerHost: 4}}}
+	r := revocationRun{o: o, client: &http.Client{Transport: &http.Transport{MaxIdleConnsPerHost: 4}},
+		bearer: func(context.Context) (string, error) { return token, nil }}
+	rep, verdict := r.run(ctx)
+	_ = json.NewEncoder(stdout).Encode(rep)
+	_, _ = fmt.Fprintln(stderr, verdict)
+	if !rep.Pass {
+		return 1
+	}
+	return 0
+}
+
+// run runs r.o.rounds revocations and returns the report and its PASS/FAIL
+// line.
+func (r *revocationRun) run(ctx context.Context) (revocationReport, string) {
+	o := r.o
 	rep := revocationReport{LimitMS: ms(o.limit), Pass: true}
 	var samples []float64
 	for range o.rounds {
@@ -138,20 +152,16 @@ func runRevocation(ctx context.Context, args []string, stdin io.Reader, stdout, 
 	if n := len(samples); n > 0 {
 		rep.P50MS, rep.MaxMS = samples[(n-1)/2], samples[n-1]
 	}
-	_ = json.NewEncoder(stdout).Encode(rep)
 	verdict := map[bool]string{true: "PASS", false: "FAIL"}[rep.Pass]
-	_, _ = fmt.Fprintf(stderr, "%s revocation rejected on all %d replicas: %d of %d rounds, p50 %.0f ms, max %.0f ms (limit %.0f ms, every sample)\n",
+	return rep, fmt.Sprintf("%s revocation rejected on all %d replicas: %d of %d rounds, p50 %.0f ms, max %.0f ms (limit %.0f ms, every sample)",
 		verdict, len(o.gateways), len(samples), o.rounds, rep.P50MS, rep.MaxMS, rep.LimitMS)
-	if !rep.Pass {
-		return 1
-	}
-	return 0
 }
 
 type revocationRun struct {
 	o      revocationOptions
-	token  string
 	client *http.Client
+	// bearer returns the control plane's bearer token, never printed.
+	bearer func(context.Context) (string, error)
 }
 
 func ms(d time.Duration) float64 { return float64(d.Microseconds()) / 1000 }
@@ -267,13 +277,17 @@ func (r *revocationRun) probe(ctx context.Context, g, key string) (int, error) {
 // the answer into out unless nil; any status but want is an error, with
 // the answer's error message (which never holds a key).
 func (r *revocationRun) rest(ctx context.Context, path string, want int, out any) error {
+	token, err := r.bearer(ctx)
+	if err != nil {
+		return err
+	}
 	ctx, cancel := context.WithTimeout(ctx, r.o.restTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, r.o.controlPlane+path, bytes.NewReader([]byte("{}")))
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+r.token)
+	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := r.client.Do(req)
 	if err != nil {
