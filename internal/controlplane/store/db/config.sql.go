@@ -287,19 +287,27 @@ func (q *Queries) GetUpstream(ctx context.Context, id int64) (Upstream, error) {
 }
 
 const latestConfigVersion = `-- name: LatestConfigVersion :one
-SELECT version, snapshot FROM config_versions ORDER BY version DESC LIMIT 1
+SELECT version, published_at, published_by, note, kind, rollback_of, working_set_revision, schema_major, schema_minor, snapshot, created_at, updated_at FROM config_versions ORDER BY version DESC LIMIT 1
 `
 
-type LatestConfigVersionRow struct {
-	Version  int64
-	Snapshot []byte
-}
-
 // config_versions_pkey, backward scan.
-func (q *Queries) LatestConfigVersion(ctx context.Context) (LatestConfigVersionRow, error) {
+func (q *Queries) LatestConfigVersion(ctx context.Context) (ConfigVersion, error) {
 	row := q.db.QueryRow(ctx, latestConfigVersion)
-	var i LatestConfigVersionRow
-	err := row.Scan(&i.Version, &i.Snapshot)
+	var i ConfigVersion
+	err := row.Scan(
+		&i.Version,
+		&i.PublishedAt,
+		&i.PublishedBy,
+		&i.Note,
+		&i.Kind,
+		&i.RollbackOf,
+		&i.WorkingSetRevision,
+		&i.SchemaMajor,
+		&i.SchemaMinor,
+		&i.Snapshot,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
 	return i, err
 }
 

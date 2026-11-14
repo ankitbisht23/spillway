@@ -15,7 +15,7 @@ SELECT 1 FROM config_working_set WHERE id = 1 FOR SHARE;
 
 -- name: LatestConfigVersion :one
 -- config_versions_pkey, backward scan.
-SELECT version, snapshot FROM config_versions ORDER BY version DESC LIMIT 1;
+SELECT * FROM config_versions ORDER BY version DESC LIMIT 1;
 
 -- name: ListUpstreams :many
 -- upstreams_pkey keyset scan; upstreams_name_key for ?name=.

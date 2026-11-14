@@ -62,6 +62,69 @@ func (e AccessListEntrySubjectType) Valid() bool {
 	}
 }
 
+// Defines values for ConfigChangeChange.
+const (
+	Added   ConfigChangeChange = "added"
+	Changed ConfigChangeChange = "changed"
+	Removed ConfigChangeChange = "removed"
+)
+
+// Valid indicates whether the value is a known member of the ConfigChangeChange enum.
+func (e ConfigChangeChange) Valid() bool {
+	switch e {
+	case Added:
+		return true
+	case Changed:
+		return true
+	case Removed:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ConfigChangeEntity.
+const (
+	ConfigChangeEntityPlan     ConfigChangeEntity = "plan"
+	ConfigChangeEntityPolicy   ConfigChangeEntity = "policy"
+	ConfigChangeEntityRoute    ConfigChangeEntity = "route"
+	ConfigChangeEntityUpstream ConfigChangeEntity = "upstream"
+)
+
+// Valid indicates whether the value is a known member of the ConfigChangeEntity enum.
+func (e ConfigChangeEntity) Valid() bool {
+	switch e {
+	case ConfigChangeEntityPlan:
+		return true
+	case ConfigChangeEntityPolicy:
+		return true
+	case ConfigChangeEntityRoute:
+		return true
+	case ConfigChangeEntityUpstream:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ConfigVersionKind.
+const (
+	Publish  ConfigVersionKind = "publish"
+	Rollback ConfigVersionKind = "rollback"
+)
+
+// Valid indicates whether the value is a known member of the ConfigVersionKind enum.
+func (e ConfigVersionKind) Valid() bool {
+	switch e {
+	case Publish:
+		return true
+	case Rollback:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ConsumerStatus.
 const (
 	ConsumerStatusActive    ConsumerStatus = "active"
@@ -315,6 +378,12 @@ type AuditRecord struct {
 	RequestId string `json:"request_id"`
 }
 
+// ChangeNote defines model for ChangeNote.
+type ChangeNote struct {
+	// Note What the change is for; stored with the version and in the audit log (UI-02).
+	Note string `json:"note"`
+}
+
 // CircuitBreaker defines model for CircuitBreaker.
 type CircuitBreaker struct {
 	ErrorRate      *float64 `json:"error_rate,omitempty"`
@@ -325,6 +394,79 @@ type CircuitBreaker struct {
 	MinRequests    *int32   `json:"min_requests,omitempty"`
 	OpenFor        *string  `json:"open_for,omitempty"`
 	Window         *string  `json:"window,omitempty"`
+}
+
+// ConfigChange A config entity added, removed or changed; entities are matched by id, so a rename is a change.
+type ConfigChange struct {
+	Change ConfigChangeChange `json:"change"`
+	Entity ConfigChangeEntity `json:"entity"`
+	Id     int64              `json:"id"`
+
+	// Name The name after the change; before it for a removal.
+	Name string `json:"name"`
+}
+
+// ConfigChangeChange defines model for ConfigChange.Change.
+type ConfigChangeChange string
+
+// ConfigChangeEntity defines model for ConfigChange.Entity.
+type ConfigChangeEntity string
+
+// ConfigDiff defines model for ConfigDiff.
+type ConfigDiff struct {
+	Changes []ConfigChange `json:"changes"`
+
+	// Diff A unified diff of the canonical YAML of the two versions.
+	Diff        string `json:"diff"`
+	FromVersion int64  `json:"from_version"`
+	ToVersion   int64  `json:"to_version"`
+}
+
+// ConfigValidation defines model for ConfigValidation.
+type ConfigValidation struct {
+	// BaseVersion The latest published version; null before the first.
+	BaseVersion *int64         `json:"base_version"`
+	Changes     []ConfigChange `json:"changes"`
+
+	// Diff A unified diff of the canonical YAML from base_version to the working set; empty when nothing changed.
+	Diff   string        `json:"diff"`
+	Errors []ErrorDetail `json:"errors"`
+	Valid  bool          `json:"valid"`
+
+	// WorkingSetRevision What publish's If-Match carries.
+	WorkingSetRevision int64 `json:"working_set_revision"`
+}
+
+// ConfigVersion defines model for ConfigVersion.
+type ConfigVersion struct {
+	Kind        ConfigVersionKind `json:"kind"`
+	Note        string            `json:"note"`
+	PublishedAt time.Time         `json:"published_at"`
+
+	// PublishedBy The publisher's token sub.
+	PublishedBy string `json:"published_by"`
+
+	// RollbackOf For a rollback, the version it copies.
+	RollbackOf *int64 `json:"rollback_of"`
+
+	// SchemaVersion The snapshot schema version (CP-18).
+	SchemaVersion SchemaVersion `json:"schema_version"`
+
+	// Snapshot Only when one version is read: the published config, config.proto's Config message with proto field names (CP-21), its version and every entity's id included; 64-bit integers are JSON numbers.
+	Snapshot *map[string]interface{} `json:"snapshot,omitempty"`
+	Version  int64                   `json:"version"`
+
+	// WorkingSetRevision The working-set revision the version was published from.
+	WorkingSetRevision int64 `json:"working_set_revision"`
+}
+
+// ConfigVersionKind defines model for ConfigVersion.Kind.
+type ConfigVersionKind string
+
+// ConfigVersionList defines model for ConfigVersionList.
+type ConfigVersionList struct {
+	Items      []ConfigVersion `json:"items"`
+	NextCursor *string         `json:"next_cursor"`
 }
 
 // Consumer defines model for Consumer.
@@ -587,6 +729,12 @@ type RouteMatch struct {
 	PathPrefix *string        `json:"path_prefix,omitempty"`
 }
 
+// SchemaVersion The snapshot schema version (CP-18).
+type SchemaVersion struct {
+	Major int32 `json:"major"`
+	Minor int32 `json:"minor"`
+}
+
 // Tenant defines model for Tenant.
 type Tenant struct {
 	CreatedAt *time.Time `json:"created_at,omitempty"`
@@ -650,6 +798,9 @@ type UpstreamList struct {
 // ActionFilter defines model for ActionFilter.
 type ActionFilter string
 
+// ConfigVersionNumber defines model for ConfigVersionNumber.
+type ConfigVersionNumber = int64
+
 // ConsumerIdFilter defines model for ConsumerIdFilter.
 type ConsumerIdFilter = int64
 
@@ -671,6 +822,9 @@ type PageLimit = int32
 // PolicyIdFilter defines model for PolicyIdFilter.
 type PolicyIdFilter = int64
 
+// RevisionIfMatch defines model for RevisionIfMatch.
+type RevisionIfMatch = string
+
 // SubjectTypeFilter defines model for SubjectTypeFilter.
 type SubjectTypeFilter string
 
@@ -679,6 +833,9 @@ type TenantIdFilter = int64
 
 // BadRequest defines model for BadRequest.
 type BadRequest = Error
+
+// ConfigValidationFailed defines model for ConfigValidationFailed.
+type ConfigValidationFailed = Error
 
 // Conflict defines model for Conflict.
 type Conflict = Error
@@ -694,6 +851,9 @@ type PreconditionFailed = Error
 
 // PreconditionRequired defines model for PreconditionRequired.
 type PreconditionRequired = Error
+
+// RevisionPreconditionFailed defines model for RevisionPreconditionFailed.
+type RevisionPreconditionFailed = Error
 
 // UnsupportedMediaType defines model for UnsupportedMediaType.
 type UnsupportedMediaType = Error
@@ -756,6 +916,33 @@ type ListAuditParams struct {
 
 	// Until Only records before this time.
 	Until *time.Time `form:"until,omitempty" json:"until,omitempty"`
+}
+
+// PublishConfigParams defines parameters for PublishConfig.
+type PublishConfigParams struct {
+	// IfMatch The config working-set revision as a strong ETag, "<revision>", as validate answered it (CP-02). Missing is 428; any other value than the current revision is 412.
+	IfMatch RevisionIfMatch `json:"If-Match"`
+}
+
+// ListConfigVersionsParams defines parameters for ListConfigVersions.
+type ListConfigVersionsParams struct {
+	// Limit Page size.
+	Limit *PageLimit `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Cursor The next_cursor of the previous page; opaque.
+	Cursor *PageCursor `form:"cursor,omitempty" json:"cursor,omitempty"`
+}
+
+// DiffConfigVersionParams defines parameters for DiffConfigVersion.
+type DiffConfigVersionParams struct {
+	// Against The version to compare with; default v-1. 0 is the empty config before the first version.
+	Against *int64 `form:"against,omitempty" json:"against,omitempty"`
+}
+
+// RollbackConfigParams defines parameters for RollbackConfig.
+type RollbackConfigParams struct {
+	// IfMatch The config working-set revision as a strong ETag, "<revision>", as validate answered it (CP-02). Missing is 428; any other value than the current revision is 412.
+	IfMatch RevisionIfMatch `json:"If-Match"`
 }
 
 // ListConsumersParams defines parameters for ListConsumers.
@@ -953,6 +1140,12 @@ type CreateAccessListJSONRequestBody = AccessListEntry
 // UpdateAccessListJSONRequestBody defines body for UpdateAccessList for application/json ContentType.
 type UpdateAccessListJSONRequestBody = AccessListEntry
 
+// PublishConfigJSONRequestBody defines body for PublishConfig for application/json ContentType.
+type PublishConfigJSONRequestBody = ChangeNote
+
+// RollbackConfigJSONRequestBody defines body for RollbackConfig for application/json ContentType.
+type RollbackConfigJSONRequestBody = ChangeNote
+
 // CreateConsumerJSONRequestBody defines body for CreateConsumer for application/json ContentType.
 type CreateConsumerJSONRequestBody = Consumer
 
@@ -1015,6 +1208,24 @@ type ServerInterface interface {
 	// ListAudit List audit records, newest first (CP-13)
 	// (GET /audit)
 	ListAudit(w http.ResponseWriter, r *http.Request, params ListAuditParams)
+	// PublishConfig Publish the config working set as a new config version with a change note, if it is still at the revision the preview showed (CP-02); the working set must pass validation (CP-03)
+	// (POST /config/publish)
+	PublishConfig(w http.ResponseWriter, r *http.Request, params PublishConfigParams)
+	// ValidateConfig Validate the config working set as a publish would (CP-03, SEC-06) and preview it against the latest published version (UI-02). Validation errors are data: the answer is 200 either way, and its ETag is the working-set revision that publish's If-Match carries (CP-02)
+	// (POST /config/validate)
+	ValidateConfig(w http.ResponseWriter, r *http.Request)
+	// ListConfigVersions List published config versions, newest first (CP-02)
+	// (GET /config/versions)
+	ListConfigVersions(w http.ResponseWriter, r *http.Request, params ListConfigVersionsParams)
+	// GetConfigVersion Read a published config version with its snapshot (CP-02)
+	// (GET /config/versions/{v})
+	GetConfigVersion(w http.ResponseWriter, r *http.Request, v ConfigVersionNumber)
+	// DiffConfigVersion The changes from another published version to this one (UI-06)
+	// (GET /config/versions/{v}/diff)
+	DiffConfigVersion(w http.ResponseWriter, r *http.Request, v ConfigVersionNumber, params DiffConfigVersionParams)
+	// RollbackConfig Publish a copy of an earlier config version as a new version and reset the config working set to it (CP-04); identity is never rolled back (CP-20), and a rollback that identity still refers past is refused
+	// (POST /config/versions/{v}/rollback)
+	RollbackConfig(w http.ResponseWriter, r *http.Request, v ConfigVersionNumber, params RollbackConfigParams)
 	// ListConsumers List consumers, by id ascending
 	// (GET /consumers)
 	ListConsumers(w http.ResponseWriter, r *http.Request, params ListConsumersParams)
@@ -1459,6 +1670,233 @@ func (siw *ServerInterfaceWrapper) ListAudit(w http.ResponseWriter, r *http.Requ
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.ListAudit(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// PublishConfig operation middleware
+func (siw *ServerInterfaceWrapper) PublishConfig(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params PublishConfigParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "If-Match" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("If-Match")]; found {
+		var IfMatch RevisionIfMatch
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "If-Match", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "If-Match", valueList[0], &IfMatch, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "If-Match", Err: err})
+			return
+		}
+
+		params.IfMatch = IfMatch
+
+	} else {
+		err := fmt.Errorf("Header parameter If-Match is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "If-Match", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.PublishConfig(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ValidateConfig operation middleware
+func (siw *ServerInterfaceWrapper) ValidateConfig(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ValidateConfig(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListConfigVersions operation middleware
+func (siw *ServerInterfaceWrapper) ListConfigVersions(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListConfigVersionsParams
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: "int32"})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", r.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "cursor"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cursor", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListConfigVersions(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetConfigVersion operation middleware
+func (siw *ServerInterfaceWrapper) GetConfigVersion(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "v" -------------
+	var v ConfigVersionNumber
+
+	err = runtime.BindStyledParameterWithOptions("simple", "v", r.PathValue("v"), &v, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "v", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetConfigVersion(w, r, v)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DiffConfigVersion operation middleware
+func (siw *ServerInterfaceWrapper) DiffConfigVersion(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "v" -------------
+	var v ConfigVersionNumber
+
+	err = runtime.BindStyledParameterWithOptions("simple", "v", r.PathValue("v"), &v, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "v", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params DiffConfigVersionParams
+
+	// ------------- Optional query parameter "against" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "against", r.URL.Query(), &params.Against, runtime.BindQueryParameterOptions{Type: "integer", Format: "int64"})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "against"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "against", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DiffConfigVersion(w, r, v, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RollbackConfig operation middleware
+func (siw *ServerInterfaceWrapper) RollbackConfig(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "v" -------------
+	var v ConfigVersionNumber
+
+	err = runtime.BindStyledParameterWithOptions("simple", "v", r.PathValue("v"), &v, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "v", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params RollbackConfigParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "If-Match" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("If-Match")]; found {
+		var IfMatch RevisionIfMatch
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "If-Match", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "If-Match", valueList[0], &IfMatch, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "If-Match", Err: err})
+			return
+		}
+
+		params.IfMatch = IfMatch
+
+	} else {
+		err := fmt.Errorf("Header parameter If-Match is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "If-Match", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RollbackConfig(w, r, v, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -3223,12 +3661,20 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/access-lists/{id}", wrapper.DeleteAccessList)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/access-lists/{id}", wrapper.GetAccessList)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/access-lists/{id}", wrapper.UpdateAccessList)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/config/validate", wrapper.ValidateConfig)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/config/publish", wrapper.PublishConfig)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/config/versions", wrapper.ListConfigVersions)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/config/versions/{v}", wrapper.GetConfigVersion)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/config/versions/{v}/diff", wrapper.DiffConfigVersion)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/config/versions/{v}/rollback", wrapper.RollbackConfig)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/audit", wrapper.ListAudit)
 
 	return m
 }
 
 type BadRequestJSONResponse Error
+
+type ConfigValidationFailedJSONResponse Error
 
 type ConflictJSONResponse Error
 
@@ -3241,6 +3687,8 @@ type PayloadTooLargeJSONResponse Error
 type PreconditionFailedJSONResponse Error
 
 type PreconditionRequiredJSONResponse Error
+
+type RevisionPreconditionFailedJSONResponse Error
 
 type UnsupportedMediaTypeJSONResponse Error
 
@@ -3788,6 +4236,521 @@ type ListAuditdefaultJSONResponse struct {
 }
 
 func (response ListAuditdefaultJSONResponse) VisitListAuditResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PublishConfigRequestObject struct {
+	Params PublishConfigParams
+	Body   *PublishConfigJSONRequestBody
+}
+
+type PublishConfigResponseObject interface {
+	VisitPublishConfigResponse(w http.ResponseWriter) error
+}
+
+type PublishConfig200JSONResponse ConfigVersion
+
+func (response PublishConfig200JSONResponse) VisitPublishConfigResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PublishConfig400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response PublishConfig400JSONResponse) VisitPublishConfigResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PublishConfig409JSONResponse Error
+
+func (response PublishConfig409JSONResponse) VisitPublishConfigResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PublishConfig412JSONResponse struct {
+	RevisionPreconditionFailedJSONResponse
+}
+
+func (response PublishConfig412JSONResponse) VisitPublishConfigResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(412)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PublishConfig413JSONResponse struct{ PayloadTooLargeJSONResponse }
+
+func (response PublishConfig413JSONResponse) VisitPublishConfigResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(413)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PublishConfig415JSONResponse struct {
+	UnsupportedMediaTypeJSONResponse
+}
+
+func (response PublishConfig415JSONResponse) VisitPublishConfigResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(415)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PublishConfig422JSONResponse struct {
+	ConfigValidationFailedJSONResponse
+}
+
+func (response PublishConfig422JSONResponse) VisitPublishConfigResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PublishConfig428JSONResponse struct {
+	PreconditionRequiredJSONResponse
+}
+
+func (response PublishConfig428JSONResponse) VisitPublishConfigResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(428)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PublishConfigdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response PublishConfigdefaultJSONResponse) VisitPublishConfigResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ValidateConfigRequestObject struct {
+}
+
+type ValidateConfigResponseObject interface {
+	VisitValidateConfigResponse(w http.ResponseWriter) error
+}
+
+type ValidateConfig200ResponseHeaders struct {
+	ETag *string
+}
+
+type ValidateConfig200JSONResponse struct {
+	Body    ConfigValidation
+	Headers ValidateConfig200ResponseHeaders
+}
+
+func (response ValidateConfig200JSONResponse) VisitValidateConfigResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.ETag != nil {
+		w.Header().Set("ETag", fmt.Sprint(*response.Headers.ETag))
+	}
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ValidateConfigdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ValidateConfigdefaultJSONResponse) VisitValidateConfigResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListConfigVersionsRequestObject struct {
+	Params ListConfigVersionsParams
+}
+
+type ListConfigVersionsResponseObject interface {
+	VisitListConfigVersionsResponse(w http.ResponseWriter) error
+}
+
+type ListConfigVersions200JSONResponse ConfigVersionList
+
+func (response ListConfigVersions200JSONResponse) VisitListConfigVersionsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListConfigVersions400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response ListConfigVersions400JSONResponse) VisitListConfigVersionsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListConfigVersionsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ListConfigVersionsdefaultJSONResponse) VisitListConfigVersionsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetConfigVersionRequestObject struct {
+	V ConfigVersionNumber `json:"v"`
+}
+
+type GetConfigVersionResponseObject interface {
+	VisitGetConfigVersionResponse(w http.ResponseWriter) error
+}
+
+type GetConfigVersion200JSONResponse ConfigVersion
+
+func (response GetConfigVersion200JSONResponse) VisitGetConfigVersionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetConfigVersion404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response GetConfigVersion404JSONResponse) VisitGetConfigVersionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetConfigVersiondefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetConfigVersiondefaultJSONResponse) VisitGetConfigVersionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DiffConfigVersionRequestObject struct {
+	V      ConfigVersionNumber `json:"v"`
+	Params DiffConfigVersionParams
+}
+
+type DiffConfigVersionResponseObject interface {
+	VisitDiffConfigVersionResponse(w http.ResponseWriter) error
+}
+
+type DiffConfigVersion200JSONResponse ConfigDiff
+
+func (response DiffConfigVersion200JSONResponse) VisitDiffConfigVersionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DiffConfigVersion400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response DiffConfigVersion400JSONResponse) VisitDiffConfigVersionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DiffConfigVersion404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response DiffConfigVersion404JSONResponse) VisitDiffConfigVersionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DiffConfigVersiondefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response DiffConfigVersiondefaultJSONResponse) VisitDiffConfigVersionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RollbackConfigRequestObject struct {
+	V      ConfigVersionNumber `json:"v"`
+	Params RollbackConfigParams
+	Body   *RollbackConfigJSONRequestBody
+}
+
+type RollbackConfigResponseObject interface {
+	VisitRollbackConfigResponse(w http.ResponseWriter) error
+}
+
+type RollbackConfig200JSONResponse ConfigVersion
+
+func (response RollbackConfig200JSONResponse) VisitRollbackConfigResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RollbackConfig400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response RollbackConfig400JSONResponse) VisitRollbackConfigResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RollbackConfig404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response RollbackConfig404JSONResponse) VisitRollbackConfigResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RollbackConfig412JSONResponse struct {
+	RevisionPreconditionFailedJSONResponse
+}
+
+func (response RollbackConfig412JSONResponse) VisitRollbackConfigResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(412)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RollbackConfig413JSONResponse struct{ PayloadTooLargeJSONResponse }
+
+func (response RollbackConfig413JSONResponse) VisitRollbackConfigResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(413)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RollbackConfig415JSONResponse struct {
+	UnsupportedMediaTypeJSONResponse
+}
+
+func (response RollbackConfig415JSONResponse) VisitRollbackConfigResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(415)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RollbackConfig422JSONResponse struct {
+	ConfigValidationFailedJSONResponse
+}
+
+func (response RollbackConfig422JSONResponse) VisitRollbackConfigResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RollbackConfig428JSONResponse struct {
+	PreconditionRequiredJSONResponse
+}
+
+func (response RollbackConfig428JSONResponse) VisitRollbackConfigResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(428)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RollbackConfigdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response RollbackConfigdefaultJSONResponse) VisitRollbackConfigResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -7482,6 +8445,24 @@ type StrictServerInterface interface {
 	// ListAudit List audit records, newest first (CP-13)
 	// (GET /audit)
 	ListAudit(ctx context.Context, request ListAuditRequestObject) (ListAuditResponseObject, error)
+	// PublishConfig Publish the config working set as a new config version with a change note, if it is still at the revision the preview showed (CP-02); the working set must pass validation (CP-03)
+	// (POST /config/publish)
+	PublishConfig(ctx context.Context, request PublishConfigRequestObject) (PublishConfigResponseObject, error)
+	// ValidateConfig Validate the config working set as a publish would (CP-03, SEC-06) and preview it against the latest published version (UI-02). Validation errors are data: the answer is 200 either way, and its ETag is the working-set revision that publish's If-Match carries (CP-02)
+	// (POST /config/validate)
+	ValidateConfig(ctx context.Context, request ValidateConfigRequestObject) (ValidateConfigResponseObject, error)
+	// ListConfigVersions List published config versions, newest first (CP-02)
+	// (GET /config/versions)
+	ListConfigVersions(ctx context.Context, request ListConfigVersionsRequestObject) (ListConfigVersionsResponseObject, error)
+	// GetConfigVersion Read a published config version with its snapshot (CP-02)
+	// (GET /config/versions/{v})
+	GetConfigVersion(ctx context.Context, request GetConfigVersionRequestObject) (GetConfigVersionResponseObject, error)
+	// DiffConfigVersion The changes from another published version to this one (UI-06)
+	// (GET /config/versions/{v}/diff)
+	DiffConfigVersion(ctx context.Context, request DiffConfigVersionRequestObject) (DiffConfigVersionResponseObject, error)
+	// RollbackConfig Publish a copy of an earlier config version as a new version and reset the config working set to it (CP-04); identity is never rolled back (CP-20), and a rollback that identity still refers past is refused
+	// (POST /config/versions/{v}/rollback)
+	RollbackConfig(ctx context.Context, request RollbackConfigRequestObject) (RollbackConfigResponseObject, error)
 	// ListConsumers List consumers, by id ascending
 	// (GET /consumers)
 	ListConsumers(ctx context.Context, request ListConsumersRequestObject) (ListConsumersResponseObject, error)
@@ -7797,6 +8778,176 @@ func (sh *strictHandler) ListAudit(w http.ResponseWriter, r *http.Request, param
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(ListAuditResponseObject); ok {
 		if err := validResponse.VisitListAuditResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// PublishConfig operation middleware
+func (sh *strictHandler) PublishConfig(w http.ResponseWriter, r *http.Request, params PublishConfigParams) {
+	var request PublishConfigRequestObject
+
+	request.Params = params
+
+	var body PublishConfigJSONRequestBody
+	if err := runtime.BindJSONBody(r, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.PublishConfig(ctx, request.(PublishConfigRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "PublishConfig")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(PublishConfigResponseObject); ok {
+		if err := validResponse.VisitPublishConfigResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ValidateConfig operation middleware
+func (sh *strictHandler) ValidateConfig(w http.ResponseWriter, r *http.Request) {
+	var request ValidateConfigRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ValidateConfig(ctx, request.(ValidateConfigRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ValidateConfig")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ValidateConfigResponseObject); ok {
+		if err := validResponse.VisitValidateConfigResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListConfigVersions operation middleware
+func (sh *strictHandler) ListConfigVersions(w http.ResponseWriter, r *http.Request, params ListConfigVersionsParams) {
+	var request ListConfigVersionsRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListConfigVersions(ctx, request.(ListConfigVersionsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListConfigVersions")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListConfigVersionsResponseObject); ok {
+		if err := validResponse.VisitListConfigVersionsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetConfigVersion operation middleware
+func (sh *strictHandler) GetConfigVersion(w http.ResponseWriter, r *http.Request, v ConfigVersionNumber) {
+	var request GetConfigVersionRequestObject
+
+	request.V = v
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetConfigVersion(ctx, request.(GetConfigVersionRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetConfigVersion")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetConfigVersionResponseObject); ok {
+		if err := validResponse.VisitGetConfigVersionResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DiffConfigVersion operation middleware
+func (sh *strictHandler) DiffConfigVersion(w http.ResponseWriter, r *http.Request, v ConfigVersionNumber, params DiffConfigVersionParams) {
+	var request DiffConfigVersionRequestObject
+
+	request.V = v
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DiffConfigVersion(ctx, request.(DiffConfigVersionRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DiffConfigVersion")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DiffConfigVersionResponseObject); ok {
+		if err := validResponse.VisitDiffConfigVersionResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// RollbackConfig operation middleware
+func (sh *strictHandler) RollbackConfig(w http.ResponseWriter, r *http.Request, v ConfigVersionNumber, params RollbackConfigParams) {
+	var request RollbackConfigRequestObject
+
+	request.V = v
+	request.Params = params
+
+	var body RollbackConfigJSONRequestBody
+	if err := runtime.BindJSONBody(r, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RollbackConfig(ctx, request.(RollbackConfigRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RollbackConfig")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RollbackConfigResponseObject); ok {
+		if err := validResponse.VisitRollbackConfigResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -8872,98 +10023,121 @@ func (sh *strictHandler) DrainEndpoint(w http.ResponseWriter, r *http.Request, i
 // const string: with thousands of chunks the chained `+` fold is several
 // times slower for the Go compiler than parsing a slice literal.
 var swaggerSpec = []string{
-	"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",
-	"j3R13/8fAA==",
+	"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",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,

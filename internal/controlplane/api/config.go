@@ -62,7 +62,7 @@ func (s *Server) parseConfig(ctx context.Context, k configKind, body any) (store
 		}
 	}
 	var err error
-	in.Spec, err = specOf(m)
+	in.Spec, err = store.SpecOf(m)
 	return in, err
 }
 

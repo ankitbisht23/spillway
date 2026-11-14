@@ -244,7 +244,7 @@ Postgres holds every config and identity entity; the control plane validates and
 
 - **CP-01** (M5) Entities, in two streams (ADR-0005). Config: upstreams (with endpoints), routes, policies, plans. Identity: tenants, consumers, API keys, access lists, overrides (incl. time-boxed burst grants).
 - **CP-02** (M5) Config edits change working tables; a publish, with a change note, writes the full config as a snapshot with a new, monotonically increasing config version. Publish takes `If-Match` on the working-set revision shown in the diff preview (UI-02), so edits made after the preview can’t ship unreviewed.
-- **CP-03** (M5) Validation before publish: schema, references (route → upstream; a policy still used by an override cannot be removed), regex compile, burst and cost rules (RL-03), policy conflicts (two policies at the same level matching the same route and method), and a dry compile of the gateway routing table.
+- **CP-03** (M5) Validation before publish: schema, references (route → upstream; a policy still used by an override cannot be removed), regex compile, burst and cost rules (RL-03), policy conflicts (two enforce-mode policies at the same level, with the same algorithm and key template, matching the same route and method), and a dry compile of the gateway routing table.
 - **CP-04** (M5) Rollback republishes an earlier config snapshot as a new config version and resets the config working tables to it; identity is never rolled back (CP-20).
 - **CP-05** (M1 file, M5 API) Declarative YAML import and export of the full config, for GitOps and static mode.
 - **CP-19** (M5) Postgres migrations (goose) run as a separate step (`controlplane migrate`): compose runs it before the API starts, Helm as a pre-install/pre-upgrade Job. Migrations stay backward compatible for one release (expand, then contract) so rolling deploys never break the running version.
@@ -670,7 +670,7 @@ Exit (`make verify-m4`): with one of three endpoints failing, ≥ 99% of request
 - [x] Postgres schema; CRUD admin API, OpenAPI-first (`api/openapi.yaml`, oapi-codegen server stubs, `oasdiff` in CI), incl. tenants, access lists, key listing and endpoint drain (CP-01, CP-10, CP-14)
 - [x] Migrations as a separate `controlplane migrate` step: compose runs it before the API, Helm as a pre-install/pre-upgrade Job; expand, then contract (CP-19)
 - [ ] YAML import and export through the API (CP-05)
-- [ ] Validate, publish with a change note and `If-Match` on the working-set revision, version, rollback (config only); upstream allow-list checked in API validation (CP-02–CP-04, SEC-06)
+- [x] Validate, publish with a change note and `If-Match` on the working-set revision, version, rollback (config only); upstream allow-list checked in API validation (CP-02–CP-04, SEC-06)
 - [ ] Identity changes applied immediately with their own version, audited, never rolled back, and sent on the Watch stream as separate messages (CP-20)
 - [ ] gRPC Watch and Heartbeat (every 5 s plus immediately on apply), `replicas` table and `live_replicas`, `gw_config_sync_age_seconds`, on-disk last-good snapshot on a writable volume, versioned snapshot schema guarded by `buf breaking` (CP-06–CP-09, CP-18, RL-24)
 - [ ] One active control-plane replica with its state in Postgres; `LISTEN/NOTIFY` on publish (CP-22)
