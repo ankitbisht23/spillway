@@ -22,6 +22,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/ankitbisht23/spillway/internal/config"
+	"github.com/ankitbisht23/spillway/internal/gen/apiv1"
 	"github.com/ankitbisht23/spillway/internal/gen/configpb"
 	"github.com/ankitbisht23/spillway/internal/managed"
 )
@@ -414,11 +415,14 @@ func TestControlPlaneFailover(t *testing.T) {
 }
 
 // TestManagedPropagation is a quick propagation measurement, not NFR-08's
-// check (that is M5's verify task, from heartbeats on Postgres's clock): 20
-// publishes to 5 managed host gateways, each timed from the publish request
-// to the moment every gateway's gw_config_version shows it, polled every
-// 10 ms on the test's clock. It fails only if a publish does not arrive
-// within 30 s, and logs p50 and p99.
+// check (that is M5's verify task): 20 publishes to 5 managed host
+// gateways, each timed two ways. Polled: from the publish request to the
+// moment every gateway's gw_config_version shows it, polled every 10 ms on
+// the test's clock. Heartbeats (CP-09, ADR-0042's measure): from the
+// version's published_at to the last gateway's first heartbeat reporting
+// it, both on Postgres's clock, from GET /config/versions/{v}'s applied
+// list. It fails only if a publish does not arrive within 30 s, and logs
+// p50 and p99 of each.
 func TestManagedPropagation(t *testing.T) {
 	iss := newTestIssuer(t)
 	db := migratedDatabase(t)
@@ -432,7 +436,7 @@ func TestManagedPropagation(t *testing.T) {
 	for _, g := range gws {
 		g.waitVersion(t, int(base))
 	}
-	var took []time.Duration
+	var took, beat []time.Duration
 	for i := range 20 {
 		a := cp.rest.must(200, "GET", "/config/settings", nil)
 		cp.rest.must(200, "PUT", "/config/settings", map[string]any{"ratelimit": map[string]any{"replicas": i%2 + 1}}, "If-Match", a.etag())
@@ -449,16 +453,30 @@ func TestManagedPropagation(t *testing.T) {
 			return true
 		})
 		took = append(took, time.Since(start))
+		var got apiv1.ConfigVersion
+		eventually(t, fmt.Sprintf("version %d in 5 gateways' heartbeats", v.Version), func() bool {
+			cp.rest.must(200, "GET", fmt.Sprintf("/config/versions/%d", v.Version), nil).decode(t, &got)
+			return got.Applied != nil && len(*got.Applied) == len(gws)
+		})
+		var last time.Time
+		for _, a := range *got.Applied {
+			if a.At.After(last) {
+				last = a.At
+			}
+		}
+		beat = append(beat, last.Sub(got.PublishedAt))
 	}
-	slices.Sort(took)
-	t.Logf("publish → applied on all 5 gateways, %d publishes: p50 %v, p99 %v (nearest rank: the maximum), min %v",
-		len(took), took[len(took)/2-1].Round(time.Millisecond), took[len(took)-1].Round(time.Millisecond), took[0].Round(time.Millisecond))
+	for name, d := range map[string][]time.Duration{"polled gw_config_version": took, "apply heartbeats, Postgres clock": beat} {
+		slices.Sort(d)
+		t.Logf("publish → applied on all 5 gateways (%s), %d publishes: p50 %v, p99 %v (nearest rank: the maximum), min %v",
+			name, len(d), d[len(d)/2-1].Round(time.Millisecond), d[len(d)-1].Round(time.Millisecond), d[0].Round(time.Millisecond))
+	}
 }
 
 // TestComposeManagedGateways runs the compose gateways in managed mode, as
 // make verify-m5 will (ADR-0038): gateway-1 … gateway-5 recreated with the
-// compose control plane and no files, a publish reaches all five, and they
-// go back to static mode afterwards.
+// compose control plane and no files, a publish reaches all five and their
+// heartbeats report it, and they go back to static mode afterwards.
 func TestComposeManagedGateways(t *testing.T) {
 	c := composeControlPlane(t)
 	c = c.as(keycloakToken(t, "client_credentials", "spillway-ci", ""))
@@ -516,6 +534,16 @@ func TestComposeManagedGateways(t *testing.T) {
 	if status("http://127.0.0.1:8001/readyz") != 200 || gw1.metric("gw_identity_version") < 1 {
 		t.Errorf("gateway-1: readyz %d, identity version %v", status("http://127.0.0.1:8001/readyz"), gw1.metric("gw_identity_version"))
 	}
+	// All five heartbeat the version (CP-08).
+	eventually(t, fmt.Sprintf("gateway-1 … gateway-5 live at version %d in GET /replicas", v.Version), func() bool {
+		live := 0
+		for _, r := range listReplicas(t, c, "").Items {
+			if slices.Contains(gateways, r.Id) && r.Live && r.WatchConnected && r.ConfigVersion == v.Version {
+				live++
+			}
+		}
+		return live == len(gateways)
+	})
 	// gateway-2 … gateway-5 publish no ports: their logs show the apply.
 	applied := fmt.Sprintf(`"msg":"config applied","source":"stream","version":%d`, v.Version)
 	for _, g := range gateways[1:] {
