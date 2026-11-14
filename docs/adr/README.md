@@ -54,3 +54,4 @@ Decisions that shape Spillway and are not obvious from the code or from docs/des
 | [0043](0043-rbac-and-audit-implementation.md) | RBAC and audit: where tokens are checked, test logins and audit details | Accepted | 2026-11-14 |
 | [0044](0044-config-import-and-export-details.md) | Config import and export: details | Accepted; the ratelimit section superseded by 0045 | 2026-11-14 |
 | [0045](0045-config-settings-and-the-watch-task.md) | Config settings, and the watch task's details | Accepted | 2026-11-14 |
+| [0046](0046-heartbeats-and-live-replicas-details.md) | Heartbeats and live replicas: details | Accepted | 2026-11-14 |

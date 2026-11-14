@@ -172,6 +172,7 @@ func serve(ctx context.Context, s settings, log *slog.Logger, tracer trace.Trace
 	var snapshot func() *config.Snapshot
 	identity := func() *config.Identity { return nil }
 	ready := func() bool { return snapshot() != nil }
+	var syncAge func() time.Duration // managed mode only (ADR-0038)
 	if s.controlPlane == "" {
 		cfg, err := config.NewWatcher(s.configPath, log, apply)
 		if err != nil {
@@ -204,7 +205,7 @@ func serve(ctx context.Context, s settings, log *slog.Logger, tracer trace.Trace
 		log.Info("managed mode", "control_plane", s.controlPlane, "replica", s.replicaID, "snapshot", s.snapshot)
 		go m.Run(bg)
 		go m.Boot(bg) // the stream gets 5 s, then the on-disk snapshot is served (D9)
-		snapshot, identity = m.Snapshot, m.Identity
+		snapshot, identity, syncAge = m.Snapshot, m.Identity, m.SyncAge
 		ready = func() bool { return m.Snapshot() != nil && m.Identity() != nil }
 	}
 	reg := telemetry.NewRegistry()
@@ -245,6 +246,12 @@ func serve(ctx context.Context, s settings, log *slog.Logger, tracer trace.Trace
 		}
 		return 0
 	}))
+	if syncAge != nil {
+		reg.MustRegister(prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+			Name: "gw_config_sync_age_seconds",
+			Help: "Seconds since the last heartbeat the control plane answered while the Watch stream was established (CP-08); managed mode only.",
+		}, func() float64 { return syncAge().Seconds() }))
+	}
 	// Ready while a config snapshot is loaded (in managed mode, an identity
 	// too) and shutdown has not started; Redis never counts (GW-24,
 	// ADR-0038).

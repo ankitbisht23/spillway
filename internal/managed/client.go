@@ -1,7 +1,8 @@
-// Package managed is a gateway's managed mode (CP-06, CP-07, ADR-0038): it
-// watches the control plane's ConfigService for config and identity,
-// applies each as a file reload would, keeps the last good snapshot on
-// disk, and boots from it when the control plane is unreachable.
+// Package managed is a gateway's managed mode (CP-06 - CP-08, RL-24,
+// ADR-0038): it watches the control plane's ConfigService for config and
+// identity, applies each as a file reload would, heartbeats what it runs,
+// divides limits by the live replica count, keeps the last good snapshot
+// on disk, and boots from it when the control plane is unreachable.
 package managed
 
 import (
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	grpcbackoff "google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -31,7 +33,8 @@ type Options struct {
 	SnapshotPath string
 	// Compile compiles a config and reconciles the gateway's runtime state
 	// with it, as a file reload does (config.Prepare); an error rejects
-	// it.
+	// it. Its ratelimit.replicas is the live replica count once one is
+	// known (RL-24).
 	Compile func(*configpb.Config) (*config.Snapshot, error)
 	Log     *slog.Logger
 }
@@ -42,19 +45,34 @@ type Client struct {
 	opts   Options
 	cs     configpb.ConfigServiceClient
 	writer *writer
+	beat   chan struct{} // one slot: a heartbeat is due now
 
 	config   atomic.Pointer[config.Snapshot]
 	identity atomic.Pointer[config.Identity]
+	// watching is true while the Watch stream is established.
+	watching atomic.Bool
+	// live is the last known live replica count: the latest heartbeat
+	// answer's, else the on-disk snapshot's when the gateway booted from
+	// it; 0 when neither is known, and the config's ratelimit.replicas
+	// applies (RL-24, RL-31).
+	live atomic.Int32
 
 	mu          sync.Mutex // serializes applies; guards what follows
 	rawConfig   *configpb.Config
 	rawIdentity *configpb.Identity
 	both        chan struct{} // closed once a config and an identity are applied
+	appliedAt   time.Time     // the last apply, gateway clock
+	rejected    int64         // the last config version refused since the last apply; 0 for none
+	reason      string        // why, or why the on-disk snapshot could not be used
+
+	syncMu   sync.Mutex
+	lastSync time.Time // gw_config_sync_age_seconds counts from it
+	synced   bool      // a heartbeat has synced since the start
 }
 
 // New returns a client of the ConfigService that cs calls.
 func New(cs configpb.ConfigServiceClient, opts Options) *Client {
-	c := &Client{opts: opts, cs: cs, both: make(chan struct{})}
+	c := &Client{opts: opts, cs: cs, beat: make(chan struct{}, 1), both: make(chan struct{}), lastSync: time.Now()}
 	c.writer = newWriter(opts.SnapshotPath, c.snapshotFile, opts.Log)
 	return c
 }
@@ -62,11 +80,18 @@ func New(cs configpb.ConfigServiceClient, opts Options) *Client {
 // DialOptions are the gRPC client options of the ConfigService connection
 // (ADR-0038): keepalive pings after 10 s idle with a 5 s timeout, messages
 // up to 64 MiB, then extra (M5's mtls-secrets task adds transport
-// credentials there).
+// credentials there). The connection's own redials back off from 100 ms
+// doubling to 5 s, as the Watch stream's reconnects do; gRPC's default
+// grows to 120 s, which would keep a gateway away from a control plane
+// that is back for up to 2 minutes after a long outage.
 func DialOptions(extra ...grpc.DialOption) []grpc.DialOption {
 	return append([]grpc.DialOption{
 		grpc.WithKeepaliveParams(keepalive.ClientParameters{Time: 10 * time.Second, Timeout: 5 * time.Second, PermitWithoutStream: true}),
 		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(64<<20), grpc.MaxCallSendMsgSize(64<<20)),
+		grpc.WithConnectParams(grpc.ConnectParams{
+			Backoff:           grpcbackoff.Config{BaseDelay: backoffMin, Multiplier: 2, Jitter: 0.2, MaxDelay: backoffMax},
+			MinConnectTimeout: 20 * time.Second, // gRPC's default
+		}),
 	}, extra...)
 }
 
@@ -97,17 +122,25 @@ const (
 	streamErrorEvery = time.Minute
 )
 
-// Run keeps the Watch stream open, and writes the on-disk snapshot after
-// each apply, until ctx ends.
+// Run keeps the Watch stream open, heartbeats, and writes the on-disk
+// snapshot after each apply, until ctx ends.
 func (c *Client) Run(ctx context.Context) {
 	go c.writer.run(ctx)
+	beats := make(chan struct{})
+	go func() {
+		defer close(beats)
+		c.heartbeats(ctx)
+	}()
+	defer func() {
+		<-c.writer.done
+		<-beats
+	}()
 	backoff := backoffMin
 	var lastErr time.Time
 	for {
 		start := time.Now()
 		err := c.watch(ctx)
 		if ctx.Err() != nil {
-			<-c.writer.done
 			return
 		}
 		if time.Since(start) >= backoffReset {
@@ -123,7 +156,6 @@ func (c *Client) Run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			t.Stop()
-			<-c.writer.done
 			return
 		case <-t.C:
 		}
@@ -157,6 +189,8 @@ func (c *Client) watch(ctx context.Context) error {
 		_, err := s.Recv()
 		return err
 	}
+	c.watching.Store(true)
+	defer c.watching.Store(false)
 	c.opts.Log.Info("Watch stream to the control plane established", "config_version", cv, "identity_version", iv)
 	for {
 		m, err := s.Recv()
@@ -186,17 +220,21 @@ func (c *Client) applyConfig(v *configpb.SchemaVersion, cfg *configpb.Config, so
 		if cfg == nil {
 			err = errors.New("no config in the update")
 		} else {
-			snap, err = c.opts.Compile(cfg)
+			snap, err = c.compile(cfg, c.live.Load())
 		}
 	}
 	if err != nil {
 		cv, _ := c.versions()
 		c.opts.Log.Error("config rejected; keeping the last good config", "source", source, "version", cfg.GetVersion(),
 			"current_version", cv, "err", err)
+		// Reported in heartbeats until a config applies (ADR-0038).
+		c.rejected, c.reason = cfg.GetVersion(), err.Error()
+		c.heartbeatNow()
 		return false
 	}
 	c.config.Store(snap)
 	c.rawConfig = cfg
+	c.rejected, c.reason = 0, ""
 	c.applied(source)
 	c.opts.Log.Info("config applied", "source", source, "version", snap.Version, "routes", len(snap.Routes), "policies", len(snap.Policies))
 	return true
@@ -232,10 +270,13 @@ func (c *Client) applyIdentity(v *configpb.SchemaVersion, id *configpb.Identity,
 	return true
 }
 
-// applied notes an apply from source; c.mu is held. What came from the
-// stream is written to disk; what came from the file is not written back,
-// so the file's synced_at stays the time of its last sync.
+// applied notes an apply from source; c.mu is held. A heartbeat goes at
+// once (CP-08). What came from the stream is written to disk; what came
+// from the file is not written back, so the file's synced_at stays the time
+// of its last sync.
 func (c *Client) applied(source string) {
+	c.appliedAt = time.Now()
+	c.heartbeatNow()
 	if c.rawConfig != nil && c.rawIdentity != nil {
 		select {
 		case <-c.both:
@@ -277,6 +318,7 @@ func (c *Client) snapshotFile() *configpb.SnapshotFile {
 		Config:        c.rawConfig,
 		Identity:      c.rawIdentity,
 		SyncedAt:      timestamppb.Now(),
+		LiveReplicas:  c.live.Load(),
 	}
 }
 
@@ -306,7 +348,17 @@ func (c *Client) Boot(ctx context.Context) {
 		return
 	case err != nil:
 		c.opts.Log.Error("no control plane within 5s and the on-disk snapshot cannot be used; not ready until the control plane answers", "err", err)
+		c.mu.Lock()
+		if c.rawConfig == nil && c.rejected == 0 { // reported until a config applies (ADR-0038)
+			c.reason = "on-disk snapshot: " + err.Error()
+		}
+		c.mu.Unlock()
 		return
+	}
+	// Until a heartbeat answers, the file's live replica count is the last
+	// known one (RL-24, ADR-0038).
+	if n := f.GetLiveReplicas(); n > 0 {
+		c.live.CompareAndSwap(0, n)
 	}
 	// Only what the stream has not delivered yet: the applies skip a
 	// section it has, checked under their lock, so a stream update that
@@ -314,6 +366,7 @@ func (c *Client) Boot(ctx context.Context) {
 	cfgOK := c.applyConfig(f.GetSchemaVersion(), f.GetConfig(), sourceFile)
 	idOK := c.applyIdentity(f.GetSchemaVersion(), f.GetIdentity(), sourceFile)
 	if cfgOK || idOK {
+		c.bootSynced(f.GetSyncedAt().AsTime())
 		c.opts.Log.Warn("no control plane within 5s: serving the on-disk snapshot until it answers",
 			"config_version", f.GetConfig().GetVersion(), "config_from_file", cfgOK,
 			"identity_version", f.GetIdentity().GetVersion(), "identity_from_file", idOK, "synced_at", f.GetSyncedAt().AsTime())

@@ -110,7 +110,8 @@ func (s *Server) ListConfigVersions(ctx context.Context, req apiv1.ListConfigVer
 	return apiv1.ListConfigVersions200JSONResponse{Items: items, NextCursor: next}, nil
 }
 
-// GetConfigVersion reads one published version with its snapshot.
+// GetConfigVersion reads one published version with its snapshot and the
+// replicas that applied it (ADR-0036, ADR-0038).
 func (s *Server) GetConfigVersion(ctx context.Context, req apiv1.GetConfigVersionRequestObject) (apiv1.GetConfigVersionResponseObject, error) {
 	v, err := s.store.GetVersion(ctx, req.V)
 	if err != nil {
@@ -123,6 +124,15 @@ func (s *Server) GetConfigVersion(ctx context.Context, req apiv1.GetConfigVersio
 	out := versionOf(v)
 	snapshot := jsonFields(c.ProtoReflect())
 	out.Snapshot = &snapshot
+	rows, err := s.store.ConfigVersionApplied(ctx, v.Version)
+	if err != nil {
+		return nil, err
+	}
+	applied := make([]apiv1.AppliedReplica, len(rows))
+	for i, r := range rows {
+		applied[i] = apiv1.AppliedReplica{Replica: r.ReplicaID, At: r.FirstReportedAt.UTC()}
+	}
+	out.Applied = &applied
 	return apiv1.GetConfigVersion200JSONResponse(out), nil
 }
 

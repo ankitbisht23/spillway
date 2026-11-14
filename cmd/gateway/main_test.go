@@ -237,8 +237,9 @@ func TestServe(t *testing.T) {
 			t.Errorf("healthcheck with admin address %s: %v", addr, err)
 		}
 	}
-	if _, body := get(t, admin+"/metrics"); !strings.Contains(body, "\ngw_config_version 7\n") || !strings.Contains(body, "\ngo_goroutines ") {
-		t.Errorf("/metrics lacks gw_config_version 7 or go_goroutines:\n%s", body)
+	if _, body := get(t, admin+"/metrics"); !strings.Contains(body, "\ngw_config_version 7\n") || !strings.Contains(body, "\ngo_goroutines ") ||
+		strings.Contains(body, "gw_config_sync_age_seconds") {
+		t.Errorf("/metrics lacks gw_config_version 7 or go_goroutines, or has the sync age, which static mode does not export:\n%s", body)
 	}
 	if code, body := get(t, traffic+"/x"); code != http.StatusOK || body != "upstream" {
 		t.Errorf("GET /x = %d %q, want 200 from the upstream", code, body)

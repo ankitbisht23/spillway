@@ -35,9 +35,14 @@ type fakeCP struct {
 	reqs    []*configpb.WatchRequest
 	at      []time.Time // when each Watch came
 	streams chan *fakeStream
+	hbs     []sentHeartbeat
+	live    int32 // what Heartbeat answers
+	hbErr   error // what Heartbeat fails with, if not nil
 }
 
-func newFakeCP(down bool) *fakeCP { return &fakeCP{down: down, streams: make(chan *fakeStream, 100)} }
+func newFakeCP(down bool) *fakeCP {
+	return &fakeCP{down: down, live: 1, streams: make(chan *fakeStream, 100)}
+}
 
 func (f *fakeCP) setDown(down bool) {
 	f.mu.Lock()
@@ -67,8 +72,38 @@ func (f *fakeCP) Watch(ctx context.Context, req *configpb.WatchRequest, _ ...grp
 	return s, nil
 }
 
-func (f *fakeCP) Heartbeat(context.Context, *configpb.HeartbeatRequest, ...grpc.CallOption) (*configpb.HeartbeatResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "")
+// Heartbeat records the heartbeat and answers live, or fails when the
+// control plane is down or hbErr is set.
+func (f *fakeCP) Heartbeat(ctx context.Context, req *configpb.HeartbeatRequest, _ ...grpc.CallOption) (*configpb.HeartbeatResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	deadline, _ := ctx.Deadline()
+	f.hbs = append(f.hbs, sentHeartbeat{req: req, at: time.Now(), deadline: deadline})
+	if f.down {
+		return nil, status.Error(codes.Unavailable, "connection refused")
+	}
+	if f.hbErr != nil {
+		return nil, f.hbErr
+	}
+	return &configpb.HeartbeatResponse{LiveReplicas: f.live}, nil
+}
+
+// sentHeartbeat is a heartbeat the fake control plane received.
+type sentHeartbeat struct {
+	req          *configpb.HeartbeatRequest
+	at, deadline time.Time
+}
+
+func (f *fakeCP) heartbeats() []sentHeartbeat {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]sentHeartbeat(nil), f.hbs...)
+}
+
+func (f *fakeCP) answer(live int32, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.live, f.hbErr = live, err
 }
 
 // fakeStream is one Watch stream; the methods a client does not call come

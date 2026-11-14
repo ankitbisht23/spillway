@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"regexp"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/grpc"
@@ -50,17 +51,21 @@ func acceptSchema(v *configpb.SchemaVersion) bool {
 // (ADR-0040).
 var replicaName = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 
-// Service is ConfigService on the active replica (CP-06). Heartbeat
-// arrives with M5's heartbeat task (ADR-0045); until then it is
-// UNIMPLEMENTED.
+// Service is ConfigService on the active replica (CP-06, CP-08).
 type Service struct {
 	configpb.UnimplementedConfigServiceServer
 	b   *Broadcaster
+	rec Recorder
 	log *slog.Logger
+
+	lastHeartbeatErr atomic.Int64 // unix nanos of the last failed heartbeat logged
 }
 
-// NewService serves the broadcaster's updates.
-func NewService(b *Broadcaster, log *slog.Logger) *Service { return &Service{b: b, log: log} }
+// NewService serves the broadcaster's updates and records heartbeats in
+// rec.
+func NewService(b *Broadcaster, rec Recorder, log *slog.Logger) *Service {
+	return &Service{b: b, rec: rec, log: log}
+}
 
 // Watch registers the stream under its replica name, sends the current
 // config and then the current identity when their versions differ from the
@@ -145,22 +150,27 @@ func serverOptions(extra ...grpc.ServerOption) []grpc.ServerOption {
 	}, extra...)
 }
 
-// Serve is what the active replica runs (CP-22, ADR-0038): the broadcaster
-// and, once it has read both sections, ConfigService on a listener at addr.
-// When ctx ends it closes every stream with UNAVAILABLE, stops the
-// broadcaster and closes the listener. It returns early only if it cannot
-// listen.
-func Serve(ctx context.Context, addr string, src Source, log *slog.Logger, streams func(int), opts ...grpc.ServerOption) error {
+// Serve is what the active replica runs (CP-22, ADR-0038): the hourly
+// prune of rec, the broadcaster and, once it has read both sections,
+// ConfigService on a listener at addr. When ctx ends it closes every stream
+// with UNAVAILABLE, stops the broadcaster and the prune, and closes the
+// listener. It returns early only if it cannot listen.
+func Serve(ctx context.Context, addr string, src Source, rec Recorder, log *slog.Logger, streams func(int), opts ...grpc.ServerOption) error {
 	bctx, stopB := context.WithCancel(context.Background())
 	b := NewBroadcaster(src, log, streams)
-	bDone := make(chan struct{})
+	bDone, pruned := make(chan struct{}), make(chan struct{})
 	go func() {
 		defer close(bDone)
 		b.Run(bctx)
 	}()
+	go func() {
+		defer close(pruned)
+		prune(bctx, rec, log)
+	}()
 	defer func() {
 		stopB()
 		<-bDone
+		<-pruned
 	}()
 	select {
 	case <-b.Loaded():
@@ -172,7 +182,7 @@ func Serve(ctx context.Context, addr string, src Source, log *slog.Logger, strea
 		return fmt.Errorf("gRPC listener: %w", err)
 	}
 	gs := grpc.NewServer(serverOptions(opts...)...)
-	configpb.RegisterConfigServiceServer(gs, NewService(b, log))
+	configpb.RegisterConfigServiceServer(gs, NewService(b, rec, log))
 	served := make(chan error, 1)
 	go func() { served <- gs.Serve(ln) }()
 	log.Info("listening", "server", "grpc", "addr", ln.Addr().String())

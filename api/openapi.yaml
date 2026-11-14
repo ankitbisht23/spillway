@@ -33,6 +33,8 @@ tags:
     description: Identity, applied at once (CP-20)
   - name: audit
     description: The audit log (CP-13)
+  - name: replicas
+    description: Gateway replicas, as their heartbeats report them (CP-08)
 paths:
   /upstreams:
     get:
@@ -1216,6 +1218,28 @@ paths:
             application/yaml:
               schema: { type: string }
         default: { $ref: '#/components/responses/Error' }
+  /replicas:
+    get:
+      operationId: listReplicas
+      tags: [replicas]
+      summary: >-
+        List gateway replicas by name, from their heartbeats (CP-08,
+        ADR-0038): the config and identity versions each runs, its last
+        heartbeat and last sync, whether it is live (a heartbeat under 15 s
+        old, RL-24) and the last config version it refused. Replicas without
+        a heartbeat for 7 days are pruned (CP-22)
+      x-spillway-roles: [viewer, editor, publisher, key-admin, admin]
+      parameters:
+        - $ref: '#/components/parameters/PageLimit'
+        - $ref: '#/components/parameters/PageCursor'
+      responses:
+        '200':
+          description: A page of replicas
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReplicaList' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        default: { $ref: '#/components/responses/Error' }
   /audit:
     get:
       operationId: listAudit
@@ -1753,6 +1777,20 @@ components:
             Only when one version is read: the published config, config.proto's
             Config message with proto field names (CP-21), its version and every
             entity's id included; 64-bit integers are JSON numbers.
+        applied:
+          type: array
+          items: { $ref: '#/components/schemas/AppliedReplica' }
+          description: >-
+            Only when one version is read: the replicas that reported this
+            version in a heartbeat, by name, each with its first report
+            (ADR-0038, NFR-08). Reports are pruned after 7 days.
+    AppliedReplica:
+      type: object
+      additionalProperties: false
+      required: [replica, at]
+      properties:
+        replica: { type: string, description: The replica name. }
+        at: { type: string, format: date-time, description: 'When the first heartbeat reporting the version arrived, on the clock of the control plane database.' }
     SchemaVersion:
       type: object
       additionalProperties: false
@@ -1857,6 +1895,35 @@ components:
         items:
           type: array
           items: { $ref: '#/components/schemas/AuditRecord' }
+        next_cursor: { type: string, nullable: true }
+
+    # Gateway replicas (CP-08, ADR-0038).
+    Replica:
+      type: object
+      additionalProperties: false
+      required: [id, config_version, identity_version, schema_version, watch_connected, last_heartbeat_at, last_synced_at, live, rejected_config_version, rejected_reason]
+      properties:
+        id: { type: string, description: 'The replica name, such as gateway-1.' }
+        config_version: { type: integer, format: int64, description: The config version the replica runs; 0 for none. }
+        identity_version: { type: integer, format: int64, description: The identity version the replica runs; 0 for none. }
+        schema_version: { $ref: '#/components/schemas/SchemaVersion' }
+        watch_connected: { type: boolean, description: Whether its Watch stream was established at its last heartbeat. }
+        last_heartbeat_at: { type: string, format: date-time }
+        last_synced_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: 'Its last heartbeat sent while its Watch stream was established; staleness is now minus this (CP-08).'
+        live: { type: boolean, description: 'Its last heartbeat is under 15 s old (RL-24).' }
+        rejected_config_version: { type: integer, format: int64, nullable: true, description: The last config version it refused to apply; null when none since its last apply. }
+        rejected_reason: { type: string, nullable: true, description: 'Why it refused, or why its on-disk snapshot could not be used.' }
+    ReplicaList:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Replica' }
         next_cursor: { type: string, nullable: true }
 
     # Pages (UI-06): next_cursor is null on the last page.
