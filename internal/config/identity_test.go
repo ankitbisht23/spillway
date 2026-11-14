@@ -10,7 +10,12 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
+	"github.com/ankitbisht23/spillway/internal/apikey"
 	"github.com/ankitbisht23/spillway/internal/gen/configpb"
 )
 
@@ -138,20 +143,135 @@ func TestIdentityRejects(t *testing.T) {
 	}
 }
 
-// TestManagedIdentity checks the interim managed identity (ADR-0035): it
-// compiles with its version, and no key resolves until keys-identity.
+// managedKey makes a managed key at run time (a literal one would trip the
+// gitleaks rule, ADR-0039) and its identity entry for consumer, expiring
+// at expires unless zero.
+func managedKey(t *testing.T, id, consumer int64, expires time.Time) (string, *configpb.ApiKey) {
+	t.Helper()
+	k, err := apikey.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := &configpb.ApiKey{Id: id, ConsumerId: consumer, Prefix: k.Prefix, Hash: hex.EncodeToString(k.Hash[:])}
+	if !expires.IsZero() {
+		e.ExpiresAt = timestamppb.New(expires)
+	}
+	return k.Secret.Reveal(), e
+}
+
+// TestManagedIdentity checks managed keys (CP-15, GW-17, ADR-0039): a key
+// is found by its prefix and its secret's hash compared; template values
+// are decimal IDs and the tenant label its name; anything malformed,
+// unknown or with a wrong secret resolves to nothing.
 func TestManagedIdentity(t *testing.T) {
+	alice, aliceEntry := managedKey(t, 4, 3, time.Time{})
+	bob, bobEntry := managedKey(t, 5, 6, time.Time{})
 	id, err := CompileIdentity(&configpb.Identity{
 		Version: 7, KeyFormat: KeyFormatManaged,
-		Tenants:   []*configpb.Tenant{{Id: 1, Name: "acme", PlanId: 2, Status: "active"}},
-		Consumers: []*configpb.Consumer{{Id: 3, TenantId: 1, Name: "alice", Status: "active"}},
-		ApiKeys:   []*configpb.ApiKey{{Id: 4, ConsumerId: 3, Prefix: "abcdefgh", Hash: hashHex("x")}},
+		Tenants:   []*configpb.Tenant{{Id: 1, Name: "acme", PlanId: 2, Status: "active"}, {Id: 2, Name: "globex", PlanId: 2, Status: "active"}},
+		Consumers: []*configpb.Consumer{{Id: 3, TenantId: 1, Name: "alice", Status: "active"}, {Id: 6, TenantId: 2, Name: "bob", Status: "active"}},
+		ApiKeys:   []*configpb.ApiKey{aliceEntry, bobEntry},
 	})
 	if err != nil || id.Version != 7 {
 		t.Fatalf("CompileIdentity = %+v, %v", id, err)
 	}
-	if c, ok := id.Lookup("spw_abcdefgh_x"); ok {
-		t.Errorf("Lookup = %+v; want no key until keys-identity", c)
+	if c, ok := id.Lookup(alice); !ok || *c != (Consumer{Name: "3", Tenant: "1", TenantName: "acme"}) {
+		t.Errorf("alice's key: Lookup = %+v, %v; want consumer 3 of tenant 1 (acme)", c, ok)
+	}
+	if c, ok := id.Lookup(bob); !ok || c.Name != "6" || c.TenantName != "globex" {
+		t.Errorf("bob's key: Lookup = %+v, %v", c, ok)
+	}
+	_, other := managedKey(t, 9, 3, time.Time{})
+	for name, key := range map[string]string{
+		"wrong secret":      alice[:len(alice)-1] + map[bool]string{true: "1", false: "0"}[alice[len(alice)-1] == '0'],
+		"bob's secret":      alice[:13] + bob[13:],
+		"unknown prefix":    apikey.Start + other.GetPrefix() + alice[12:],
+		"a suffix":          alice + "0",
+		"one character off": alice[1:],
+		"the prefix alone":  alice[:12],
+		"lower case":        strings.ToLower(alice),
+		"static form":       alice[:KeyPrefixLen] + "x",
+		"empty":             "",
+	} {
+		if key == alice || key == bob {
+			continue // the lower-cased key may equal the key
+		}
+		if c, ok := id.Lookup(key); ok {
+			t.Errorf("%s: Lookup = %+v; want no consumer", name, c)
+		}
+	}
+}
+
+// TestManagedKeyExpiry checks rotation's overlap on a fake clock (CP-16,
+// D2): the old key works until its expires_at, on the gateway's clock, and
+// not from then on; the new key, without one, works throughout.
+func TestManagedKeyExpiry(t *testing.T) {
+	rotated := time.Date(2026, 11, 14, 12, 0, 0, 0, time.UTC)
+	old, oldEntry := managedKey(t, 1, 3, rotated.Add(24*time.Hour))
+	newKey, newEntry := managedKey(t, 2, 3, time.Time{})
+	id, err := CompileIdentity(&configpb.Identity{
+		Version: 2, KeyFormat: KeyFormatManaged,
+		Tenants:   []*configpb.Tenant{{Id: 1, Name: "acme", PlanId: 2}},
+		Consumers: []*configpb.Consumer{{Id: 3, TenantId: 1, Name: "alice"}},
+		ApiKeys:   []*configpb.ApiKey{oldEntry, newEntry},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		at       time.Time
+		old, new bool
+	}{
+		{rotated, true, true},
+		{rotated.Add(23 * time.Hour), true, true},
+		{rotated.Add(24*time.Hour - time.Nanosecond), true, true},
+		{rotated.Add(24 * time.Hour), false, true},
+		{rotated.Add(7 * 24 * time.Hour), false, true},
+	} {
+		id.now = func() time.Time { return tt.at }
+		_, oldOK := id.Lookup(old)
+		_, newOK := id.Lookup(newKey)
+		if oldOK != tt.old || newOK != tt.new {
+			t.Errorf("at %v: old key %v, new key %v; want %v, %v", tt.at.Sub(rotated), oldOK, newOK, tt.old, tt.new)
+		}
+	}
+}
+
+// TestManagedIdentityErrors: a managed identity that cannot be right is
+// refused, and errors never name any part of a key.
+func TestManagedIdentityErrors(t *testing.T) {
+	_, k := managedKey(t, 4, 3, time.Time{})
+	tenants := []*configpb.Tenant{{Id: 1, Name: "acme", PlanId: 2}}
+	consumers := []*configpb.Consumer{{Id: 3, TenantId: 1, Name: "alice"}}
+	with := func(f func(k *configpb.ApiKey)) []*configpb.ApiKey {
+		c := proto.Clone(k).(*configpb.ApiKey)
+		f(c)
+		return []*configpb.ApiKey{c}
+	}
+	for _, tt := range []struct {
+		name string
+		id   *configpb.Identity
+		want string
+	}{
+		{"short prefix", &configpb.Identity{Tenants: tenants, Consumers: consumers, ApiKeys: with(func(k *configpb.ApiKey) { k.Prefix = "abc" })}, "api key 4: want an 8-character base62 prefix"},
+		{"prefix not base62", &configpb.Identity{Tenants: tenants, Consumers: consumers, ApiKeys: with(func(k *configpb.ApiKey) { k.Prefix = "abcdefg-" })}, "base62 prefix"},
+		{"two keys, one prefix", &configpb.Identity{Tenants: tenants, Consumers: consumers, ApiKeys: append(with(func(*configpb.ApiKey) {}), with(func(k *configpb.ApiKey) { k.Id = 5 })...)}, "api key 5: its prefix is another key's"},
+		{"upper-case hash", &configpb.Identity{Tenants: tenants, Consumers: consumers, ApiKeys: with(func(k *configpb.ApiKey) { k.Hash = strings.ToUpper(k.Hash) })}, "64 lower-case hex digits"},
+		{"unknown consumer", &configpb.Identity{Tenants: tenants, Consumers: consumers, ApiKeys: with(func(k *configpb.ApiKey) { k.ConsumerId = 8 })}, "api key 4: consumer 8 is not defined"},
+		{"unknown tenant", &configpb.Identity{Consumers: consumers}, "consumer 3: tenant 1 is not defined"},
+		{"consumer without id", &configpb.Identity{Tenants: tenants, Consumers: []*configpb.Consumer{{TenantId: 1, Name: "x"}}}, `consumer "x": want a unique id`},
+		{"tenant without id", &configpb.Identity{Tenants: []*configpb.Tenant{{Name: "acme"}}}, `tenant "acme": id is required`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.id.KeyFormat = KeyFormatManaged
+			_, err := CompileIdentity(tt.id)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want %q", err, tt.want)
+			}
+			if strings.Contains(err.Error(), k.GetPrefix()) || strings.Contains(err.Error(), k.GetHash()[:12]) {
+				t.Errorf("error %q names part of a key", err)
+			}
+		})
 	}
 }
 

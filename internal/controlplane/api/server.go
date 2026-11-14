@@ -25,6 +25,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ankitbisht23/spillway/internal/apikey"
 	"github.com/ankitbisht23/spillway/internal/controlplane/store"
 	"github.com/ankitbisht23/spillway/internal/gen/apiv1"
 	"github.com/ankitbisht23/spillway/internal/telemetry"
@@ -47,6 +48,7 @@ type Server struct {
 	allowed  Allowlist
 	resolver Resolver
 	auth     Authenticator
+	newKey   store.KeyGen // makes API keys (ADR-0039)
 	log      *slog.Logger
 }
 
@@ -61,7 +63,7 @@ var _ apiv1.StrictServerInterface = (*Server)(nil)
 // New returns a server over st; upstream endpoints must be in allowed
 // (SEC-06), and callers are authenticated by authn (CP-11).
 func New(st *store.Store, allowed Allowlist, resolver Resolver, authn Authenticator, log *slog.Logger) *Server {
-	return &Server{store: st, allowed: allowed, resolver: resolver, auth: authn, log: log}
+	return &Server{store: st, allowed: allowed, resolver: resolver, auth: authn, newKey: apikey.Generate, log: log}
 }
 
 // Handler returns the API's HTTP handler; it serves BasePath and answers 404

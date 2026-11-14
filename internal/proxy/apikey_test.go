@@ -4,13 +4,20 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
+	"github.com/ankitbisht23/spillway/internal/apikey"
 	"github.com/ankitbisht23/spillway/internal/config"
+	"github.com/ankitbisht23/spillway/internal/gen/configpb"
 )
 
 // ADR-0017's example keys, for tests only.
@@ -148,5 +155,123 @@ func TestAPIKeysReload(t *testing.T) {
 	g.identity.Store(identity(t, map[string]string{"bob": bobKey}))
 	if status, _, _ := g.get(t, "/", withKey); status != http.StatusUnauthorized {
 		t.Errorf("alice's key removed: status %d, want 401", status)
+	}
+}
+
+// managedIdentity compiles a managed identity (ADR-0039) with consumer 3 of
+// tenant acme and the given key entries.
+func managedIdentity(t *testing.T, keys ...*configpb.ApiKey) *config.Identity {
+	t.Helper()
+	id, err := config.CompileIdentity(&configpb.Identity{
+		Version: 1, KeyFormat: config.KeyFormatManaged,
+		Tenants:   []*configpb.Tenant{{Id: 1, Name: "acme", PlanId: 2, Status: "active"}},
+		Consumers: []*configpb.Consumer{{Id: 3, TenantId: 1, Name: "alice", Status: "active"}},
+		ApiKeys:   keys,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+// newManagedKey makes a managed key at run time (a literal one would trip
+// the gitleaks rule) and its identity entry, expiring at expires unless
+// zero.
+func newManagedKey(t *testing.T, id int64, expires time.Time) (apikey.Key, *configpb.ApiKey) {
+	t.Helper()
+	k, err := apikey.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := &configpb.ApiKey{Id: id, ConsumerId: 3, Prefix: k.Prefix, Hash: hex.EncodeToString(k.Hash[:])}
+	if !expires.IsZero() {
+		e.ExpiresAt = timestamppb.New(expires)
+	}
+	return k, e
+}
+
+// TestManagedAPIKeys: on a managed gateway a valid key is proxied with its
+// tenant as the metric label; a revoked (absent), expired, unknown or
+// malformed key, or a wrong secret, is 401 {"error":"invalid API key"};
+// and the key, its secret and its stored hash appear in no access log,
+// event log, span, metric or error body (CP-15 - CP-17, GW-17, GW-19,
+// SEC-03).
+func TestManagedAPIKeys(t *testing.T) {
+	u := newUpstream(t, "orders")
+	sr, tracer := newTracer(t, sdktrace.AlwaysSample())
+	g := newTracedGateway(t, newResolver(u), oneUpstream(u), nil, nil, false, tracer)
+	valid, validEntry := newManagedKey(t, 1, time.Time{})
+	revoked, _ := newManagedKey(t, 2, time.Time{})
+	expired, expiredEntry := newManagedKey(t, 3, time.Now().Add(-time.Second))
+	g.identity.Store(managedIdentity(t, validEntry, expiredEntry))
+
+	key := valid.Secret.Reveal()
+	wrong := key[:len(key)-1] + map[bool]string{true: "1", false: "0"}[key[len(key)-1] == '0']
+	var bodies []string
+	for i, tt := range []struct {
+		name string
+		key  string
+		ok   bool
+	}{
+		{"valid", key, true},
+		{"revoked", revoked.Secret.Reveal(), false},
+		{"expired", expired.Secret.Reveal(), false},
+		{"wrong secret", wrong, false},
+		{"malformed", key + "0", false},
+	} {
+		id := "managed-" + strconv.Itoa(i)
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, g.URL+"/orders", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("X-Api-Key", tt.key)
+		req.Header.Set("X-Request-Id", id)
+		resp, err := g.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if line := g.logs.access(t, id); line["key_hash"] != config.KeyHash(tt.key) {
+			t.Errorf("%s: access log key_hash = %v, want %s", tt.name, line["key_hash"], config.KeyHash(tt.key))
+		}
+		if tt.ok {
+			var e echo
+			if resp.StatusCode != http.StatusOK || json.Unmarshal(body, &e) != nil || e.Header.Get("X-Api-Key") != tt.key {
+				t.Errorf("%s: status %d; want 200 with the key passed upstream unchanged", tt.name, resp.StatusCode)
+			}
+			continue
+		}
+		bodies = append(bodies, string(body))
+		if resp.StatusCode != http.StatusUnauthorized || string(body) != `{"error":"invalid API key"}` {
+			t.Errorf("%s: status %d %q; want 401 {\"error\":\"invalid API key\"}", tt.name, resp.StatusCode, body)
+		}
+	}
+
+	m := scrape(t, g.metrics)
+	if want := `gw_requests_total{code_class="2xx",method="GET",origin="upstream",reason="none",route="r",tenant="acme"} 1`; !strings.Contains(m, "\n"+want+"\n") {
+		t.Errorf("/metrics has no %s", want)
+	}
+	var spans strings.Builder
+	for _, s := range sr.Ended() {
+		fmt.Fprintf(&spans, "%s %v %v %v\n", s.Name(), s.Attributes(), s.Events(), s.Status())
+	}
+	if !strings.Contains(spans.String(), "spillway.authn.result") {
+		t.Fatalf("no authn span recorded:\n%s", spans.String())
+	}
+	outputs := map[string]string{"access log": g.logs.String(), "event log": g.events.String(), "metrics": m, "spans": spans.String(), "error bodies": strings.Join(bodies, "\n")}
+	for _, k := range []apikey.Key{valid, revoked, expired} {
+		whole := k.Secret.Reveal()
+		_, sec, _ := apikey.Parse(whole)
+		for what, out := range outputs {
+			for part, s := range map[string]string{"key": whole, "secret": sec, "stored hash": hex.EncodeToString(k.Hash[:])} {
+				if strings.Contains(out, s) {
+					t.Errorf("a %s appears in the %s", part, what)
+				}
+			}
+		}
+	}
+	if strings.Contains(outputs["access log"]+outputs["error bodies"], wrong) {
+		t.Error("the wrong-secret key appears in the logs or an error body")
 	}
 }

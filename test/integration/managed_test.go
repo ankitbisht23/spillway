@@ -43,14 +43,15 @@ var binaries struct {
 	err  error
 }
 
-// binary builds the gateway and the control plane once for the package.
+// binary builds the gateway, the control plane and the chaos sender once
+// for the package.
 func binary(t *testing.T, name string) string {
 	t.Helper()
 	binaries.once.Do(func() {
 		if binaries.dir, binaries.err = os.MkdirTemp("", "spillway-it-"); binaries.err != nil {
 			return
 		}
-		for _, cmd := range []string{"gateway", "controlplane"} {
+		for _, cmd := range []string{"gateway", "controlplane", "chaos"} {
 			out, err := exec.CommandContext(context.Background(), "go", "build", "-o", filepath.Join(binaries.dir, cmd), //nolint:gosec // G204: fixed packages of this repo
 				"github.com/ankitbisht23/spillway/cmd/"+cmd).CombinedOutput()
 			if err != nil {
@@ -529,6 +530,41 @@ func TestManagedPropagation(t *testing.T) {
 	}
 }
 
+// composeGateways are the compose gateways with --profile replicas.
+var composeGateways = []string{"gateway-1", "gateway-2", "gateway-3", "gateway-4", "gateway-5"}
+
+// compose runs docker compose in the repository's root with the env files
+// the Makefile uses and env added to the environment.
+func compose(t *testing.T, env []string, args ...string) {
+	t.Helper()
+	root := filepath.Join("..", "..")
+	full := []string{"compose", "--env-file", ".env.example"}
+	if _, err := os.Stat(filepath.Join(root, ".env.local")); err == nil {
+		full = append(full, "--env-file", ".env.local")
+	}
+	cmd := exec.CommandContext(context.Background(), "docker", append(full, args...)...) //nolint:gosec // G204: fixed docker compose commands
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(), env...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("docker %v: %v\n%s", args, err, out)
+	}
+}
+
+// composeManaged recreates gateway-1 … gateway-5 in managed mode with the
+// compose control plane and no files, as make verify-m5 will (ADR-0038),
+// and puts the stack back as make dev leaves it (gateway-1 alone, static)
+// when the test ends. A config version must be published first: managed
+// gateways are not ready without one.
+func composeManaged(t *testing.T) {
+	t.Helper()
+	t.Cleanup(func() {
+		compose(t, nil, "up", "-d", "--no-deps", "--force-recreate", "--wait", "--wait-timeout", "120", "gateway-1")
+		compose(t, nil, append([]string{"--profile", "replicas", "rm", "-fsv"}, composeGateways[1:]...)...)
+	})
+	managedEnv := []string{"SPILLWAY_GATEWAY_CONFIG=", "SPILLWAY_GATEWAY_IDENTITY=", "SPILLWAY_GATEWAY_CONTROL_PLANE=controlplane:9090"}
+	compose(t, managedEnv, append([]string{"--profile", "replicas", "up", "-d", "--no-deps", "--force-recreate", "--wait", "--wait-timeout", "120"}, composeGateways...)...)
+}
+
 // TestComposeManagedGateways runs the compose gateways in managed mode, as
 // make verify-m5 will (ADR-0038): gateway-1 … gateway-5 recreated with the
 // compose control plane and no files, a publish reaches all five and their
@@ -537,24 +573,7 @@ func TestComposeManagedGateways(t *testing.T) {
 	c := composeControlPlane(t)
 	c = c.as(keycloakToken(t, "client_credentials", "spillway-ci", ""))
 	root := filepath.Join("..", "..")
-	compose := func(env []string, args ...string) {
-		t.Helper()
-		full := []string{"compose", "--env-file", ".env.example"}
-		if _, err := os.Stat(filepath.Join(root, ".env.local")); err == nil {
-			full = append(full, "--env-file", ".env.local")
-		}
-		cmd := exec.CommandContext(context.Background(), "docker", append(full, args...)...) //nolint:gosec // G204: fixed docker compose commands
-		cmd.Dir = root
-		cmd.Env = append(os.Environ(), env...)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("docker %v: %v\n%s", args, err, out)
-		}
-	}
-	gateways := []string{"gateway-1", "gateway-2", "gateway-3", "gateway-4", "gateway-5"}
-	t.Cleanup(func() {
-		compose(nil, "up", "-d", "--no-deps", "--force-recreate", "--wait", "--wait-timeout", "120", "gateway-1")
-		compose(nil, append([]string{"--profile", "replicas", "rm", "-fsv"}, gateways[1:]...)...)
-	})
+	gateways := composeGateways
 
 	// The compose gateways' own config, published: managed gateways need a
 	// version to become ready.
@@ -568,8 +587,7 @@ func TestComposeManagedGateways(t *testing.T) {
 	if a := c.call("POST", "/config/publish", map[string]any{"note": "TestComposeManagedGateways: the compose config"}, "If-Match", tag); a.status != 200 && a.status != 409 {
 		t.Fatalf("publish: %d %s", a.status, a.body)
 	}
-	managedEnv := []string{"SPILLWAY_GATEWAY_CONFIG=", "SPILLWAY_GATEWAY_IDENTITY=", "SPILLWAY_GATEWAY_CONTROL_PLANE=controlplane:9090"}
-	compose(managedEnv, append([]string{"--profile", "replicas", "up", "-d", "--no-deps", "--force-recreate", "--wait", "--wait-timeout", "120"}, gateways...)...)
+	composeManaged(t)
 
 	// A new version: the settings' redis_budget flips, which changes no
 	// behaviour the other tests rely on.

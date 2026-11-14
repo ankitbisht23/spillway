@@ -7,3 +7,11 @@ useDefault = true
 [[allowlists]]
 description = "The one obviously fake dev value used in .env.example and the dev Keycloak realm"
 regexes = ['''^dev-only-not-secret$''']
+
+# Managed API keys (CP-15, ADR-0039): a detection rule, which adds findings;
+# the allowlist above is untouched. Tests make their keys at run time.
+[[rules]]
+id = "spillway-api-key"
+description = "Spillway managed API key"
+regex = '''spw_[0-9A-Za-z]{8}_[0-9A-Za-z]{43}'''
+keywords = ["spw_"]

@@ -714,6 +714,96 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '404': { $ref: '#/components/responses/NotFound' }
         default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: issueKey
+      tags: [identity]
+      summary: >-
+        Issue an API key for the consumer (CP-15); applies at once with a new
+        identity version (CP-20). The key is in this answer only: the control
+        plane keeps its prefix and the SHA-256 of its secret (ADR-0039)
+      x-spillway-roles: [key-admin, admin]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/KeyIssue' }
+      responses:
+        '201':
+          description: The key, shown once
+          headers:
+            Cache-Control: { $ref: '#/components/headers/NoStore' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IssuedApiKey' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        default: { $ref: '#/components/responses/Error' }
+  /keys/{id}/rotate:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      operationId: rotateKey
+      tags: [identity]
+      summary: >-
+        Rotate an API key (CP-16): issue a new key for its consumer and keep
+        the old one working for a grace period (default 24h, at most 168h),
+        in one identity change (CP-20). The new key is in this answer only
+      x-spillway-roles: [key-admin, admin]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/KeyRotate' }
+      responses:
+        '200':
+          description: The old key, now expiring, and the new key, shown once
+          headers:
+            Cache-Control: { $ref: '#/components/headers/NoStore' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/KeyRotation' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: The key is revoked or expired (conflict)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        default: { $ref: '#/components/responses/Error' }
+  /keys/{id}/revoke:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      operationId: revokeKey
+      tags: [identity]
+      summary: >-
+        Revoke an API key at once (CP-17): an identity change that reaches
+        every gateway within 5 s (CP-20, NFR-09). Revoking a revoked key
+        changes nothing
+      x-spillway-roles: [key-admin, admin]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/KeyRevoke' }
+      responses:
+        '200':
+          description: The revoked key
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiKey' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        default: { $ref: '#/components/responses/Error' }
   /overrides:
     get:
       operationId: listOverrides
@@ -1357,6 +1447,9 @@ components:
       description: The config version.
       schema: { type: integer, format: int64 }
   headers:
+    NoStore:
+      description: no-store, as the answer holds a key that no cache may keep (ADR-0039).
+      schema: { type: string }
     ETag:
       description: The entity's version as a strong ETag, "<version>" (CP-14).
       schema: { type: string }
@@ -1975,6 +2068,43 @@ components:
           type: array
           items: { $ref: '#/components/schemas/Consumer' }
         next_cursor: { type: string, nullable: true }
+    KeyIssue:
+      type: object
+      additionalProperties: false
+      properties:
+        expires_at: { type: string, format: date-time, nullable: true, description: 'When the key stops working, in the future; none: never.' }
+    KeyRotate:
+      type: object
+      additionalProperties: false
+      properties:
+        grace: { type: string, description: 'How long the old key keeps working: a Go duration from 0s to 168h; default 24h (D2). The old key never gets a later expiry than it has.' }
+        note: { type: string, maxLength: 2000, description: Kept in the audit log. }
+    KeyRevoke:
+      type: object
+      additionalProperties: false
+      properties:
+        note: { type: string, maxLength: 2000, description: Kept in the audit log. }
+    IssuedApiKey:
+      type: object
+      description: A new API key with the key itself, which no other answer shows (ADR-0039).
+      required: [id, consumer_id, prefix, version, created_at, updated_at, key]
+      properties:
+        id: { type: integer, format: int64 }
+        consumer_id: { type: integer, format: int64 }
+        prefix: { type: string }
+        expires_at: { type: string, format: date-time, nullable: true }
+        revoked_at: { type: string, format: date-time, nullable: true }
+        rotated_from: { type: integer, format: int64, nullable: true }
+        version: { type: integer, format: int64 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        key: { type: string, description: 'spw_<8-character prefix>_<43-character secret>; send it in X-API-Key.' }
+    KeyRotation:
+      type: object
+      required: [old, new]
+      properties:
+        old: { $ref: '#/components/schemas/ApiKey' }
+        new: { $ref: '#/components/schemas/IssuedApiKey' }
     ApiKeyList:
       type: object
       required: [items, next_cursor]

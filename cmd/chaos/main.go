@@ -25,7 +25,8 @@
 //
 // Two subcommands serve make verify-m4 (ADR-0031): "chaos mock", the
 // fault-injecting upstream (mock.go), and "chaos upstream", the sender of
-// its scenarios (upstream.go).
+// its scenarios (upstream.go). "chaos revocation" (revocation.go) measures
+// API key revocation on every replica (NFR-09).
 package main
 
 import (
@@ -72,6 +73,8 @@ func main() {
 		code = runMock(ctx, args[1:], os.Stderr)
 	case len(args) > 0 && args[0] == "upstream":
 		code = runUpstream(ctx, args[1:], os.Stdout, os.Stderr)
+	case len(args) > 0 && args[0] == "revocation":
+		code = runRevocation(ctx, args[1:], os.Stdin, os.Stdout, os.Stderr)
 	default:
 		code = run(ctx, args, os.Stdin, os.Stdout, os.Stderr)
 	}
