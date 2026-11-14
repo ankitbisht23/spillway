@@ -8,6 +8,7 @@ import (
 	"net"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -296,6 +297,58 @@ func (r *replica) elector(l *fakeLock) *Elector {
 		r.active = false
 		r.mu.Unlock()
 	}}
+}
+
+// failingLock is a session whose every TryLock fails, as on a database
+// that accepts connections but fails queries.
+type failingLock struct{}
+
+func (failingLock) TryLock(context.Context) (bool, error) { return false, errors.New("conn reset") }
+func (failingLock) Ping(context.Context) error            { return nil }
+func (failingLock) Close(context.Context) error           { return nil }
+
+// lineCounter counts the log lines written to it.
+type lineCounter struct {
+	mu sync.Mutex
+	n  int
+}
+
+func (c *lineCounter) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.n += strings.Count(string(p), "\n")
+	return len(p), nil
+}
+
+// TestElectionTryLockFails: when sessions open but every try of the lock
+// fails, the elector reopens a session once a second, not in a busy loop,
+// and logs the failure once (ADR-0038).
+func TestElectionTryLockFails(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		const opens = 6
+		var n int
+		start := time.Now()
+		logs := &lineCounter{}
+		e := &Elector{
+			Open: func(context.Context) (Lock, error) {
+				if n++; n == opens {
+					cancel()
+				}
+				return failingLock{}, nil
+			},
+			Active: func(context.Context) { t.Error("active without the lock") },
+			Log:    slog.New(slog.NewTextHandler(logs, nil)),
+		}
+		e.Run(ctx)
+		if d := time.Since(start); d != (opens-1)*lockPoll {
+			t.Errorf("%d opens took %v, want %v: a failed try waits lockPoll before the next open", opens, d, (opens-1)*lockPoll)
+		}
+		if logs.n != 1 {
+			t.Errorf("%d log lines, want 1: the failure is logged once", logs.n)
+		}
+	})
 }
 
 // TestElection checks the active replica (CP-22, D6, ADR-0038) on a fake

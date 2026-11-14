@@ -51,39 +51,44 @@ func (e *Elector) Run(ctx context.Context) {
 			sleep(ctx, lockPoll)
 			continue
 		}
-		if failing {
-			e.Log.Info("lock session open")
-			failing = false
-		}
-		held := e.standby(ctx, lock)
+		held, err := e.standby(ctx, lock, &failing)
 		if held {
 			e.active(ctx, lock)
 		}
 		cctx, cancel := context.WithTimeout(context.Background(), closeTimeout)
 		_ = lock.Close(cctx) // frees the lock, if held
 		cancel()
-		if held {
-			sleep(ctx, lockPoll) // a standby may take over before this process tries again
+		// After a term a standby may take over before this process tries
+		// again; after a failed try a database that accepts connections
+		// but fails queries is not reopened in a busy loop.
+		if held || err != nil {
+			sleep(ctx, lockPoll)
 		}
 	}
 }
 
 // standby tries the lock every second until it holds it (true), the
-// session fails or ctx ends.
-func (e *Elector) standby(ctx context.Context, lock Lock) bool {
+// session fails (its error) or ctx ends. *failing is as in Run: a failing
+// try is logged once until a try succeeds.
+func (e *Elector) standby(ctx context.Context, lock Lock, failing *bool) (bool, error) {
 	for {
 		ok, err := lock.TryLock(ctx)
 		if err != nil {
-			if ctx.Err() == nil {
-				e.Log.Warn("trying the lock failed; reopening the session", "err", err)
+			if !*failing && ctx.Err() == nil {
+				e.Log.Warn("trying the lock failed; reopening the session every second", "err", err)
 			}
-			return false
+			*failing = true
+			return false, err
+		}
+		if *failing {
+			e.Log.Info("lock session open")
+			*failing = false
 		}
 		if ok {
-			return true
+			return true, nil
 		}
 		if !sleep(ctx, lockPoll) {
-			return false
+			return false, nil
 		}
 	}
 }
