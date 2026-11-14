@@ -28,6 +28,7 @@ import (
 	"github.com/ankitbisht23/spillway/internal/auth"
 	"github.com/ankitbisht23/spillway/internal/config"
 	"github.com/ankitbisht23/spillway/internal/gen/configpb"
+	"github.com/ankitbisht23/spillway/internal/heavyhitters"
 	"github.com/ankitbisht23/spillway/internal/managed"
 	"github.com/ankitbisht23/spillway/internal/mtls"
 	"github.com/ankitbisht23/spillway/internal/proxy"
@@ -192,6 +193,7 @@ func serve(ctx context.Context, s settings, log *slog.Logger, tracer trace.Trace
 	identity := func() *config.Identity { return nil }
 	ready := func() bool { return snapshot() != nil }
 	var syncAge func() time.Duration // managed mode only (ADR-0038)
+	var hitters *heavyhitters.Sketch // managed mode only: heartbeats report it (RL-21)
 	if s.controlPlane == "" {
 		cfg, err := config.NewWatcher(s.configPath, log, apply)
 		if err != nil {
@@ -222,8 +224,9 @@ func serve(ctx context.Context, s settings, log *slog.Logger, tracer trace.Trace
 			return fmt.Errorf("SPILLWAY_GATEWAY_CONTROL_PLANE: %w", err)
 		}
 		defer func() { _ = conn.Close() }()
+		hitters = heavyhitters.New()
 		m := managed.New(configpb.NewConfigServiceClient(conn), managed.Options{
-			ReplicaID: replica, SnapshotPath: s.snapshot, Log: log,
+			ReplicaID: replica, SnapshotPath: s.snapshot, Log: log, HeavyHitters: hitters,
 			Compile: func(c *configpb.Config) (*config.Snapshot, error) { return config.PrepareManaged(c, log, apply) },
 		})
 		log.Info("managed mode", "control_plane", s.controlPlane, "server_name", s.cpServerName, "replica", replica, "snapshot", s.snapshot)
@@ -239,6 +242,7 @@ func serve(ctx context.Context, s settings, log *slog.Logger, tracer trace.Trace
 	// connections past the connection cap; the admin port is exempt (GW-26).
 	handler := proxy.NewHandler(snapshot, identity, s.trusted, pools, limiters, rl, s.devMode, s.maxInFlight, tracer, rec, log)
 	handler.SetTokens(tokens)
+	handler.SetHeavyHitters(hitters)
 	conns := proxy.NewConnLimit(s.maxConnections, rec, log)
 	srv := proxy.NewServer(handler, log)
 	srv.ConnState = conns.ConnState // waiting connections give way to new ones at the cap (ADR-0033)

@@ -53,8 +53,8 @@ func TestKeys(t *testing.T) {
 			t.Errorf("key = %q, want %q", tt.got, tt.want)
 		}
 	}
-	if got, want := digestOf(ratelimit.Key("acme")), Digest("acme"); got != want {
-		t.Errorf("digestOf(Key) = %q, want %q", got, want)
+	if got, want := KeyDigest(ratelimit.Key("acme")), Digest("acme"); got != want {
+		t.Errorf("KeyDigest(Key) = %q, want %q", got, want)
 	}
 }
 

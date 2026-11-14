@@ -59,3 +59,4 @@ Decisions that shape Spillway and are not obvious from the code or from docs/des
 | [0048](0048-managed-api-keys-and-the-identity-path-details.md) | Managed API keys and the identity path: details | Accepted; policy names in managed keys ended by 0050 | 2026-11-14 |
 | [0049](0049-gateway-jwt-and-auth-modes-details.md) | Gateway JWT and auth modes: details | Accepted | 2026-11-14 |
 | [0050](0050-plans-overrides-and-access-lists-details.md) | Plans, overrides and access lists: details | Accepted | 2026-11-14 |
+| [0051](0051-heavy-hitters-details.md) | Heavy hitters: details | Accepted | 2026-11-14 |

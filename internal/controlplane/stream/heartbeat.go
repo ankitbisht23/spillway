@@ -16,7 +16,8 @@ type Recorder interface {
 	// RecordHeartbeat records replica's heartbeat and returns the live
 	// replica count, replica included (CP-08, RL-24).
 	RecordHeartbeat(ctx context.Context, replica string, hb *configpb.HeartbeatRequest) (int32, error)
-	// PruneReplicas deletes what is older than 7 days (CP-22).
+	// PruneReplicas deletes what is older than 7 days: version reports,
+	// silent replicas and heavy-hitter windows (CP-22).
 	PruneReplicas(ctx context.Context) (int64, error)
 }
 
@@ -58,7 +59,7 @@ func prune(ctx context.Context, rec Recorder, log *slog.Logger) {
 		case err != nil && ctx.Err() == nil:
 			log.Error("pruning replicas failed; trying again in an hour", "err", err)
 		case n > 0:
-			log.Info("pruned replicas and version reports older than 7 days", "rows", n)
+			log.Info("pruned replicas, version reports and heavy-hitter windows older than 7 days", "rows", n)
 		}
 		select {
 		case <-ctx.Done():

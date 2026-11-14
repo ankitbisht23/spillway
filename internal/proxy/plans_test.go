@@ -59,6 +59,8 @@ type planWorld struct {
 	keys  map[string]string // by consumer name
 	ids   map[string]int64  // key IDs by consumer name
 	base  *configpb.Identity
+	// routes are the upstream and route sections, for another config.
+	routes string
 }
 
 // The consumers: bot (acme, so pro), batch (acme, its own plan free), app
@@ -82,7 +84,8 @@ func newPlanWorld(t *testing.T, trusted string) *planWorld {
 	}
 	w := &planWorld{redis: newFakeRedis(), keys: map[string]string{}, ids: map[string]int64{}}
 	w.g = newGatewayWith(t, newResolver(u), oneUpstream(u), tp, w.redis)
-	w.g.swap(t, managedSnapshot(t, oneUpstream(u)+planPolicies))
+	w.routes = oneUpstream(u)
+	w.g.swap(t, managedSnapshot(t, w.routes+planPolicies))
 	w.base = &configpb.Identity{
 		Version: 1, KeyFormat: config.KeyFormatManaged,
 		Tenants: []*configpb.Tenant{

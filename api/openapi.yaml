@@ -35,6 +35,8 @@ tags:
     description: The audit log (CP-13)
   - name: replicas
     description: Gateway replicas, as their heartbeats report them (CP-08)
+  - name: heavy-hitters
+    description: The top throttled keys, as heartbeats report them (RL-21)
 paths:
   /upstreams:
     get:
@@ -1330,6 +1332,42 @@ paths:
               schema: { $ref: '#/components/schemas/ReplicaList' }
         '400': { $ref: '#/components/responses/BadRequest' }
         default: { $ref: '#/components/responses/Error' }
+  /heavy-hitters:
+    get:
+      operationId: listHeavyHitters
+      tags: [heavy-hitters]
+      summary: >-
+        The top throttled keys of a time range (RL-21, ADR-0041): each
+        gateway's heartbeats report its top 100 by policy and key digest,
+        kept as one-minute windows for 7 days (CP-22). The windows that
+        start in [since, until) are summed by policy and key digest and the
+        most throttled (denied + shadow_denied) come first. A key digest is
+        the 22-character digest of the policy's filled key template, never
+        the key itself. Counts are exact for keys that every replica
+        tracked, and a lower bound otherwise
+      x-spillway-roles: [viewer, editor, publisher, key-admin, admin]
+      parameters:
+        - $ref: '#/components/parameters/PageLimit'
+        - name: since
+          in: query
+          description: Windows that start at or after this time; by default 15 minutes ago. At most 7 days before until (or now).
+          schema: { type: string, format: date-time }
+        - name: until
+          in: query
+          description: Windows that start before this time; by default none. Without since, since is 15 minutes before it.
+          schema: { type: string, format: date-time }
+        - name: policy_id
+          in: query
+          description: Only this policy's keys.
+          schema: { type: integer, format: int64 }
+      responses:
+        '200':
+          description: The top throttled keys, at most limit of them; there is no next page
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HeavyHitterList' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        default: { $ref: '#/components/responses/Error' }
   /audit:
     get:
       operationId: listAudit
@@ -2018,6 +2056,26 @@ components:
           type: array
           items: { $ref: '#/components/schemas/Replica' }
         next_cursor: { type: string, nullable: true }
+
+    # Heavy hitters (RL-21, ADR-0041).
+    HeavyHitter:
+      type: object
+      additionalProperties: false
+      required: [policy_id, key_digest, consumer_id, api_key_id, denied, shadow_denied]
+      properties:
+        policy_id: { type: integer, format: int64 }
+        key_digest: { type: string, description: 'base64url of the first 16 bytes of the SHA-256 of the filled key template, as in the Redis key; 22 characters.' }
+        consumer_id: { type: integer, format: int64, nullable: true, description: The consumer of the latest throttled request that had one; null when none did. }
+        api_key_id: { type: integer, format: int64, nullable: true, description: The API key of the latest throttled request that had one; null when none did. }
+        denied: { type: integer, format: int64, description: Requests an enforce limit of the policy denied. }
+        shadow_denied: { type: integer, format: int64, description: Requests the policy in shadow mode would have denied (RL-26). }
+    HeavyHitterList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/HeavyHitter' }
 
     # Pages (UI-06): next_cursor is null on the last page.
     UpstreamList:

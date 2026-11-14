@@ -16,6 +16,7 @@ import (
 
 	"github.com/ankitbisht23/spillway/internal/config"
 	"github.com/ankitbisht23/spillway/internal/gen/configpb"
+	"github.com/ankitbisht23/spillway/internal/heavyhitters"
 )
 
 // lockedBuffer is a log buffer the test reads while the client writes.
@@ -329,5 +330,63 @@ func TestHeartbeatErrorsLoggedOncePerMinute(t *testing.T) {
 		}
 		cancel()
 		<-done
+	})
+}
+
+// TestHeartbeatTopKeys checks the heavy hitters in heartbeats (RL-21,
+// ADR-0041): each heartbeat carries the sketch's entries as top_keys with
+// 22-character digests, and interval_start; a successful one resets the
+// sketch; a failed one keeps them, and the next carries them with what
+// came since, from the earlier interval_start.
+func TestHeartbeatTopKeys(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		cp := newFakeCP(false)
+		hitters := heavyhitters.New()
+		start := time.Now()
+		c := New(cp, Options{
+			ReplicaID: "gateway-1", SnapshotPath: filepath.Join(t.TempDir(), "snapshot.pb"),
+			Compile:      func(c *configpb.Config) (*config.Snapshot, error) { return config.Prepare(c, discard(), nil) },
+			HeavyHitters: hitters, Log: discard(),
+		})
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		go c.Run(ctx)
+		<-cp.streams
+		key := string(make([]byte, 16)) // ratelimit.Key of something: 16 zero bytes
+		hitters.Add(11, key, false, 3, 30)
+		hitters.Add(11, key, true, 3, 30)
+		time.Sleep(heartbeatEvery)
+		synctest.Wait()
+		r := lastHeartbeat(cp).req
+		if len(r.GetTopKeys()) != 1 || !r.GetIntervalStart().AsTime().Equal(start) {
+			t.Fatalf("top_keys %v from %v", r.GetTopKeys(), r.GetIntervalStart().AsTime())
+		}
+		if k := r.GetTopKeys()[0]; k.GetPolicyId() != 11 || k.GetKeyDigest() != "AAAAAAAAAAAAAAAAAAAAAA" || k.GetDenied() != 1 ||
+			k.GetShadowDenied() != 1 || k.GetConsumerId() != 3 || k.GetApiKeyId() != 30 {
+			t.Errorf("top key %v", k)
+		}
+		time.Sleep(heartbeatEvery)
+		synctest.Wait()
+		if r := lastHeartbeat(cp).req; len(r.GetTopKeys()) != 0 || !r.GetIntervalStart().AsTime().Equal(start.Add(heartbeatEvery)) {
+			t.Errorf("after a successful heartbeat: %v from %v", r.GetTopKeys(), r.GetIntervalStart().AsTime().Sub(start))
+		}
+
+		cp.answer(1, status.Error(codes.Unavailable, "no database"))
+		hitters.Add(11, key, false, 0, 0)
+		time.Sleep(heartbeatEvery)
+		synctest.Wait()
+		cp.answer(1, nil)
+		hitters.Add(11, key, false, 4, 40)
+		time.Sleep(heartbeatEvery)
+		synctest.Wait()
+		r = lastHeartbeat(cp).req
+		if len(r.GetTopKeys()) != 1 || !r.GetIntervalStart().AsTime().Equal(start.Add(2*heartbeatEvery)) {
+			t.Fatalf("after a failed heartbeat: %v from %v", r.GetTopKeys(), r.GetIntervalStart().AsTime().Sub(start))
+		}
+		if k := r.GetTopKeys()[0]; k.GetDenied() != 2 || k.GetConsumerId() != 4 || k.GetApiKeyId() != 40 {
+			t.Errorf("top key after a failed heartbeat %v", k)
+		}
+		cancel()
+		synctest.Wait()
 	})
 }

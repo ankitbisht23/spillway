@@ -9,6 +9,7 @@ import (
 
 	"github.com/ankitbisht23/spillway/internal/config"
 	"github.com/ankitbisht23/spillway/internal/gen/configpb"
+	"github.com/ankitbisht23/spillway/internal/heavyhitters"
 )
 
 // Heartbeats, the live replica count and the sync age (CP-08, RL-24,
@@ -53,9 +54,11 @@ func (c *Client) heartbeats(ctx context.Context) {
 	}
 }
 
-// heartbeat sends one heartbeat with what the gateway runs. Its answer
-// is a sync when the Watch stream was established as it was sent; its
-// live replica count replaces the last known one.
+// heartbeat sends one heartbeat with what the gateway runs and the heavy
+// hitters since the last successful one, which a failed one puts back
+// (RL-21, ADR-0041). Its answer is a sync when the Watch stream was
+// established as it was sent; its live replica count replaces the last
+// known one.
 func (c *Client) heartbeat(ctx context.Context) error {
 	watching := c.watching.Load()
 	cv, iv := c.versions()
@@ -72,10 +75,19 @@ func (c *Client) heartbeat(ctx context.Context) error {
 		req.AppliedAt = timestamppb.New(c.appliedAt)
 	}
 	c.mu.Unlock()
+	var hitters []heavyhitters.Entry
+	var since time.Time
+	if c.opts.HeavyHitters != nil {
+		hitters, since = c.opts.HeavyHitters.Take()
+		req.IntervalStart, req.TopKeys = timestamppb.New(since), topKeys(hitters)
+	}
 	hctx, cancel := context.WithTimeout(ctx, heartbeatTimeout)
 	resp, err := c.cs.Heartbeat(hctx, req)
 	cancel()
 	if err != nil {
+		if c.opts.HeavyHitters != nil {
+			c.opts.HeavyHitters.Restore(hitters, since)
+		}
 		return err
 	}
 	if watching {
@@ -147,4 +159,18 @@ func (c *Client) SyncAge() time.Duration {
 	c.syncMu.Lock()
 	defer c.syncMu.Unlock()
 	return time.Since(c.lastSync)
+}
+
+// topKeys are a heartbeat's top_keys: the sketch's entries with their key
+// digests, never raw keys (RL-21, ADR-0041).
+func topKeys(entries []heavyhitters.Entry) []*configpb.TopKey {
+	out := make([]*configpb.TopKey, len(entries))
+	for i := range entries {
+		e := &entries[i]
+		out[i] = &configpb.TopKey{
+			PolicyId: e.Policy, KeyDigest: e.KeyDigest(), ConsumerId: e.Consumer, ApiKeyId: e.APIKey,
+			Denied: e.Denied, ShadowDenied: e.ShadowDenied,
+		}
+	}
+	return out
 }

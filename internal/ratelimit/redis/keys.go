@@ -17,11 +17,11 @@ import (
 // unpadded, of ratelimit.Key, 22 characters. Raw API keys and header values
 // never appear in key names.
 func Digest(filled string) string {
-	return digestOf(ratelimit.Key(filled))
+	return KeyDigest(ratelimit.Key(filled))
 }
 
-// digestOf encodes a ratelimit.Key.
-func digestOf(key string) string {
+// KeyDigest encodes a ratelimit.Key as Digest does.
+func KeyDigest(key string) string {
 	return base64.RawURLEncoding.EncodeToString([]byte(key))
 }
 

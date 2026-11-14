@@ -103,6 +103,16 @@ type Endpoint struct {
 	UpdatedAt  time.Time
 }
 
+type HeavyHitter struct {
+	WindowStart  time.Time
+	PolicyID     int64
+	KeyDigest    string
+	ConsumerID   *int64
+	ApiKeyID     *int64
+	Denied       int64
+	ShadowDenied int64
+}
+
 type IdentityState struct {
 	ID        int16
 	Version   int64
