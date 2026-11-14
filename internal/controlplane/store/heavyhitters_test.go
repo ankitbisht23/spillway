@@ -7,8 +7,8 @@ import (
 )
 
 // TestHeavyHitterRows checks what a heartbeat's top_keys add (ADR-0041):
-// one row per (policy, digest), duplicates summed with the later non-zero
-// IDs, and keys no gateway sends dropped.
+// one row per (policy, digest) in (policy, digest) order, duplicates summed
+// with the later non-zero IDs, and keys no gateway sends dropped.
 func TestHeavyHitterRows(t *testing.T) {
 	const d1, d2 = "AAAAAAAAAAAAAAAAAAAAAA", "_-_-_-_-_-_-_-_-_-_-_w"
 	p := heavyHitters([]*configpb.TopKey{
@@ -34,7 +34,7 @@ func TestHeavyHitterRows(t *testing.T) {
 		consumer, key    int64
 		denied, shadowed int64
 	}
-	want := []row{{1, d1, 4, 40, 3, 5}, {2, d1, 0, 0, 0, 1}, {1, d2, 0, 0, 1, 4}}
+	want := []row{{1, d1, 4, 40, 3, 5}, {1, d2, 0, 0, 1, 4}, {2, d1, 0, 0, 0, 1}}
 	for i, w := range want {
 		if g := (row{p.PolicyIds[i], p.KeyDigests[i], p.ConsumerIds[i], p.ApiKeyIds[i], p.Denied[i], p.ShadowDenied[i]}); g != w {
 			t.Errorf("row %d: %+v, want %+v", i, g, w)

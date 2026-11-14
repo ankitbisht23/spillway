@@ -8,10 +8,13 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/ankitbisht23/spillway/internal/controlplane/store"
 	"github.com/ankitbisht23/spillway/internal/gen/apiv1"
 	"github.com/ankitbisht23/spillway/internal/gen/configpb"
 	rlredis "github.com/ankitbisht23/spillway/internal/ratelimit/redis"
@@ -205,5 +208,53 @@ func TestHeavyHittersReported(t *testing.T) {
 		if strings.Contains(out, key) {
 			t.Errorf("the raw key appears in %s", name)
 		}
+	}
+}
+
+// TestHeavyHitterConcurrentHeartbeats checks that replicas reporting the
+// same keys at once never deadlock (ADR-0051): five replicas send the same
+// 100 keys in different orders, 20 times each, all at once. Every
+// heartbeat succeeds and every window holds the exact sum.
+func TestHeavyHitterConcurrentHeartbeats(t *testing.T) {
+	st := openStore(t, migratedDatabase(t))
+	keys := make([]*configpb.TopKey, 100)
+	for i := range keys {
+		keys[i] = &configpb.TopKey{PolicyId: 1, KeyDigest: rlredis.Digest(fmt.Sprint("client-", i)), Denied: 1}
+	}
+	const replicas, rounds = 5, 20
+	errs := make(chan error, replicas*rounds)
+	var wg sync.WaitGroup
+	for r := range replicas {
+		order := slices.Concat(keys[20*r:], keys[:20*r]) // rotated, every other one reversed
+		if r%2 == 1 {
+			slices.Reverse(order)
+		}
+		wg.Go(func() {
+			for range rounds {
+				_, err := st.RecordHeartbeat(t.Context(), fmt.Sprint("gateway-", r), &configpb.HeartbeatRequest{
+					ReplicaId: fmt.Sprint("gateway-", r), SchemaVersion: &configpb.SchemaVersion{Major: 1}, TopKeys: order,
+				})
+				errs <- err
+			}
+		})
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, err := st.TopHeavyHitters(t.Context(), store.HeavyHitterFilter{}, 500)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var total int64
+	for _, r := range rows {
+		total += r.Denied
+	}
+	// The heartbeats may straddle a minute: the windows' sum is exact.
+	if len(rows) != len(keys) || total != replicas*rounds*int64(len(keys)) {
+		t.Errorf("%d keys, %d denies; want %d, %d", len(rows), total, len(keys), replicas*rounds*len(keys))
 	}
 }

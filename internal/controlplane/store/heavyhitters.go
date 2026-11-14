@@ -1,8 +1,12 @@
 package store
 
 import (
+	"cmp"
 	"context"
 	"encoding/base64"
+	"maps"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/ankitbisht23/spillway/internal/controlplane/store/db"
@@ -43,41 +47,51 @@ func (s *Store) TopHeavyHitters(ctx context.Context, f HeavyHitterFilter, limit 
 }
 
 // heavyHitters are the rows a heartbeat's top_keys add (ADR-0041): one per
-// (policy, key digest), duplicates summed with the later IDs kept. A key
-// that is not one a gateway sends (a policy ID below 1, a digest that is
-// not 22 base64url characters, negative or no counts) is dropped, so one
-// bad entry cannot fail the heartbeat.
+// (policy, key digest), duplicates summed with the later IDs kept, in
+// (policy, key digest) order, so that heartbeats of several replicas lock
+// shared windows in one order and cannot deadlock (ADR-0051). A key that is
+// not one a gateway sends (a policy ID below 1, a digest that is not 22
+// base64url characters, negative or no counts) is dropped, so one bad entry
+// cannot fail the heartbeat.
 func heavyHitters(keys []*configpb.TopKey) db.AddHeavyHittersParams {
 	type id struct {
 		policy int64
 		digest string
 	}
-	var p db.AddHeavyHittersParams
-	at := map[id]int{}
+	sum := map[id]*configpb.TopKey{}
 	for _, k := range keys {
 		if k.GetPolicyId() < 1 || !digest(k.GetKeyDigest()) || k.GetDenied() < 0 || k.GetShadowDenied() < 0 || k.GetDenied()+k.GetShadowDenied() < 1 ||
 			k.GetConsumerId() < 0 || k.GetApiKeyId() < 0 {
 			continue
 		}
-		i, ok := at[id{k.GetPolicyId(), k.GetKeyDigest()}]
+		x, ok := sum[id{k.GetPolicyId(), k.GetKeyDigest()}]
 		if !ok {
-			at[id{k.GetPolicyId(), k.GetKeyDigest()}] = len(p.PolicyIds)
-			p.PolicyIds = append(p.PolicyIds, k.GetPolicyId())
-			p.KeyDigests = append(p.KeyDigests, k.GetKeyDigest())
-			p.ConsumerIds = append(p.ConsumerIds, k.GetConsumerId())
-			p.ApiKeyIds = append(p.ApiKeyIds, k.GetApiKeyId())
-			p.Denied = append(p.Denied, k.GetDenied())
-			p.ShadowDenied = append(p.ShadowDenied, k.GetShadowDenied())
+			sum[id{k.GetPolicyId(), k.GetKeyDigest()}] = &configpb.TopKey{
+				PolicyId: k.GetPolicyId(), KeyDigest: k.GetKeyDigest(), ConsumerId: k.GetConsumerId(), ApiKeyId: k.GetApiKeyId(),
+				Denied: k.GetDenied(), ShadowDenied: k.GetShadowDenied(),
+			}
 			continue
 		}
-		p.Denied[i] += k.GetDenied()
-		p.ShadowDenied[i] += k.GetShadowDenied()
+		x.Denied += k.GetDenied()
+		x.ShadowDenied += k.GetShadowDenied()
 		if k.GetConsumerId() != 0 {
-			p.ConsumerIds[i] = k.GetConsumerId()
+			x.ConsumerId = k.GetConsumerId()
 		}
 		if k.GetApiKeyId() != 0 {
-			p.ApiKeyIds[i] = k.GetApiKeyId()
+			x.ApiKeyId = k.GetApiKeyId()
 		}
+	}
+	var p db.AddHeavyHittersParams
+	for _, i := range slices.SortedFunc(maps.Keys(sum), func(a, b id) int {
+		return cmp.Or(cmp.Compare(a.policy, b.policy), strings.Compare(a.digest, b.digest))
+	}) {
+		x := sum[i]
+		p.PolicyIds = append(p.PolicyIds, x.PolicyId)
+		p.KeyDigests = append(p.KeyDigests, x.KeyDigest)
+		p.ConsumerIds = append(p.ConsumerIds, x.ConsumerId)
+		p.ApiKeyIds = append(p.ApiKeyIds, x.ApiKeyId)
+		p.Denied = append(p.Denied, x.Denied)
+		p.ShadowDenied = append(p.ShadowDenied, x.ShadowDenied)
 	}
 	return p
 }

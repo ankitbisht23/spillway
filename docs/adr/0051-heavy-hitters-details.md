@@ -27,7 +27,7 @@ M5's heavy-hitters task builds what ADR-0041 decides for RL-21: one 100-counter 
 
 ### Control plane
 
-- **Storage.** One `INSERT … ON CONFLICT DO UPDATE` per heartbeat, in its transaction, from arrays (one element per key). The window is `date_trunc('minute', clock_timestamp(), 'UTC')`: in UTC, so a session time zone with a non-whole-minute offset cannot shift it. An ID of 0 is stored as NULL.
+- **Storage.** One `INSERT … ON CONFLICT DO UPDATE` per heartbeat, in its transaction, from arrays (one element per key). The arrays are sorted by (policy ID, digest): replicas reporting the same keys at once (a global policy's key is the same on every replica) then lock the shared windows in one order, so their heartbeats cannot deadlock, which Postgres would end by failing one of them (`TestHeavyHitterConcurrentHeartbeats`: 5 replicas × 20 heartbeats of 100 shared keys in different orders hit `40P01` in 3 of 3 runs unsorted, none sorted). The window is `date_trunc('minute', clock_timestamp(), 'UTC')`: in UTC, so a session time zone with a non-whole-minute offset cannot shift it. An ID of 0 is stored as NULL.
 - **Malformed entries** (a policy ID below 1, a digest that is not 16 bytes of canonical unpadded base64url, a negative count or no count, a negative ID) are dropped, and duplicates of one (policy, digest) in one heartbeat are summed: a gateway bug in one entry must not fail the heartbeat, which carries liveness (RL-24). The policy ID is not checked against the policies: a deleted policy's windows stay until the prune.
 - **Prune.** `PruneHeavyHitters` (batches of 10,000 by `ctid`, as ADR-0046) joins the hourly prune after `replica_versions` and `replicas`, active replica only.
 - **Read.** `GET /api/v1/heavy-hitters` (`listHeavyHitters`, every role, ADR-0040): `since` defaults to 15 minutes ago on Postgres's clock (the windows' clock); `until` defaults to none; with only `until`, `since` is 15 minutes before it. `until` must be after `since`, and `since` at most 7 days before `until` (or now, on the control plane's clock): otherwise 400. `limit` is the usual 1–500, default 50. With `policy_id` the query uses `(policy_id, window_start)`, without it the primary key's `window_start` range. The answer is `{"items": [...]}` with no `next_cursor` (ADR-0036); `consumer_id` and `api_key_id` are those of the latest window that has them, null when none has. Reads are not audited (CP-13 audits changes).
@@ -35,6 +35,7 @@ M5's heavy-hitters task builds what ADR-0041 decides for RL-21: one 100-counter 
 ## Consequences
 
 - A heartbeat's transaction writes up to 100 more rows; the end-to-end test sees a throttled key in the API within one heartbeat (5.0 s after the last request).
+- A heartbeat that commits but whose answer does not reach the gateway (its 4 s deadline passes after the commit) is restored and its entries reported again, so those events count twice in the windows. It needs a control plane slower than the deadline at exactly that moment; deduplicating would need a heartbeat ID the proto does not carry.
 - Static-mode gateways report nothing; `make verify-m2` and the other static-mode checks run with the sketch absent.
 - A policy that throttles before authentication shows no consumer until the same key is throttled after it.
 - UI-01's shadow report (M6) reads `shadow_denied` from the same windows.
