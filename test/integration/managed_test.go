@@ -51,7 +51,7 @@ func binary(t *testing.T, name string) string {
 			out, err := exec.CommandContext(context.Background(), "go", "build", "-o", filepath.Join(binaries.dir, cmd), //nolint:gosec // G204: fixed packages of this repo
 				"github.com/ankitbisht23/spillway/cmd/"+cmd).CombinedOutput()
 			if err != nil {
-				binaries.err = fmt.Errorf("go build %s: %v\n%s", cmd, err, out)
+				binaries.err = fmt.Errorf("go build %s: %w\n%s", cmd, err, out)
 				return
 			}
 		}
@@ -484,7 +484,7 @@ func TestComposeManagedGateways(t *testing.T) {
 
 	// The compose gateways' own config, published: managed gateways need a
 	// version to become ready.
-	data, err := os.ReadFile(filepath.Join(root, "deploy", "compose", "gateway", "config.yaml"))
+	data, err := os.ReadFile(filepath.Join(root, "deploy", "compose", "gateway", "config.yaml")) //nolint:gosec // G304: a config file of this repo
 	if err != nil {
 		t.Fatal(err)
 	}
