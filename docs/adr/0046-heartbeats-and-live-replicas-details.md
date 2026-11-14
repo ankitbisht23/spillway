@@ -24,7 +24,7 @@ M5's heartbeat task (`m5-heartbeat`, the second half of ADR-0035's T1 split, ADR
 - **Heartbeat loop.** A ticker every 5 s from the start, plus one at once after each apply, config or identity, from the stream or the file, and after each refused config (so the refusal shows at once). One heartbeat is in flight at a time; requests for one coalesce. Each has a 4 s deadline; failures are logged at most once a minute.
 - **Sync.** A heartbeat is a sync when the Watch stream was established (its headers received, ADR-0045) as it was sent, and the answer arrived. `gw_config_sync_age_seconds` is now minus the last sync; before one, the snapshot file's `synced_at` when the gateway booted from it, else the process start. Static mode does not export it.
 - **Rejected versions.** `rejected_config_version` and `rejected_reason` hold the last refused config version and its compile error until a config applies. A snapshot file that cannot be used at boot (corrupt, another schema major) is reported as `rejected_reason` "on-disk snapshot: …" with `rejected_config_version` 0, until a config applies. Identity refusals are logged only (the proto has no field for them).
-- **Redials.** The ConfigService connection's gRPC backoff is 100 ms doubling to 5 s with 20 % jitter (`grpc.WithConnectParams`), the Watch stream's own range; the minimum connect timeout stays gRPC's 20 s. The short outage test now recovers in about 7 s after a 30 s outage.
+- **Redials.** The ConfigService connection's gRPC backoff is 100 ms doubling to 5 s with 20 % jitter (`grpc.WithConnectParams`), the Watch stream's own range; the minimum connect timeout stays gRPC's 20 s. The short outage test now recovers in 7–12 s after a 30 s outage (every sync age under 10 s and every replica live, against 17 s before).
 
 ### Control plane
 
@@ -35,9 +35,9 @@ M5's heartbeat task (`m5-heartbeat`, the second half of ADR-0035's T1 split, ADR
 
 ## Consequences
 
-- `live_replicas` changes the per-replica limits within one heartbeat (≤ 5 s) of the change; a stopped gateway leaves the count 10–15 s after its last heartbeat (measured: 15.0 s when the stop came right after a heartbeat).
+- `live_replicas` changes the per-replica limits within one heartbeat (≤ 5 s) of the change; a stopped gateway leaves the count 10–15 s after its last heartbeat (measured: 15.0 s in 4 runs, where the stop came right after a heartbeat).
 - A config that publishes cleanly can be refused by gateways when enough replicas are live that a route's cost exceeds a per-replica capacity, the same as a static file with that `ratelimit.replicas`; the replicas list shows the refusal.
-- NFR-08's measure (ADR-0042) is available from `GET /config/versions/{v}`; the integration test logs it (20 publishes × 5 host gateways: p50 3 ms, max 7 ms from `published_at` to the last apply heartbeat).
+- NFR-08's measure (ADR-0042) is available from `GET /config/versions/{v}`; the integration test logs it (20 publishes × 5 host gateways: p50 3 ms, max 6–10 ms over 4 runs, from `published_at` to the last apply heartbeat).
 
 ## Alternatives considered
 
