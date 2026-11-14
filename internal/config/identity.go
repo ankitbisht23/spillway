@@ -1,6 +1,7 @@
 package config
 
 import (
+	"cmp"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
@@ -29,10 +30,11 @@ func KeyHash(key string) string {
 // static (GW-17, ADR-0017) or managed (CP-15, ADR-0039). It never changes
 // once compiled.
 type Identity struct {
-	Version int64
-	keys    map[string]apiKey // by prefix
-	managed bool              // keys are managed (spw1): prefix and hash of the secret
-	now     func() time.Time  // the clock expiry is checked on
+	Version  int64
+	keys     map[string]apiKey    // by prefix
+	subjects map[string]*Consumer // by JWT subject; managed mode only (GW-19, ADR-0039)
+	managed  bool                 // keys are managed (spw1): prefix and hash of the secret
+	now      func() time.Time     // the clock expiry is checked on
 }
 
 // Consumer is a client of the API. Name and Tenant fill the key template
@@ -44,6 +46,9 @@ type Consumer struct {
 	// TenantName is the tenant's name, the tenant metric label (OB-01);
 	// managed mode only.
 	TenantName string
+	// Plan is the ID of the consumer's plan, its own or else its tenant's
+	// (GW-19, ADR-0041); managed mode only, 0 in static mode.
+	Plan int64
 }
 
 type apiKey struct {
@@ -84,6 +89,16 @@ func (id *Identity) Lookup(key string) (*Consumer, bool) {
 		return nil, false
 	}
 	return k.consumer, true
+}
+
+// Subject returns the consumer whose jwt_subject is sub, the subject of a
+// verified token (GW-19, ADR-0039). Static identity has none.
+func (id *Identity) Subject(sub string) (*Consumer, bool) {
+	if id == nil {
+		return nil, false
+	}
+	c, ok := id.subjects[sub]
+	return c, ok
 }
 
 // KeyFormatManaged is the key format of managed identity, which the control
@@ -143,31 +158,41 @@ func CompileIdentity(c *configpb.Identity) (*Identity, error) {
 }
 
 // compileManaged compiles the identity the control plane sends (CP-20,
-// ADR-0037, ADR-0039): consumers by ID, with their tenants, and their keys
-// by prefix with the hash of their secret and their expiry. The control
-// plane sends only keys that are neither revoked nor expired when it builds
-// the snapshot; expiry after that is checked at each lookup. Errors name
-// keys by ID, never by any part of the key.
+// ADR-0037, ADR-0039): consumers by ID and by JWT subject, with their
+// tenants and plans, and their keys by prefix with the hash of their secret
+// and their expiry. The control plane sends only keys that are neither
+// revoked nor expired when it builds the snapshot; expiry after that is
+// checked at each lookup. Errors name keys by ID, never by any part of the
+// key.
 func compileManaged(c *configpb.Identity) (*Identity, error) {
-	id := &Identity{Version: c.GetVersion(), keys: map[string]apiKey{}, managed: true, now: time.Now}
-	tenants := map[int64]string{}
+	id := &Identity{Version: c.GetVersion(), keys: map[string]apiKey{}, subjects: map[string]*Consumer{}, managed: true, now: time.Now}
+	tenants := map[int64]*configpb.Tenant{}
 	for _, t := range c.GetTenants() {
 		if t.GetId() <= 0 {
 			return nil, fmt.Errorf("tenant %q: id is required", t.GetName())
 		}
-		tenants[t.GetId()] = t.GetName()
+		tenants[t.GetId()] = t
 	}
 	consumers := map[int64]*Consumer{}
 	for _, cc := range c.GetConsumers() {
 		if cc.GetId() <= 0 || consumers[cc.GetId()] != nil {
 			return nil, fmt.Errorf("consumer %q: want a unique id", cc.GetName())
 		}
-		name, ok := tenants[cc.GetTenantId()]
+		tenant, ok := tenants[cc.GetTenantId()]
 		if !ok {
 			return nil, fmt.Errorf("consumer %d: tenant %d is not defined", cc.GetId(), cc.GetTenantId())
 		}
-		consumers[cc.GetId()] = &Consumer{
-			Name: strconv.FormatInt(cc.GetId(), 10), Tenant: strconv.FormatInt(cc.GetTenantId(), 10), TenantName: name,
+		consumer := &Consumer{
+			Name: strconv.FormatInt(cc.GetId(), 10), Tenant: strconv.FormatInt(cc.GetTenantId(), 10), TenantName: tenant.GetName(),
+			Plan: cmp.Or(cc.GetPlanId(), tenant.GetPlanId()),
+		}
+		consumers[cc.GetId()] = consumer
+		// Errors name consumers by ID, never by their subject.
+		if sub := cc.GetJwtSubject(); sub != "" {
+			if id.subjects[sub] != nil {
+				return nil, fmt.Errorf("consumer %d: its jwt_subject is another consumer's", cc.GetId())
+			}
+			id.subjects[sub] = consumer
 		}
 	}
 	for _, k := range c.GetApiKeys() {

@@ -1,6 +1,6 @@
 # 0039. Gateway authentication: managed API keys, JWT and auth modes
 
-- **Status:** Accepted
+- **Status:** Accepted; the `authn` span's outcome names settled by [ADR-0049](0049-gateway-jwt-and-auth-modes-details.md)
 - **Date:** 2026-11-13
 - **Requirement IDs:** GW-17 – GW-20, CP-15 – CP-17, CP-20, SEC-03, SEC-04, OB-01, OB-03, NFR-09
 

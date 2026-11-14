@@ -67,6 +67,7 @@ func TestCompile(t *testing.T) {
 		HSTS:            "max-age=31536000",
 		Cost:            1,
 		Retry:           Retry{Attempts: 1},
+		AuthMode:        AuthNone,
 		strip:           1,
 	}
 	if !reflect.DeepEqual(orders, wantOrders) {
@@ -105,6 +106,17 @@ func TestCompile(t *testing.T) {
 }
 
 const upstream = "upstreams: [{name: u, endpoints: [{address: 'u:80'}]}]\n"
+
+// TestAuthMode: a route's auth_mode compiles as given, unset meaning none
+// (GW-20, ADR-0039).
+func TestAuthMode(t *testing.T) {
+	for yaml, want := range map[string]string{"": AuthNone, "auth_mode: none": AuthNone, "auth_mode: api_key": AuthAPIKey, "auth_mode: jwt": AuthJWT, "auth_mode: either": AuthEither} {
+		s, err := parse([]byte(route(yaml)))
+		if err != nil || s.Routes[0].AuthMode != want {
+			t.Errorf("%q: %v; want auth mode %s", yaml, err, want)
+		}
+	}
+}
 
 func TestRejects(t *testing.T) {
 	tests := []struct {
@@ -179,8 +191,7 @@ func TestRejects(t *testing.T) {
 		{"too many attempts", route("retry: {attempts: 6}"), "retry.attempts: want 1 to 5"},
 		{"unknown retry field", route("retry: {on: [503]}"), `unknown field "on"`},
 		{"unknown auth_mode", route("auth_mode: basic"), `route "r": auth_mode "basic": want none, api_key, jwt or either`},
-		{"auth_mode before the jwt task", route("auth_mode: jwt"), `auth_mode "jwt" is not supported until M5's jwt task`},
-		{"auth_mode api_key before the jwt task", route("auth_mode: api_key"), "is not supported until"},
+		{"auth_mode in upper case", route("auth_mode: JWT"), `auth_mode "JWT": want none, api_key, jwt or either`},
 		{"plan with default_limits before the plans task", "plans: [{name: free, default_limits: [{policy: p, limits: [{rate: 1, period: 1s}]}]}]", `plan "free": default_limits are not supported until M5's plans task`},
 		{"plan without a name", "plans: [{}]", `plan "": name must be`},
 		{"plan twice", "plans: [{name: free}, {name: free}]", `plan "free": defined twice`},

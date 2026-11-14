@@ -249,7 +249,7 @@ func TestRequestErrors(t *testing.T) {
 		{"unknown action filter", "GET", "/api/v1/access-lists?action=block", "", nil, 400, apiv1.ErrorCodeInvalidRequest, "action"},
 		{"bad name", "POST", "/api/v1/routes", `{"name": "a b", "upstream": "u", "match": {"path": "/"}}`, nil, 422, apiv1.ErrorCodeValidationFailed, "name must be 1-64 characters"},
 		{"route rule", "POST", "/api/v1/routes", `{"name": "r", "upstream": "u", "match": {"path": "/a", "path_prefix": "/a"}}`, nil, 422, apiv1.ErrorCodeValidationFailed, "exactly one of match.path"},
-		{"route before its task", "POST", "/api/v1/routes", `{"name": "r", "upstream": "u", "match": {"path": "/a"}, "auth_mode": "jwt"}`, nil, 422, apiv1.ErrorCodeValidationFailed, "not supported until"},
+		{"route with an unknown auth_mode", "POST", "/api/v1/routes", `{"name": "r", "upstream": "u", "match": {"path": "/a"}, "auth_mode": "basic"}`, nil, 422, apiv1.ErrorCodeValidationFailed, "auth_mode \"basic\": want none, api_key, jwt or either"},
 		{"upstream rule", "POST", "/api/v1/upstreams", `{"name": "u", "endpoints": [{"address": "upstream-1"}]}`, nil, 422, apiv1.ErrorCodeValidationFailed, "want host:port"},
 		{"upstream IP outside the allow-list", "POST", "/api/v1/upstreams", `{"name": "u", "endpoints": [{"address": "10.0.0.1:80"}]}`, nil, 422, apiv1.ErrorCodeValidationFailed, "not in the allowed upstream networks"},
 		{"upstream at the metadata address", "PUT", "/api/v1/upstreams/1", `{"name": "u", "endpoints": [{"address": "169.254.169.254:80"}]}`, []string{"If-Match", `"1"`}, 422, apiv1.ErrorCodeValidationFailed, "not in the allowed upstream networks"},

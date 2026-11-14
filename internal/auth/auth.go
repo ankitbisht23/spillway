@@ -1,7 +1,7 @@
 // Package auth verifies bearer tokens, compact JWS JWTs signed with RS256 or
 // ES256, against the keys an issuer publishes at its JWKS URL (GW-18, SEC-04,
 // ADR-0039). The control plane uses it for its REST API's bearer tokens
-// (CP-11, ADR-0040); the gateway will use it for JWT routes.
+// (CP-11, ADR-0040), the gateway for its jwt and either routes (GW-20).
 //
 // Keys come only from the configured JWKS URL, never from a token's own
 // jku, x5u or jwk headers. The key set is fetched in the background and
@@ -16,6 +16,8 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rsa"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -99,7 +101,8 @@ type Verifier struct {
 // keySet is the usable keys of a JWKS by kid.
 type keySet map[string][]jose.JSONWebKey
 
-// New returns a verifier for cfg. Call Run to fetch keys.
+// New returns a verifier for cfg, fetching with NewClient(nil) when
+// cfg.Client is nil. Call Run to fetch keys.
 func New(cfg Config) (*Verifier, error) {
 	for name, u := range map[string]string{"issuer": cfg.Issuer, "JWKS URL": cfg.JWKSURL} {
 		if err := CheckURL(u, cfg.AllowHTTP); err != nil {
@@ -110,7 +113,7 @@ func New(cfg Config) (*Verifier, error) {
 		return nil, errors.New("audience: required")
 	}
 	if cfg.Client == nil {
-		cfg.Client = &http.Client{Timeout: FetchTimeout}
+		cfg.Client = NewClient(nil)
 	}
 	if cfg.Log == nil {
 		cfg.Log = slog.New(slog.DiscardHandler)
@@ -119,6 +122,23 @@ func New(cfg Config) (*Verifier, error) {
 		cfg.Now = time.Now
 	}
 	return &Verifier{cfg: cfg}, nil
+}
+
+// NewClient returns the client keys are fetched with: FetchTimeout per
+// fetch, and no redirects, so keys come from the configured URL only
+// (SEC-04). With roots, it trusts those certificates instead of the
+// system's.
+func NewClient(roots *x509.CertPool) *http.Client {
+	c := &http.Client{
+		Timeout:       FetchTimeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	if roots != nil {
+		t := http.DefaultTransport.(*http.Transport).Clone()
+		t.TLSClientConfig = &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}
+		c.Transport = t
+	}
+	return c
 }
 
 // CheckURL accepts an absolute https:// URL, or an http:// one when

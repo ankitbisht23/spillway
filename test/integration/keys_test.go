@@ -560,11 +560,11 @@ func TestComposeRevocation(t *testing.T) {
 		t.Fatalf("publish: %d %s", a.status, a.body)
 	}
 	plan, _ := lookup(t, c, "/plans", "it-keys")
-	removeTestTenants(t, c) // left by a run that did not finish
+	removeTestTenants(t, c, "it-keys-") // left by a run that did not finish
 	name := fmt.Sprintf("it-keys-%d", time.Now().UnixNano()%1e9)
 	tenant, _ := created(t, c, "/tenants", map[string]any{"name": name, "plan_id": plan})
 	consumer, _ := created(t, c, "/consumers", map[string]any{"tenant_id": tenant, "name": name})
-	t.Cleanup(func() { removeTestTenants(t, c) })
+	t.Cleanup(func() { removeTestTenants(t, c, "it-keys-") })
 	composeManaged(t)
 	var cons apiv1.Consumer
 	c.must(200, "GET", fmt.Sprintf("/consumers/%d", consumer), nil).decode(t, &cons)
@@ -597,10 +597,11 @@ func TestComposeRevocation(t *testing.T) {
 	}
 }
 
-// removeTestTenants deletes TestComposeRevocation's tenants (it-keys-…)
-// and their consumers, whose keys go with them, from the compose control
-// plane. It runs its own requests, as a cleanup's t.Context() is done.
-func removeTestTenants(t *testing.T, c cpClient) {
+// removeTestTenants deletes a compose test's tenants, those whose names
+// start with prefix (it-keys-…, it-jwt-…), and their consumers, whose keys
+// go with them, from the compose control plane. It runs its own requests,
+// as a cleanup's t.Context() is done.
+func removeTestTenants(t *testing.T, c cpClient, prefix string) {
 	t.Helper()
 	call := func(method, path, ifMatch string, out any) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -630,7 +631,7 @@ func removeTestTenants(t *testing.T, c cpClient) {
 	var tenants apiv1.TenantList
 	call("GET", "/tenants?limit=500", "", &tenants)
 	for _, tn := range tenants.Items {
-		if !strings.HasPrefix(tn.Name, "it-keys-") {
+		if !strings.HasPrefix(tn.Name, prefix) {
 			continue
 		}
 		var consumers apiv1.ConsumerList

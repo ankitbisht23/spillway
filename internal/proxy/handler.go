@@ -19,6 +19,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/ankitbisht23/spillway/internal/auth"
 	"github.com/ankitbisht23/spillway/internal/config"
 	"github.com/ankitbisht23/spillway/internal/ratelimit/local"
 	"github.com/ankitbisht23/spillway/internal/resilience"
@@ -31,6 +32,7 @@ import (
 type Handler struct {
 	snapshot func() *config.Snapshot
 	identity func() *config.Identity
+	tokens   *auth.Verifier // bearer tokens (GW-18); nil without JWT settings
 	trusted  TrustedProxies
 	pools    *Registry
 	limiters *local.Registry
@@ -173,8 +175,8 @@ func (h *Handler) serve(w *responseRecorder, r *http.Request, body *countingBody
 	q.Route = route.Name
 
 	// Rate limits (ADR-0017, ADR-0021): the local policies that need no
-	// identity, then API key resolution, then the local policies that use
-	// the key's identity, then the Redis policies. They run before the size
+	// identity, then authentication (ADR-0039), then the local policies that
+	// use its identity, then the Redis policies. They run before the size
 	// limits, so oversized requests count too. A request denied in the first
 	// phase is not authenticated.
 	peer, _ := netip.ParseAddrPort(r.RemoteAddr)
@@ -184,20 +186,20 @@ func (h *Handler) serve(w *responseRecorder, r *http.Request, body *countingBody
 	allowed := lim.check(false)
 	if allowed {
 		span := childSpan(r.Context(), h.tracer, "authn")
-		consumer, ok := h.authenticate(r.Header, q)
+		consumer, key, fail := h.authenticate(r.Context(), route.AuthMode, r.Header, q)
 		if span != nil {
-			span.SetAttributes(attribute.String("spillway.authn.result", authnResult(consumer, ok)))
+			span.SetAttributes(attribute.String("spillway.authn.result", authnResult(consumer, fail)))
 			span.End()
 		}
-		if !ok {
+		if fail != nil {
 			w.rateLimitPolicy, w.rateLimit = lim.headers() // the first phase's deductions stay
-			jsonError(w, http.StatusUnauthorized, "invalid API key")
+			fail.write(w)
 			return
 		}
 		if consumer != nil && consumer.TenantName != "" {
 			q.Tenant = consumer.TenantName // managed mode (GW-19, OB-01)
 		}
-		lim.identify(consumer, r.Header.Get("X-API-Key"))
+		lim.identify(consumer, key)
 		allowed = lim.check(true) && lim.checkRedis()
 	}
 	w.rateLimitPolicy, w.rateLimit = lim.headers()
@@ -397,23 +399,6 @@ func ambiguousPath(p string) bool {
 		}
 	}
 	return false
-}
-
-// authenticate resolves a request's API key (GW-17, SEC-03), sent in
-// X-API-Key on every route until per-route auth modes (GW-20, M5). No key is
-// anonymous: a nil consumer and true. One key that resolves gives its
-// consumer; anything else, an empty or unknown key or several values, is
-// false. It notes the key's hash, never the key, in q for the access log.
-func (h *Handler) authenticate(header http.Header, q *telemetry.Request) (*config.Consumer, bool) {
-	keys := header.Values("X-API-Key")
-	if len(keys) == 0 {
-		return nil, true
-	}
-	q.KeyHash = config.KeyHash(keys[0])
-	if len(keys) != 1 {
-		return nil, false
-	}
-	return h.identity().Lookup(keys[0])
 }
 
 // jsonError answers with the gateway's JSON error body, {"error": msg}

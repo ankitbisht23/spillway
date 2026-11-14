@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -24,6 +25,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
 
+	"github.com/ankitbisht23/spillway/internal/auth"
 	"github.com/ankitbisht23/spillway/internal/config"
 	"github.com/ankitbisht23/spillway/internal/gen/configpb"
 	"github.com/ankitbisht23/spillway/internal/managed"
@@ -157,8 +159,25 @@ func serve(ctx context.Context, s settings, log *slog.Logger, tracer trace.Trace
 		go c.Warm(bg, time.Second)
 		rl = c
 	}
+	// Bearer tokens (GW-18, ADR-0039): the keys are fetched in the
+	// background, so readiness never waits for the issuer.
+	var tokens *auth.Verifier
+	if s.jwtIssuer != "" {
+		client, err := jwksClient(s.jwtCA)
+		if err != nil {
+			return err
+		}
+		tokens, err = auth.New(auth.Config{Issuer: s.jwtIssuer, JWKSURL: s.jwtJWKSURL, Audience: s.jwtAudience, AllowHTTP: s.devMode, Client: client, Log: log})
+		if err != nil {
+			return err
+		}
+		go tokens.Run(bg)
+	}
 	apply := func(snap *config.Snapshot) error {
 		if err := checkRedis(snap, rl != nil); err != nil {
+			return err
+		}
+		if err := checkAuth(snap, tokens != nil, s.controlPlane != ""); err != nil {
 			return err
 		}
 		if err := pools.Apply(snap); err != nil {
@@ -219,6 +238,7 @@ func serve(ctx context.Context, s settings, log *slog.Logger, tracer trace.Trace
 	// The handler sheds requests past the in-flight cap and the listeners
 	// connections past the connection cap; the admin port is exempt (GW-26).
 	handler := proxy.NewHandler(snapshot, identity, s.trusted, pools, limiters, rl, s.devMode, s.maxInFlight, tracer, rec, log)
+	handler.SetTokens(tokens)
 	conns := proxy.NewConnLimit(s.maxConnections, rec, log)
 	srv := proxy.NewServer(handler, log)
 	srv.ConnState = conns.ConnState // waiting connections give way to new ones at the cap (ADR-0033)
@@ -356,4 +376,42 @@ func checkRedis(snap *config.Snapshot, haveRedis bool) error {
 		}
 	}
 	return nil
+}
+
+// checkAuth rejects a snapshot with a route that needs bearer tokens when
+// the gateway has no JWT settings (ADR-0039), or in static mode, whose
+// consumers have no JWT subjects (ADR-0045).
+func checkAuth(snap *config.Snapshot, haveJWT, managed bool) error {
+	for _, r := range snap.Routes {
+		if r.AuthMode != config.AuthJWT && r.AuthMode != config.AuthEither {
+			continue
+		}
+		if !haveJWT {
+			return fmt.Errorf("route %q uses auth_mode %s, but SPILLWAY_GATEWAY_JWT_ISSUER is not set", r.Name, r.AuthMode)
+		}
+		if !managed {
+			return fmt.Errorf("route %q uses auth_mode %s, which needs managed mode: only the control plane gives consumers JWT subjects", r.Name, r.AuthMode)
+		}
+	}
+	return nil
+}
+
+// jwksClient is the client the token keys are fetched with: the system
+// roots, plus the certificates in caFile when set (SEC-04, ADR-0039).
+func jwksClient(caFile string) (*http.Client, error) {
+	if caFile == "" {
+		return auth.NewClient(nil), nil
+	}
+	pem, err := os.ReadFile(caFile) //nolint:gosec // G304: a path from the gateway's own settings
+	if err != nil {
+		return nil, fmt.Errorf("SPILLWAY_GATEWAY_JWT_CA: %w", err)
+	}
+	roots, err := x509.SystemCertPool()
+	if err != nil {
+		roots = x509.NewCertPool()
+	}
+	if !roots.AppendCertsFromPEM(pem) {
+		return nil, fmt.Errorf("SPILLWAY_GATEWAY_JWT_CA: no PEM certificate in %s", caFile)
+	}
+	return auth.NewClient(roots), nil
 }

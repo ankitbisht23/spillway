@@ -83,11 +83,13 @@ func childSpan(ctx context.Context, tracer trace.Tracer, name string, opts ...tr
 	return span
 }
 
-// authnResult is an authn span's spillway.authn.result.
-func authnResult(c *config.Consumer, ok bool) string {
+// authnResult is an authn span's spillway.authn.result: consumer,
+// anonymous, or the failure's missing, invalid or unavailable (ADR-0030,
+// ADR-0039).
+func authnResult(c *config.Consumer, fail *authFailure) string {
 	switch {
-	case !ok:
-		return "invalid"
+	case fail != nil:
+		return fail.result
 	case c == nil:
 		return "anonymous"
 	}

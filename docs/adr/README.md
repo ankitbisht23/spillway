@@ -38,16 +38,16 @@ Decisions that shape Spillway and are not obvious from the code or from docs/des
 | [0027](0027-tolerance-for-host-stalls-in-the-m3-exit-check.md) | Tolerance for host stalls in the M3 exit check | Accepted; NFR-04 one-error rule superseded by 0034 | 2026-11-12 |
 | [0028](0028-conservative-gcra-refunds.md) | Conservative GCRA refunds | Accepted | 2026-11-12 |
 | [0029](0029-methods-not-in-upper-case.md) | Methods that are not upper case | Accepted | 2026-11-12 |
-| [0030](0030-resilience-model.md) | Resilience model | Accepted; connection-cap answer timing superseded by 0032; connection cap at capacity, round-robin retries and the order of retry checks superseded by 0033; breaker column of the attempt-outcome table superseded by 0034 | 2026-11-12 |
+| [0030](0030-resilience-model.md) | Resilience model | Accepted; connection-cap answer timing superseded by 0032; connection cap at capacity, round-robin retries and the order of retry checks superseded by 0033; breaker column of the attempt-outcome table superseded by 0034; authn span results extended by 0049 | 2026-11-12 |
 | [0031](0031-m4-exit-check.md) | The M4 exit check | Accepted; rule (c)'s "by construction" note corrected in 0033 | 2026-11-12 |
 | [0032](0032-answering-shed-connections.md) | Answering shed connections | Accepted; which connections are shed at the cap superseded by 0033 | 2026-11-12 |
 | [0033](0033-m1-m4-review-fixes.md) | M1–M4 review fixes | Accepted; open breaker question decided in 0034 | 2026-11-13 |
 | [0034](0034-user-decisions-after-the-m4-review.md) | User decisions after the M4 review | Accepted | 2026-11-13 |
-| [0035](0035-m5-control-plane-and-auth-plan-and-decisions.md) | M5 control plane and auth: plan and decisions | Accepted | 2026-11-13 |
+| [0035](0035-m5-control-plane-and-auth-plan-and-decisions.md) | M5 control plane and auth: plan and decisions | Accepted; the auth_mode interim ended by 0049 | 2026-11-13 |
 | [0036](0036-control-plane-data-model-migrations-and-rest-api.md) | Control-plane data model, migrations and REST API | Accepted | 2026-11-13 |
 | [0037](0037-config-publish-rollback-and-the-identity-path.md) | Config publish, versions and rollback; the identity path | Accepted | 2026-11-13 |
 | [0038](0038-config-distribution-watch-heartbeat-snapshots-and-the-active-replica.md) | Config distribution: Watch, Heartbeat, snapshots and the active replica | Accepted | 2026-11-13 |
-| [0039](0039-gateway-authentication-managed-api-keys-jwt-and-auth-modes.md) | Gateway authentication: managed API keys, JWT and auth modes | Accepted | 2026-11-13 |
+| [0039](0039-gateway-authentication-managed-api-keys-jwt-and-auth-modes.md) | Gateway authentication: managed API keys, JWT and auth modes | Accepted; authn span outcome names settled by 0049 | 2026-11-13 |
 | [0040](0040-control-plane-security-mtls-oidc-rbac-audit-and-secrets.md) | Control-plane security: mTLS, OIDC, RBAC, audit and secrets | Accepted; where RBAC is enforced superseded by 0043; the stream certificates' paths superseded by 0047 | 2026-11-13 |
 | [0041](0041-limit-precedence-plans-overrides-access-lists-and-heavy-hitters.md) | Limit precedence: plans, overrides, access lists and heavy hitters | Accepted | 2026-11-13 |
 | [0042](0042-m5-exit-check.md) | The M5 exit check | Accepted | 2026-11-13 |
@@ -57,3 +57,4 @@ Decisions that shape Spillway and are not obvious from the code or from docs/des
 | [0046](0046-heartbeats-and-live-replicas-details.md) | Heartbeats and live replicas: details | Accepted | 2026-11-14 |
 | [0047](0047-stream-mtls-and-secrets-details.md) | Config stream mTLS and secrets: details | Accepted | 2026-11-14 |
 | [0048](0048-managed-api-keys-and-the-identity-path-details.md) | Managed API keys and the identity path: details | Accepted | 2026-11-14 |
+| [0049](0049-gateway-jwt-and-auth-modes-details.md) | Gateway JWT and auth modes: details | Accepted | 2026-11-14 |

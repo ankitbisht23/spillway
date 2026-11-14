@@ -256,6 +256,8 @@ People log in through Keycloak only, and service tokens come from Keycloak confi
 
 In dev, Keycloak runs with `KC_HOSTNAME=http://localhost:8180/auth`, `KC_HTTP_RELATIVE_PATH=/auth` (the same path the demo proxy uses) and `KC_HOSTNAME_BACKCHANNEL_DYNAMIC=true`. Tokens carry the issuer your browser sees (`http://localhost:8180/auth/realms/spillway`), and services check `iss` against it, but they fetch the signing keys (JWKS) from a separately configured URL inside the compose network (`http://keycloak:8080/auth/realms/spillway/...`, Keycloak’s container port, not the control plane’s host port). Plain-HTTP issuers are accepted only with `dev_mode: true`, never in Helm (SEC-04).
 
+The compose gateways check bearer tokens the same way: `SPILLWAY_GATEWAY_JWT_ISSUER` is the browser-facing issuer, `SPILLWAY_GATEWAY_JWT_JWKS_URL` the in-network JWKS URL and `SPILLWAY_GATEWAY_JWT_AUDIENCE` is `spillway-gateway` (GW-18, ADR-0039). A route with `auth_mode: jwt` or `either` needs these settings and managed mode, where a consumer's `jwt_subject` (for `gateway-tests`, its service account's fixed ID `0b5e7c1a-5f1d-4c3e-9a00-0000000000c2`) maps a token to it; a gateway refuses such a config otherwise (ADR-0049). To try one: `curl -s -d grant_type=client_credentials -d client_id=gateway-tests -d client_secret=dev-only-not-secret http://localhost:8180/auth/realms/spillway/protocol/openid-connect/token`, then send its `access_token` as `Authorization: Bearer …`.
+
 Your part: after `make dev`, open the Keycloak admin console at `http://localhost:8180/auth/admin/` (port from `docs/ports.md`; Keycloak runs under `/auth`) and log in once to confirm it works.
 
 ### Demo login with GitHub (optional, M8)

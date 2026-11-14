@@ -159,7 +159,7 @@ The gateway is a stateless Go reverse proxy. Each requirement carries an ID (ref
 - **GW-17** (M2 static, M5 managed) API keys via header, stored as SHA-256 hashes (keys are high-entropy, so a fast hash is safe and lookups stay O(1)), cached in memory.
 - **GW-18** (M5) JWT validation: RS256 / ES256 via cached JWKS, refetch on unknown `kid`, 60 s clock-skew leeway, `iss` / `aud` / `exp` / `nbf` checks. `iss` is checked against the configured, browser-facing issuer; JWKS is fetched from a separately configured URL, which in dev is the in-network address (ADR-0004).
 - **GW-19** (M5) Identity resolution: key or token claims map to consumer, tenant and plan, which become rate-limit dimensions.
-- **GW-20** (M5) Auth mode per route: none, API key, JWT, or either.
+- **GW-20** (M5) Auth mode per route: none (no credential required; an `X-API-Key` that is sent is still checked), API key, JWT, or either (an API key, when sent, is used).
 
 ### Operations
 
@@ -678,7 +678,7 @@ Exit (`make verify-m4`): with one of three endpoints failing, ≥ 99% of request
 - [ ] Heavy hitters in heartbeats’ `top_keys`, shadow would-denies included, kept as `heavy_hitters` windows (RL-21)
 - [x] mTLS for the gRPC stream: dev certs from `make certs`, certs from a Secret in Helm; control-plane API bound to internal networks (SEC-02)
 - [x] Key issue, list, rotate, revoke (revocation through identity); managed API keys from the control plane replace static ones (CP-15–CP-17, GW-17)
-- [ ] JWT / JWKS with an algorithm allowlist, `iss` checked against the browser-facing issuer, JWKS from its own URL; identity → tenant and plan (GW-18–GW-20, SEC-04)
+- [x] JWT / JWKS with an algorithm allowlist, `iss` checked against the browser-facing issuer, JWKS from its own URL; identity → tenant and plan (GW-18–GW-20, SEC-04)
 - [ ] Plans with `default_limits` per policy and `from_plan: true` policies, overrides keyed by (consumer, policy), allow and deny lists; Keycloak-only login with confidential clients for service tokens, RBAC on every endpoint, append-only audit log (RL-08, RL-09, CP-11–CP-13, SEC-08)
 - [x] Postgres, Redis and Keycloak secrets from env or mounted files (SEC-09)
 

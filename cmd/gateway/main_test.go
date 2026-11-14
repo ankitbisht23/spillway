@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/pem"
 	"io"
 	"log/slog"
 	"net"
@@ -17,6 +18,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ankitbisht23/spillway/internal/config"
+	"github.com/ankitbisht23/spillway/internal/gen/configpb"
 	"github.com/ankitbisht23/spillway/internal/proxy"
 	"github.com/ankitbisht23/spillway/internal/testcert"
 )
@@ -123,6 +126,29 @@ func TestLoadSettings(t *testing.T) {
 			t.Errorf("trace sample ratio %s: %+v, %v", v, s, err)
 		}
 	}
+	if s.jwtIssuer != "" || s.jwtJWKSURL != "" || s.jwtAudience != "" || s.jwtCA != "" {
+		t.Errorf("JWT on by default: %+v", s)
+	}
+	jwt := map[string]string{
+		"SPILLWAY_GATEWAY_JWT_ISSUER":   "https://sso.example/realms/spillway",
+		"SPILLWAY_GATEWAY_JWT_JWKS_URL": "https://keycloak.internal/realms/spillway/protocol/openid-connect/certs",
+		"SPILLWAY_GATEWAY_JWT_AUDIENCE": "spillway-gateway",
+		"SPILLWAY_GATEWAY_JWT_CA":       "/etc/spillway-jwt/ca.pem",
+	}
+	if s, err := loadSettings(env(jwt)); err != nil || s.jwtIssuer != jwt["SPILLWAY_GATEWAY_JWT_ISSUER"] || s.jwtJWKSURL != jwt["SPILLWAY_GATEWAY_JWT_JWKS_URL"] ||
+		s.jwtAudience != "spillway-gateway" || s.jwtCA != "/etc/spillway-jwt/ca.pem" {
+		t.Errorf("JWT: %+v, %v", s, err)
+	}
+	// Compose's plain-HTTP Keycloak, in dev mode only (SEC-04).
+	devJWT := map[string]string{
+		"SPILLWAY_GATEWAY_JWT_ISSUER":   "http://localhost:8180/auth/realms/spillway",
+		"SPILLWAY_GATEWAY_JWT_JWKS_URL": "http://keycloak:8080/auth/realms/spillway/protocol/openid-connect/certs",
+		"SPILLWAY_GATEWAY_JWT_AUDIENCE": "spillway-gateway",
+		"SPILLWAY_GATEWAY_DEV_MODE":     "true",
+	}
+	if s, err := loadSettings(env(devJWT)); err != nil || s.jwtIssuer != devJWT["SPILLWAY_GATEWAY_JWT_ISSUER"] {
+		t.Errorf("JWT in dev mode: %+v, %v", s, err)
+	}
 	for _, v := range []string{"http://otel-collector:4317", "https://collector.example:4317"} {
 		if s, err := loadSettings(env(map[string]string{"SPILLWAY_GATEWAY_OTLP_ENDPOINT": v})); err != nil || s.otlpEndpoint != v {
 			t.Errorf("OTLP endpoint %s: %+v, %v", v, s, err)
@@ -173,6 +199,15 @@ func TestLoadSettings(t *testing.T) {
 		{map[string]string{"SPILLWAY_GATEWAY_REDIS_ADDRS": "redis-0:6379,:6379"}, `SPILLWAY_GATEWAY_REDIS_ADDRS: ":6379"`},
 		{map[string]string{"SPILLWAY_REDIS_ADDR_MAP": "redis-0:6379"}, "SPILLWAY_REDIS_ADDR_MAP"},
 		{map[string]string{"SPILLWAY_GATEWAY_DEV_MODE": "yes"}, `SPILLWAY_GATEWAY_DEV_MODE: "yes" is not true or false`},
+		// Bearer tokens (SEC-04, ADR-0039).
+		{map[string]string{"SPILLWAY_GATEWAY_JWT_JWKS_URL": "https://kc/certs"}, "SPILLWAY_GATEWAY_JWT_JWKS_URL, SPILLWAY_GATEWAY_JWT_AUDIENCE and SPILLWAY_GATEWAY_JWT_CA: set with SPILLWAY_GATEWAY_JWT_ISSUER only"},
+		{map[string]string{"SPILLWAY_GATEWAY_JWT_AUDIENCE": "spillway-gateway"}, "SPILLWAY_GATEWAY_JWT_JWKS_URL, SPILLWAY_GATEWAY_JWT_AUDIENCE"},
+		{map[string]string{"SPILLWAY_GATEWAY_JWT_CA": "/ca.pem"}, "SPILLWAY_GATEWAY_JWT_JWKS_URL, SPILLWAY_GATEWAY_JWT_AUDIENCE"},
+		{map[string]string{"SPILLWAY_GATEWAY_JWT_ISSUER": "https://kc/realms/x", "SPILLWAY_GATEWAY_JWT_AUDIENCE": "a"}, "SPILLWAY_GATEWAY_JWT_JWKS_URL: required"},
+		{map[string]string{"SPILLWAY_GATEWAY_JWT_ISSUER": "https://kc/realms/x", "SPILLWAY_GATEWAY_JWT_JWKS_URL": "https://kc/certs"}, "SPILLWAY_GATEWAY_JWT_AUDIENCE: required with SPILLWAY_GATEWAY_JWT_ISSUER"},
+		{map[string]string{"SPILLWAY_GATEWAY_JWT_ISSUER": "http://kc/realms/x", "SPILLWAY_GATEWAY_JWT_JWKS_URL": "https://kc/certs", "SPILLWAY_GATEWAY_JWT_AUDIENCE": "a"}, "SPILLWAY_GATEWAY_JWT_ISSUER: an http:// URL is accepted only in dev mode"},
+		{map[string]string{"SPILLWAY_GATEWAY_JWT_ISSUER": "https://kc/realms/x", "SPILLWAY_GATEWAY_JWT_JWKS_URL": "http://kc/certs", "SPILLWAY_GATEWAY_JWT_AUDIENCE": "a"}, "SPILLWAY_GATEWAY_JWT_JWKS_URL: an http:// URL is accepted only in dev mode"},
+		{map[string]string{"SPILLWAY_GATEWAY_JWT_ISSUER": "kc/realms/x", "SPILLWAY_GATEWAY_JWT_JWKS_URL": "https://kc/certs", "SPILLWAY_GATEWAY_JWT_AUDIENCE": "a"}, "SPILLWAY_GATEWAY_JWT_ISSUER: want an absolute https:// URL"},
 	} {
 		if _, err := loadSettings(env(tt.over)); err == nil || !strings.HasPrefix(err.Error(), tt.want) {
 			t.Errorf("%v: error = %v, want one starting %q", tt.over, err, tt.want)
@@ -369,6 +404,81 @@ func TestServeRedisPolicies(t *testing.T) {
 	cancel()
 	if err := <-done; err != nil {
 		t.Errorf("serve: %v", err)
+	}
+}
+
+// TestServeTokenRoutes: a route that needs bearer tokens stops a gateway
+// without JWT settings (ADR-0039), and a static one, whose consumers have
+// no JWT subjects (ADR-0045); api_key routes need neither.
+func TestServeTokenRoutes(t *testing.T) {
+	cfg := filepath.Join(t.TempDir(), "config.yaml")
+	base := settings{configPath: cfg, httpAddr: freeAddr(t), adminAddr: freeAddr(t), dnsRefresh: time.Minute}
+	withJWT := base
+	withJWT.jwtIssuer, withJWT.jwtJWKSURL, withJWT.jwtAudience, withJWT.devMode = "http://127.0.0.1:1/realms/x", "http://127.0.0.1:1/certs", "spillway-gateway", true
+	for _, tt := range []struct {
+		mode string
+		s    settings
+		want string
+	}{
+		{"jwt", base, `route "r" uses auth_mode jwt, but SPILLWAY_GATEWAY_JWT_ISSUER is not set`},
+		{"either", base, `route "r" uses auth_mode either, but SPILLWAY_GATEWAY_JWT_ISSUER is not set`},
+		{"jwt", withJWT, `route "r" uses auth_mode jwt, which needs managed mode`},
+		{"either", withJWT, `route "r" uses auth_mode either, which needs managed mode`},
+	} {
+		yaml := "version: 1\nupstreams: [{ name: up, endpoints: [{ address: '127.0.0.1:1' }] }]\nroutes: [{ name: r, match: { path_prefix: / }, upstream: up, auth_mode: " + tt.mode + " }]\n"
+		if err := os.WriteFile(cfg, []byte(yaml), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := serve(t.Context(), tt.s, slog.New(slog.DiscardHandler), nil, noFlush); err == nil || !strings.Contains(err.Error(), tt.want) {
+			t.Errorf("auth_mode %s, issuer %q: serve = %v, want %q", tt.mode, tt.s.jwtIssuer, err, tt.want)
+		}
+	}
+	snap, err := config.Compile(&configpb.Config{
+		Upstreams: []*configpb.Upstream{{Name: "up", Endpoints: []*configpb.Endpoint{{Address: "127.0.0.1:1"}}}},
+		Routes: []*configpb.Route{
+			{Name: "keys", Upstream: "up", Match: &configpb.RouteMatch{PathPrefix: "/k"}, AuthMode: config.AuthAPIKey},
+			{Name: "tokens", Upstream: "up", Match: &configpb.RouteMatch{PathPrefix: "/t"}, AuthMode: config.AuthJWT},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := checkAuth(snap, true, true); err != nil {
+		t.Errorf("managed, with JWT settings: %v", err)
+	}
+	snap.Routes = snap.Routes[:1]
+	if err := checkAuth(snap, false, false); err != nil {
+		t.Errorf("an api_key route, static, without JWT settings: %v", err)
+	}
+}
+
+// TestJWKSClient: SPILLWAY_GATEWAY_JWT_CA adds its certificates to the
+// roots the keys are fetched with; a file without one stops the start.
+func TestJWKSClient(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "{}") }))
+	t.Cleanup(srv.Close)
+	ca := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := jwksClient(ca)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL, nil)
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatalf("GET with the CA: %v", err)
+	}
+	_ = resp.Body.Close()
+	notPEM := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(notPEM, []byte("not a certificate\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for file, want := range map[string]string{notPEM: "SPILLWAY_GATEWAY_JWT_CA: no PEM certificate in", "/nonexistent/ca.pem": "SPILLWAY_GATEWAY_JWT_CA: open"} {
+		if _, err := jwksClient(file); err == nil || !strings.HasPrefix(err.Error(), want) {
+			t.Errorf("jwksClient(%s) = %v, want %q", file, err, want)
+		}
 	}
 }
 

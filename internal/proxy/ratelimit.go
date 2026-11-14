@@ -115,13 +115,16 @@ func ipKey(ip netip.Addr) string {
 }
 
 // identify fills the identity placeholders for phase 2 from the request's
-// resolved API key; with no key they stay unfilled.
+// consumer and the API key that resolved it; anonymous, they stay unfilled,
+// and so does {api_key} for a consumer a token resolved (ADR-0039).
 func (l *limits) identify(c *config.Consumer, key string) {
 	if c == nil {
 		return
 	}
-	sum := sha256.Sum256([]byte(key))
-	l.values.APIKey = hex.EncodeToString(sum[:])
+	if key != "" {
+		sum := sha256.Sum256([]byte(key))
+		l.values.APIKey = hex.EncodeToString(sum[:])
+	}
 	l.values.Consumer, l.values.Tenant = c.Name, c.Tenant
 }
 

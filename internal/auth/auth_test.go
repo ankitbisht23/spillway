@@ -6,9 +6,12 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -379,5 +382,46 @@ func TestNew(t *testing.T) {
 	}
 	if _, err := New(Config{Issuer: "http://kc/realms/x", JWKSURL: "http://kc/certs", Audience: "a", AllowHTTP: true}); err != nil {
 		t.Errorf("dev mode: %v", err)
+	}
+}
+
+// TestKeysFromTheConfiguredURLOnly checks SEC-04's "from the configured
+// JWKS URL only": a redirect, even to a good key set, is a failed fetch;
+// and NewClient with roots fetches over TLS from a server those roots
+// trust.
+func TestKeysFromTheConfiguredURLOnly(t *testing.T) {
+	k, c := newIssuer(t), newClock()
+	good := httptest.NewServer(k)
+	t.Cleanup(good.Close)
+	redirect := httptest.NewServer(http.RedirectHandler(good.URL, http.StatusFound))
+	t.Cleanup(redirect.Close)
+	v, err := New(Config{Issuer: issuer, JWKSURL: redirect.URL, Audience: audience, AllowHTTP: true, Now: c.Now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-v.fetch()
+	if v.Ready() || k.fetches.Load() != 0 {
+		t.Errorf("a redirect was followed: ready %v, %d fetches of the target", v.Ready(), k.fetches.Load())
+	}
+
+	tlsSrv := httptest.NewUnstartedServer(k)
+	tlsSrv.Config.ErrorLog = log.New(io.Discard, "", 0) // the untrusted fetch's handshake error
+	tlsSrv.StartTLS()
+	t.Cleanup(tlsSrv.Close)
+	roots := x509.NewCertPool()
+	roots.AddCert(tlsSrv.Certificate())
+	v, err = New(Config{Issuer: "https://kc.test/realms/x", JWKSURL: tlsSrv.URL, Audience: audience, Client: NewClient(roots), Now: c.Now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if <-v.fetch(); !v.Ready() {
+		t.Error("no key set over TLS with the server's root")
+	}
+	v, err = New(Config{Issuer: "https://kc.test/realms/x", JWKSURL: tlsSrv.URL, Audience: audience, Now: c.Now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if <-v.fetch(); v.Ready() {
+		t.Error("a key set from a server the system roots do not trust")
 	}
 }
