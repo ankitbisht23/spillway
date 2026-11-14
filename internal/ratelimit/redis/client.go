@@ -112,8 +112,8 @@ type Auth struct {
 
 // NewClient returns the limiter's cluster client, dialing through addrMap
 // when it is set (ADR-0004) and authenticating with auth, with one circuit
-// breaker per node on clock and
-// the health checks that drive them (RL-22, ADR-0025). It never contacts
+// breaker per node on clock and the health checks that drive them (RL-22,
+// ADR-0025). It never contacts
 // Redis itself; Warm and calls do (GW-24), and the health checks PING only
 // the nodes those have met.
 //
