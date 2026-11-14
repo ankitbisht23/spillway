@@ -52,4 +52,5 @@ Decisions that shape Spillway and are not obvious from the code or from docs/des
 | [0041](0041-limit-precedence-plans-overrides-access-lists-and-heavy-hitters.md) | Limit precedence: plans, overrides, access lists and heavy hitters | Accepted | 2026-11-13 |
 | [0042](0042-m5-exit-check.md) | The M5 exit check | Accepted | 2026-11-13 |
 | [0043](0043-rbac-and-audit-implementation.md) | RBAC and audit: where tokens are checked, test logins and audit details | Accepted | 2026-11-14 |
-| [0044](0044-config-import-and-export-details.md) | Config import and export: details | Accepted | 2026-11-14 |
+| [0044](0044-config-import-and-export-details.md) | Config import and export: details | Accepted; the ratelimit section superseded by 0045 | 2026-11-14 |
+| [0045](0045-config-settings-and-the-watch-task.md) | Config settings, and the watch task's details | Accepted | 2026-11-14 |

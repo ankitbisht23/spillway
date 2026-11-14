@@ -57,6 +57,21 @@ func (s *Server) ExportConfig(ctx context.Context, req apiv1.ExportConfigRequest
 	return apiv1.ExportConfig200ApplicationyamlResponse{Body: bytes.NewReader(b), ContentLength: int64(len(b)), Headers: apiv1.ExportConfig200ResponseHeaders{ETag: tag}}, nil
 }
 
+// ExportIdentity writes the identity snapshot that gateways receive, in the
+// shape of the Identity message (ADR-0037, ADR-0038); the spec allows it to
+// admin only, as it holds key hashes.
+func (s *Server) ExportIdentity(ctx context.Context, _ apiv1.ExportIdentityRequestObject) (apiv1.ExportIdentityResponseObject, error) {
+	id, err := s.store.Identity(ctx)
+	if err != nil {
+		return nil, err
+	}
+	b, err := messageYAML(id.ProtoReflect())
+	if err != nil {
+		return nil, err
+	}
+	return apiv1.ExportIdentity200ApplicationyamlResponse{Body: bytes.NewReader(b), ContentLength: int64(len(b))}, nil
+}
+
 // ImportConfig replaces the working set from YAML in export's shape, if it
 // is at the revision If-Match names. Each entity's rules and SEC-06 are
 // checked first; references between entities wait for validate and publish
@@ -72,19 +87,15 @@ func (s *Server) ImportConfig(ctx context.Context, req apiv1.ImportConfigRequest
 	if err != nil {
 		return nil, invalid("the body could not be read")
 	}
-	c, ignored, err := parseImport(data)
+	c, err := parseImport(data)
 	if err != nil {
 		return nil, err
 	}
 	if errs := s.checkImport(ctx, c); len(errs) > 0 {
 		return nil, validationFailed(errs)
 	}
-	var extra map[string]any
-	if len(ignored) > 0 {
-		extra = map[string]any{"ignored": ignored}
-	}
 	changes := []apiv1.ConfigChange{}
-	rev, err := s.store.ImportConfig(ctx, audit(ctx, nil), ifMatch(req.Params.IfMatch), c, note, extra, func(before, after *configpb.Config) (any, bool) {
+	rev, err := s.store.ImportConfig(ctx, audit(ctx, nil), ifMatch(req.Params.IfMatch), c, note, func(before, after *configpb.Config) (any, bool) {
 		changes = configChanges(before, after)
 		return changes, len(changes) > 0
 	})
@@ -92,7 +103,7 @@ func (s *Server) ImportConfig(ctx context.Context, req apiv1.ImportConfigRequest
 		return nil, err
 	}
 	return apiv1.ImportConfig200JSONResponse{
-		Body:    apiv1.ConfigImport{WorkingSetRevision: rev, Changes: changes, Ignored: ignored},
+		Body:    apiv1.ConfigImport{WorkingSetRevision: rev, Changes: changes, Ignored: []string{}},
 		Headers: apiv1.ImportConfig200ResponseHeaders{ETag: etag(rev)},
 	}, nil
 }
@@ -101,27 +112,21 @@ func (s *Server) ImportConfig(ctx context.Context, req apiv1.ImportConfigRequest
 // has no working set and changes one audited change at a time (ADR-0037).
 var identitySections = []string{"identity", "tenants", "consumers", "api_keys", "access_lists", "overrides"}
 
-// ignoredSections are sections of a static config file that the control
-// plane does not keep, with the reason an import gives (ADR-0044).
-var ignoredSections = map[string]string{
-	"ratelimit": "ratelimit: not kept: the control plane's config has no ratelimit section, and managed gateways take their replica count from heartbeats (RL-24, ADR-0044)",
-}
-
 // parseImport parses a YAML config the way the gateway's loader does, YAML
 // → JSON → protojson (CP-21), one entity at a time so that an error names
-// the entity. A top-level version is dropped, ignoredSections are dropped
-// and returned, identity is a 422.
-func parseImport(data []byte) (*configpb.Config, []string, error) {
+// the entity. A top-level version is dropped; ratelimit is the config
+// settings (ADR-0045); identity is a 422.
+func parseImport(data []byte) (*configpb.Config, error) {
 	var doc any
 	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return nil, nil, invalid("body: not YAML: " + strings.TrimPrefix(err.Error(), "yaml: "))
+		return nil, invalid("body: not YAML: " + strings.TrimPrefix(err.Error(), "yaml: "))
 	}
 	if doc == nil {
-		return nil, nil, invalid("body: required: a YAML config, or {} for an empty one")
+		return nil, invalid("body: required: a YAML config, or {} for an empty one")
 	}
 	sections, ok := doc.(map[string]any)
 	if !ok {
-		return nil, nil, invalid("body: want a YAML mapping of config sections, such as upstreams and routes")
+		return nil, invalid("body: want a YAML mapping of config sections, such as upstreams and routes")
 	}
 	var errs []apiv1.ErrorDetail
 	for _, k := range identitySections {
@@ -130,27 +135,31 @@ func parseImport(data []byte) (*configpb.Config, []string, error) {
 		}
 	}
 	if len(errs) > 0 {
-		return nil, nil, validationFailed(errs)
-	}
-	ignored := []string{}
-	for _, k := range slices.Sorted(maps.Keys(ignoredSections)) {
-		if _, ok := sections[k]; ok {
-			ignored = append(ignored, ignoredSections[k])
-			delete(sections, k)
-		}
+		return nil, validationFailed(errs)
 	}
 	delete(sections, "version")
 
 	c := &configpb.Config{}
+	if v, ok := sections["ratelimit"]; ok {
+		delete(sections, "ratelimit")
+		j, err := json.Marshal(v)
+		if err != nil {
+			return nil, invalid("body: ratelimit: not representable as JSON")
+		}
+		c.Ratelimit = &configpb.RateLimitSettings{}
+		if err := protojson.Unmarshal(j, c.Ratelimit); err != nil {
+			return nil, invalid("body: ratelimit: " + protoMessage(err))
+		}
+	}
 	r := c.ProtoReflect()
 	for _, k := range slices.Sorted(maps.Keys(sections)) {
 		fd := r.Descriptor().Fields().ByName(protoreflect.Name(k))
 		if fd == nil || !fd.IsList() || fd.Message() == nil {
-			return nil, nil, invalid(fmt.Sprintf("body: unknown field %q", k))
+			return nil, invalid(fmt.Sprintf("body: unknown field %q", k))
 		}
 		items, ok := sections[k].([]any)
 		if !ok && sections[k] != nil {
-			return nil, nil, invalid(fmt.Sprintf("body: %s: want a list", k))
+			return nil, invalid(fmt.Sprintf("body: %s: want a list", k))
 		}
 		list := r.Mutable(fd).List()
 		for i, item := range items {
@@ -162,16 +171,16 @@ func parseImport(data []byte) (*configpb.Config, []string, error) {
 			}
 			j, err := json.Marshal(item)
 			if err != nil {
-				return nil, nil, invalid(fmt.Sprintf("body: %s: not representable as JSON", at))
+				return nil, invalid(fmt.Sprintf("body: %s: not representable as JSON", at))
 			}
 			e := list.NewElement()
 			if err := protojson.Unmarshal(j, e.Message().Interface()); err != nil {
-				return nil, nil, invalid(fmt.Sprintf("body: %s: %s", at, protoMessage(err)))
+				return nil, invalid(fmt.Sprintf("body: %s: %s", at, protoMessage(err)))
 			}
 			list.Append(e)
 		}
 	}
-	return c, ignored, nil
+	return c, nil
 }
 
 // protoPrefix is how protojson starts its errors: "proto:", a space that
@@ -219,6 +228,9 @@ func (s *Server) checkImport(ctx context.Context, c *configpb.Config) []apiv1.Er
 				errs = append(errs, detail(kl.k.entity, id, name, at, err.Error()))
 			}
 		}
+	}
+	if err := config.CheckRateLimit(c.GetRatelimit()); err != nil {
+		errs = append(errs, detail("settings", 1, "ratelimit", "ratelimit", err.Error()))
 	}
 	for _, b := range s.blockedEndpoints(ctx, c) {
 		errs = append(errs, detail("upstream", b.upstream.GetId(), b.upstream.GetName(), "endpoints", b.err.Error()))

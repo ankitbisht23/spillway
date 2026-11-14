@@ -243,7 +243,8 @@ type workingRows struct {
 }
 
 // readWorkingSet reads every config table into one Config: entities by
-// name, with their IDs, endpoints by ID. Specs are parsed strictly: a
+// name, with their IDs, endpoints by ID, and the settings as its ratelimit
+// section (ADR-0045). Specs are parsed strictly: a
 // binary that does not know a stored field fails rather than publish
 // without it.
 func readWorkingSet(ctx context.Context, q *db.Queries) (*configpb.Config, workingRows, error) {
@@ -278,6 +279,13 @@ func readWorkingSet(ctx context.Context, q *db.Queries) (*configpb.Config, worki
 	}
 	if c.Plans, err = entities[configpb.Plan](q.AllPlans(ctx))(rows.created, "plans"); err != nil {
 		return nil, rows, err
+	}
+	st, err := q.GetSettings(ctx)
+	if err != nil {
+		return nil, rows, err
+	}
+	if c.Ratelimit, err = ParseSettings(st.Spec); err != nil {
+		return nil, rows, fmt.Errorf("config settings: stored spec: %w", err)
 	}
 	sortByName(c)
 	return c, rows, nil
@@ -379,11 +387,15 @@ func identityRefs(ctx context.Context, q *db.Queries, base *Published, c *config
 }
 
 // restoreWorkingSet replaces the config working tables with c's entities
-// under their original IDs, each with version rev; rows that were already
-// in the working set keep their created_at (CP-04).
+// under their original IDs, each with version rev, and the settings with
+// c's ratelimit section when they differ; rows that were already in the
+// working set keep their created_at (CP-04, ADR-0045).
 func restoreWorkingSet(ctx context.Context, q *db.Queries, c *configpb.Config, rev int64) error {
-	_, old, err := readWorkingSet(ctx, q)
+	cur, old, err := readWorkingSet(ctx, q)
 	if err != nil {
+		return err
+	}
+	if err := writeSettings(ctx, q, cur.GetRatelimit(), settingsOf(c), rev); err != nil {
 		return err
 	}
 	for _, del := range []func(context.Context) error{q.DeleteAllUpstreams, q.DeleteAllRoutes, q.DeleteAllPolicies, q.DeleteAllPlans} {

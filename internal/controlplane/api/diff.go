@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"go.yaml.in/yaml/v3"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/ankitbisht23/spillway/internal/gen/apiv1"
 	"github.com/ankitbisht23/spillway/internal/gen/configpb"
@@ -107,10 +109,16 @@ func exportYAML(c *configpb.Config) ([]byte, error) {
 			list.Set(i, protoreflect.ValueOfMessage(m))
 		}
 	}
+	return messageYAML(r)
+}
+
+// messageYAML is m as a YAML document of its set fields in proto order; an
+// empty message is {}.
+func messageYAML(m protoreflect.Message) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := yaml.NewEncoder(&buf)
 	enc.SetIndent(2)
-	if err := enc.Encode(yamlNode(r)); err != nil {
+	if err := enc.Encode(yamlNode(m)); err != nil {
 		return nil, err
 	}
 	if err := enc.Close(); err != nil {
@@ -145,10 +153,14 @@ func yamlNode(m protoreflect.Message) *yaml.Node {
 
 func yamlValue(fd protoreflect.FieldDescriptor, v protoreflect.Value) *yaml.Node {
 	if fd.Kind() == protoreflect.MessageKind {
+		if t, ok := v.Message().Interface().(*timestamppb.Timestamp); ok {
+			// As protojson writes it, RFC 3339 in UTC (identity's times).
+			return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: t.AsTime().UTC().Format(time.RFC3339Nano)}
+		}
 		return yamlNode(v.Message())
 	}
 	var n yaml.Node
-	_ = n.Encode(v.Interface()) // string, bool, int32, int64, float64: config.proto has no others
+	_ = n.Encode(v.Interface()) // string, bool, int32, int64, float64: config.proto has no others besides Timestamp
 	return &n
 }
 

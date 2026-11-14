@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"math"
 	"slices"
 
@@ -32,8 +31,9 @@ type ImportDiff func(before, after *configpb.Config) (changes any, changed bool)
 // c's entities must already pass their entity rules, with names and IDs
 // unique per type. An import that changes nothing writes nothing and
 // returns the current revision; otherwise the audit record holds diff's
-// changes, note and extra.
-func (s *Store) ImportConfig(ctx context.Context, a Audit, ifMatch int64, c *configpb.Config, note *string, extra map[string]any, diff ImportDiff) (int64, error) {
+// changes and note. c's ratelimit section replaces the settings, and the
+// record holds them before and after when they change (ADR-0045).
+func (s *Store) ImportConfig(ctx context.Context, a Audit, ifMatch int64, c *configpb.Config, note *string, diff ImportDiff) (int64, error) {
 	var rev int64
 	err := s.inTx(ctx, func(q *db.Queries) error {
 		var err error
@@ -62,17 +62,23 @@ func (s *Store) ImportConfig(ctx context.Context, a Audit, ifMatch int64, c *con
 				return err
 			}
 		}
+		if err := writeSettings(ctx, q, before.GetRatelimit(), settingsOf(c), rev); err != nil {
+			return err
+		}
 		after, _, err := readWorkingSet(ctx, q)
 		if err != nil {
 			return err
 		}
 		changes, changed := diff(before, after)
-		if !changed {
+		settingsChanged := !proto.Equal(before.GetRatelimit(), after.GetRatelimit())
+		if !changed && !settingsChanged {
 			rev = from
 			return errUnchanged
 		}
 		d := map[string]any{"from_revision": from, "to_revision": rev, "changes": changes}
-		maps.Copy(d, extra)
+		if settingsChanged {
+			d["settings"] = map[string]any{"before": settingsJSON(before.GetRatelimit()), "after": settingsJSON(after.GetRatelimit())}
+		}
 		return a.write(ctx, q, change{action: "config.import", entity: "config", id: rev, note: note, diff: d})
 	})
 	if errors.Is(err, errUnchanged) {

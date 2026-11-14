@@ -91,7 +91,7 @@ test-integration: dev
 
 # Go code from api/proto into internal/gen (CP-21); the generated code is
 # committed, so builds need no protoc or buf.
-proto: tool-buf tool-protoc-gen-go
+proto: tool-buf tool-protoc-gen-go tool-protoc-gen-go-grpc
 	PATH="$(BIN):$$PATH" $(BIN)/buf generate
 
 # REST server stubs from api/openapi.yaml into internal/gen/apiv1 (CP-10,
@@ -115,7 +115,7 @@ lint-web:
 
 # buf lint; internal/gen matches what api/proto generates; no breaking change
 # against origin/main, skipped while main has no buf.yaml (the first M1 PR).
-lint-proto: tool-buf tool-protoc-gen-go
+lint-proto: tool-buf tool-protoc-gen-go tool-protoc-gen-go-grpc
 	$(BIN)/buf lint
 	@tmp=$$(mktemp -d) && trap 'rm -rf "$$tmp"' EXIT && \
 	PATH="$(BIN):$$PATH" $(BIN)/buf generate -o "$$tmp" && \

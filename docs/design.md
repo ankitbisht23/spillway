@@ -406,7 +406,7 @@ T &= \text{period} / \text{rate}, \qquad \tau = T \cdot \text{burst} \\
 | `heavy_hitters` | window\_start, policy\_id, key\_digest, consumer\_id, api\_key\_id, denied, shadow\_denied (pruned after 7 days) |
 | `audit_log` | id, actor, actor roles, action, entity, entity\_id, diff (jsonb), note, request\_id, config\_version, identity\_version, at |
 
-The identity version is a Postgres sequence, bumped in the same transaction as each identity change. Every mutable entity table has a `version` column for `If-Match` (CP-14).
+The identity version is a single-row counter (`identity_state.version`), incremented first in the same transaction as each identity change; its row lock orders identity changes, so versions follow commit order. Every mutable entity table has a `version` column for `If-Match` (CP-14).
 
 ### Config format (YAML; same shape as a snapshot’s config section)
 
@@ -485,7 +485,7 @@ plans:
 
 Config entities (routes, upstreams, policies, plans) change the working set until a publish; identity entities (tenants, consumers, keys, overrides, access lists) apply immediately (CP-20). The spec is `api/openapi.yaml`; Go server stubs (oapi-codegen) and the UI client are generated from it (CP-10).
 
-Gateway ↔ control plane runs over gRPC: `ConfigService.Watch(WatchRequest{replica_id, config_version, identity_version, schema_version}) → stream Update` (a full config snapshot or an identity update) and `ConfigService.Heartbeat(Heartbeat{replica_id, config_version, identity_version, top_keys}) → HeartbeatResponse{live_replicas}`. Heartbeats go every 5 s, plus one immediately when a version is applied (NFR-08 is measured from those).
+Gateway ↔ control plane runs over gRPC: `ConfigService.Watch(WatchRequest{replica_id, config_version, identity_version, schema_version}) → stream WatchResponse` (a full config snapshot or a full identity snapshot) and `ConfigService.Heartbeat(HeartbeatRequest{replica_id, config_version, identity_version, top_keys}) → HeartbeatResponse{live_replicas}`. Heartbeats go every 5 s, plus one immediately when a version is applied (NFR-08 is measured from those).
 
 ## Security
 

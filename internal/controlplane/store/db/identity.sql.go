@@ -11,6 +11,110 @@ import (
 	"time"
 )
 
+const allAccessLists = `-- name: AllAccessLists :many
+SELECT id, action, subject_type, api_key_id, consumer_id, cidr, note, version, created_at, updated_at FROM access_lists ORDER BY id
+`
+
+func (q *Queries) AllAccessLists(ctx context.Context) ([]AccessList, error) {
+	rows, err := q.db.Query(ctx, allAccessLists)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AccessList
+	for rows.Next() {
+		var i AccessList
+		if err := rows.Scan(
+			&i.ID,
+			&i.Action,
+			&i.SubjectType,
+			&i.ApiKeyID,
+			&i.ConsumerID,
+			&i.Cidr,
+			&i.Note,
+			&i.Version,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const allConsumers = `-- name: AllConsumers :many
+SELECT id, tenant_id, name, plan_id, status, jwt_subject, version, created_at, updated_at FROM consumers ORDER BY id
+`
+
+func (q *Queries) AllConsumers(ctx context.Context) ([]Consumer, error) {
+	rows, err := q.db.Query(ctx, allConsumers)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Consumer
+	for rows.Next() {
+		var i Consumer
+		if err := rows.Scan(
+			&i.ID,
+			&i.TenantID,
+			&i.Name,
+			&i.PlanID,
+			&i.Status,
+			&i.JwtSubject,
+			&i.Version,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const allTenants = `-- name: AllTenants :many
+
+SELECT id, name, plan_id, status, version, created_at, updated_at FROM tenants ORDER BY id
+`
+
+// The identity snapshot (CP-20, ADR-0037): every row that can reach a
+// gateway, read in one REPEATABLE READ transaction with the version.
+func (q *Queries) AllTenants(ctx context.Context) ([]Tenant, error) {
+	rows, err := q.db.Query(ctx, allTenants)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Tenant
+	for rows.Next() {
+		var i Tenant
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.PlanID,
+			&i.Status,
+			&i.Version,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const bumpIdentityVersion = `-- name: BumpIdentityVersion :one
 
 UPDATE identity_state SET version = version + 1, changed_at = clock_timestamp(), updated_at = clock_timestamp()
@@ -365,6 +469,18 @@ func (q *Queries) GetTenant(ctx context.Context, id int64) (Tenant, error) {
 	return i, err
 }
 
+const identityVersion = `-- name: IdentityVersion :one
+SELECT version FROM identity_state WHERE id = 1
+`
+
+// identity_state_pkey.
+func (q *Queries) IdentityVersion(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, identityVersion)
+	var version int64
+	err := row.Scan(&version)
+	return version, err
+}
+
 const listAccessLists = `-- name: ListAccessLists :many
 SELECT id, action, subject_type, api_key_id, consumer_id, cidr, note, version, created_at, updated_at FROM access_lists
 WHERE id > $1::bigint
@@ -616,6 +732,94 @@ func (q *Queries) ListTenants(ctx context.Context, arg ListTenantsParams) ([]Ten
 		return nil, err
 	}
 	return items, nil
+}
+
+const liveAPIKeys = `-- name: LiveAPIKeys :many
+SELECT id, consumer_id, prefix, hash, expires_at FROM api_keys
+WHERE revoked_at IS NULL AND (expires_at IS NULL OR expires_at > clock_timestamp())
+ORDER BY id
+`
+
+type LiveAPIKeysRow struct {
+	ID         int64
+	ConsumerID int64
+	Prefix     string
+	Hash       []byte
+	ExpiresAt  *time.Time
+}
+
+// Keys that are neither revoked nor expired.
+func (q *Queries) LiveAPIKeys(ctx context.Context) ([]LiveAPIKeysRow, error) {
+	rows, err := q.db.Query(ctx, liveAPIKeys)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []LiveAPIKeysRow
+	for rows.Next() {
+		var i LiveAPIKeysRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ConsumerID,
+			&i.Prefix,
+			&i.Hash,
+			&i.ExpiresAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const liveOverrides = `-- name: LiveOverrides :many
+SELECT id, consumer_id, policy_id, limits, quotas, starts_at, ends_at, note, version, created_at, updated_at FROM overrides WHERE ends_at IS NULL OR ends_at > clock_timestamp() ORDER BY id
+`
+
+// Overrides that have not ended.
+func (q *Queries) LiveOverrides(ctx context.Context) ([]Override, error) {
+	rows, err := q.db.Query(ctx, liveOverrides)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Override
+	for rows.Next() {
+		var i Override
+		if err := rows.Scan(
+			&i.ID,
+			&i.ConsumerID,
+			&i.PolicyID,
+			&i.Limits,
+			&i.Quotas,
+			&i.StartsAt,
+			&i.EndsAt,
+			&i.Note,
+			&i.Version,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const notifyIdentity = `-- name: NotifyIdentity :exec
+SELECT pg_notify('spillway_identity', $1::text)
+`
+
+// Delivered at commit to the Watch streams' LISTEN (CP-20, ADR-0038).
+func (q *Queries) NotifyIdentity(ctx context.Context, version string) error {
+	_, err := q.db.Exec(ctx, notifyIdentity, version)
+	return err
 }
 
 const updateAccessList = `-- name: UpdateAccessList :one

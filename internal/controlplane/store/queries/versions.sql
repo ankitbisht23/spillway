@@ -104,3 +104,10 @@ VALUES (@id, @name, @spec, @version, coalesce(sqlc.narg(created_at)::timestamptz
 -- name: RestorePlan :exec
 INSERT INTO plans (id, name, spec, version, created_at)
 VALUES (@id, @name, @spec, @version, coalesce(sqlc.narg(created_at)::timestamptz, clock_timestamp()));
+
+-- name: LatestVersions :one
+-- config_versions_pkey backward scan and identity_state_pkey: the newest
+-- config and identity versions, which the broadcaster compares with what it
+-- holds every 10 s (ADR-0038).
+SELECT (SELECT coalesce(max(version), 0) FROM config_versions)::bigint AS config_version,
+       (SELECT version FROM identity_state WHERE id = 1)::bigint AS identity_version;

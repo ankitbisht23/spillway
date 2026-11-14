@@ -114,20 +114,32 @@ func (p *Policy) Matches(route, method string) bool {
 
 // compileRateLimit validates c's ratelimit settings into s.
 func (s *Snapshot) compileRateLimit(c *configpb.Config) error {
-	replicas := int64(c.GetRatelimit().GetReplicas())
+	var err error
+	s.Replicas, s.RedisBudget, err = rateLimitSettings(c.GetRatelimit())
+	return err
+}
+
+// CheckRateLimit checks a config's ratelimit section as Compile does; the
+// control plane keeps it as the config settings (ADR-0045).
+func CheckRateLimit(r *configpb.RateLimitSettings) error {
+	_, _, err := rateLimitSettings(r)
+	return err
+}
+
+func rateLimitSettings(r *configpb.RateLimitSettings) (replicas int64, budget time.Duration, err error) {
+	replicas = int64(r.GetReplicas())
 	if replicas < 0 {
-		return errors.New("ratelimit.replicas must not be negative")
+		return 0, 0, errors.New("ratelimit.replicas must not be negative")
 	}
-	s.Replicas = max(replicas, 1)
-	s.RedisBudget = defaultRedisBudget
-	if v := c.GetRatelimit().GetRedisBudget(); v != "" {
+	budget = defaultRedisBudget
+	if v := r.GetRedisBudget(); v != "" {
 		d, err := time.ParseDuration(v)
 		if err != nil || d <= 0 || d > maxRedisBudget {
-			return fmt.Errorf("ratelimit.redis_budget: %q is not a duration greater than 0 and at most %v", v, maxRedisBudget)
+			return 0, 0, fmt.Errorf("ratelimit.redis_budget: %q is not a duration greater than 0 and at most %v", v, maxRedisBudget)
 		}
-		s.RedisBudget = d
+		budget = d
 	}
-	return nil
+	return max(replicas, 1), budget, nil
 }
 
 // compilePolicies validates the policies of c, whose routes are compiled,

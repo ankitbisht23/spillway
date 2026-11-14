@@ -797,3 +797,13 @@ routes: [{name: r, upstream: u, match: {path_prefix: /}}]
 		t.Errorf("requests a=%d b=%d, want 6 and 2: undraining b gives it its turn again", a.requests.Load(), b.requests.Load())
 	}
 }
+
+// TestNoConfigYet checks a managed gateway before its first config
+// (ADR-0038): every request is 503, none reaches a route.
+func TestNoConfigYet(t *testing.T) {
+	g := newGateway(t, newResolver(), "{}")
+	g.current.Store(nil)
+	if status, _, _ := g.get(t, "/", nil); status != http.StatusServiceUnavailable {
+		t.Errorf("without a config: %d, want 503", status)
+	}
+}

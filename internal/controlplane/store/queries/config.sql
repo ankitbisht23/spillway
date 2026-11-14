@@ -119,3 +119,12 @@ WHERE id = @id RETURNING *;
 -- name: DeletePlan :execrows
 -- plans_pkey.
 DELETE FROM plans WHERE id = @id;
+
+-- name: GetSettings :one
+-- config_settings_pkey.
+SELECT * FROM config_settings WHERE id = 1;
+
+-- name: UpdateSettings :one
+-- config_settings_pkey.
+UPDATE config_settings SET spec = @spec, version = @version, updated_at = clock_timestamp()
+WHERE id = 1 RETURNING *;

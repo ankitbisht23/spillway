@@ -8,6 +8,8 @@ package spillway.config.v1;
 
 option go_package = "github.com/ankitbisht23/spillway/internal/gen/configpb";
 
+import "google/protobuf/timestamp.proto";
+
 // Config is the config section of a snapshot.
 message Config {
   // Config version; each publish increases it (CP-02).
@@ -320,13 +322,22 @@ message Limit {
   int64 burst = 3;
 }
 
-// Identity is the identity section of a snapshot (ADR-0005, GW-17). Before
-// M5 it comes from its own YAML file, with its own version.
+// Identity is the identity section of a snapshot (ADR-0005, GW-17). In
+// static mode it comes from its own YAML file, with its own version; in
+// managed mode the control plane builds it from its identity tables
+// (CP-20, ADR-0037, ADR-0038).
 message Identity {
   // Identity version; each change increases it.
   int64 version = 1;
   repeated Consumer consumers = 2;
   repeated ApiKey api_keys = 3;
+  // "" for static keys (ADR-0017); "spw1" for managed keys (ADR-0039),
+  // which the control plane sends.
+  string key_format = 4;
+  // Managed mode only, as are the fields below that carry IDs.
+  repeated Tenant tenants = 5;
+  repeated AccessListEntry access_lists = 6;
+  repeated Override overrides = 7;
 }
 
 // Consumer is a client of the API.
@@ -334,17 +345,65 @@ message Consumer {
   // Unique.
   string name = 1;
   // Optional; empty leaves {tenant} unfilled. 1-64 characters from
-  // [A-Za-z0-9._-] (ADR-0021).
+  // [A-Za-z0-9._-] (ADR-0021). Static mode only.
   string tenant = 2;
+  // Managed mode (ADR-0036): the consumer's ID, its tenant's, its plan's
+  // (0: the tenant's plan), active or suspended, and the JWT subject that
+  // resolves to it (ADR-0039).
+  int64 id = 3;
+  int64 tenant_id = 4;
+  int64 plan_id = 5;
+  string status = 6;
+  string jwt_subject = 7;
 }
 
-// ApiKey is a static API key, stored as its prefix and hash, never the key
+// ApiKey is an API key, stored as its prefix and hash, never the key
 // (GW-17, SEC-03).
 message ApiKey {
-  // The key's first 12 bytes; unique.
+  // Static keys: the key's first 12 bytes; managed keys: the 8-character
+  // public prefix (ADR-0039). Unique.
   string prefix = 1;
-  // Lower-case hex SHA-256 of the whole key.
+  // Lower-case hex SHA-256: of the whole static key, of a managed key's
+  // secret part.
   string hash = 2;
-  // Name of the consumer the key belongs to.
+  // Static mode: the name of the consumer the key belongs to.
   string consumer = 3;
+  // Managed mode: the key's ID, its consumer's ID, and when it stops
+  // working (unset: never), on the gateway's clock (ADR-0039).
+  int64 id = 4;
+  int64 consumer_id = 5;
+  google.protobuf.Timestamp expires_at = 6;
+}
+
+// Tenant groups consumers and gives them a plan (managed mode, RL-08).
+message Tenant {
+  int64 id = 1;
+  string name = 2;
+  int64 plan_id = 3;
+  // active or suspended.
+  string status = 4;
+}
+
+// AccessListEntry allows or denies one key, consumer or CIDR (ADR-0041).
+message AccessListEntry {
+  int64 id = 1;
+  // allow or deny.
+  string action = 2;
+  // key, consumer or cidr; exactly the matching field below is set.
+  string subject_type = 3;
+  int64 api_key_id = 4;
+  int64 consumer_id = 5;
+  string cidr = 6;
+}
+
+// Override replaces one policy's limits for one consumer, for a while
+// (a burst grant) or until removed (ADR-0041).
+message Override {
+  int64 id = 1;
+  int64 consumer_id = 2;
+  int64 policy_id = 3;
+  repeated Limit limits = 4;
+  // Unset: from the start; unset ends_at: no end.
+  google.protobuf.Timestamp starts_at = 5;
+  google.protobuf.Timestamp ends_at = 6;
 }

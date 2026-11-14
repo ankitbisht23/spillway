@@ -51,6 +51,14 @@ type AuditLog struct {
 	IdentityVersion *int64
 }
 
+type ConfigSetting struct {
+	ID        int16
+	Spec      []byte
+	Version   int64
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
 type ConfigVersion struct {
 	Version            int64
 	PublishedAt        time.Time

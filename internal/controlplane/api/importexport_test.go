@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"net/http"
 	"os"
@@ -9,8 +10,12 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	"go.yaml.in/yaml/v3"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/ankitbisht23/spillway/internal/config"
 	"github.com/ankitbisht23/spillway/internal/gen/configpb"
@@ -36,11 +41,11 @@ func exampleConfigs(t *testing.T) []string {
 	return files
 }
 
-// canonical is c as the control plane keeps it: no version, no ratelimit
-// section (ADR-0044), entities sorted by name.
+// canonical is c as the control plane keeps it: no version, entities
+// sorted by name.
 func canonical(c *configpb.Config) *configpb.Config {
 	c = proto.Clone(c).(*configpb.Config)
-	c.Version, c.Ratelimit = 0, nil
+	c.Version = 0
 	slices.SortFunc(c.Upstreams, func(a, b *configpb.Upstream) int { return strings.Compare(a.GetName(), b.GetName()) })
 	slices.SortFunc(c.Routes, func(a, b *configpb.Route) int { return strings.Compare(a.GetName(), b.GetName()) })
 	slices.SortFunc(c.Policies, func(a, b *configpb.Policy) int { return strings.Compare(a.GetName(), b.GetName()) })
@@ -50,7 +55,7 @@ func canonical(c *configpb.Config) *configpb.Config {
 
 // TestImportParsesTheExamples checks that every example config parses as an
 // import, with what the gateway's loader reads (CP-05, CP-21): the same
-// entities, version dropped, ratelimit reported as not kept; and that
+// entities and ratelimit section (ADR-0045), version dropped; and that
 // export's YAML of it reads back the same and is stable.
 func TestImportParsesTheExamples(t *testing.T) {
 	for _, f := range exampleConfigs(t) {
@@ -63,15 +68,12 @@ func TestImportParsesTheExamples(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			got, ignored, err := parseImport(data)
+			got, err := parseImport(data)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !proto.Equal(canonical(got), canonical(want)) || got.Version != 0 || got.Ratelimit != nil {
+			if !proto.Equal(canonical(got), canonical(want)) || got.Version != 0 {
 				t.Errorf("parsed\n%v\nthe loader read\n%v", got, want)
-			}
-			if wantIgnored := want.Ratelimit != nil; wantIgnored != (len(ignored) == 1 && strings.HasPrefix(ignored[0], "ratelimit: not kept")) || !wantIgnored && len(ignored) != 0 {
-				t.Errorf("ignored %q", ignored)
 			}
 			if errs := checkImportOf(t, got); len(errs) > 0 {
 				t.Errorf("entity rules: %v", errs)
@@ -159,9 +161,9 @@ routes:
 	if string(y) != want {
 		t.Errorf("export:\n%s\nwant:\n%s", y, want)
 	}
-	got, ignored, err := parseImport(y)
-	if err != nil || len(ignored) != 0 {
-		t.Fatal(err, ignored)
+	got, err := parseImport(y)
+	if err != nil {
+		t.Fatal(err)
 	}
 	c.Version = 0
 	if !proto.Equal(got, canonical(c)) {
@@ -170,7 +172,7 @@ routes:
 	if y, err := exportYAML(&configpb.Config{}); err != nil || string(y) != "{}\n" {
 		t.Errorf("empty export %q, %v", y, err)
 	}
-	if got, _, err := parseImport([]byte("{}\n")); err != nil || proto.Size(got) != 0 {
+	if got, err := parseImport([]byte("{}\n")); err != nil || proto.Size(got) != 0 {
 		t.Errorf("empty import: %v, %v", got, err)
 	}
 }
@@ -211,6 +213,9 @@ func TestImportRejects(t *testing.T) {
 		{"id twice", "plans: [{name: free, id: 4}, {name: gold, id: 4}]\n", nil, 422, "validation_failed", "id 4 is given twice"},
 		{"negative id", "plans: [{name: free, id: -1}]\n", nil, 422, "validation_failed", "ids are positive"},
 		{"SEC-06", "upstreams: [{name: meta, endpoints: [{address: '169.254.169.254:80'}]}]\n", nil, 422, "validation_failed", "not in the allowed upstream networks"},
+		// The ratelimit section is the config settings (ADR-0045).
+		{"settings field", "ratelimit: {replica: 2}\n", nil, 400, "invalid_request", `body: ratelimit: unknown field "replica"`},
+		{"settings rule", "ratelimit: {redis_budget: 2s}\n", nil, 422, "validation_failed", `ratelimit.redis_budget: "2s" is not a duration greater than 0 and at most 1s`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			a := imp(c.body, c.header...)
@@ -253,4 +258,59 @@ func TestImportRejects(t *testing.T) {
 	if a := do(t, h, http.MethodPost, BasePath+"/routes", "name: r\n", "Content-Type", "application/yaml"); a.status != 415 {
 		t.Errorf("YAML to a JSON operation: %d", a.status)
 	}
+}
+
+// TestIdentityYAML checks identity export's form (ADR-0037): the Identity
+// message's set fields in proto order, 64-bit integers as integers, times
+// in RFC 3339.
+func TestIdentityYAML(t *testing.T) {
+	id := &configpb.Identity{
+		Version: 12, KeyFormat: config.KeyFormatManaged,
+		Tenants:   []*configpb.Tenant{{Id: 1, Name: "acme", PlanId: 2, Status: "active"}},
+		Consumers: []*configpb.Consumer{{Id: 3, TenantId: 1, Name: "alice", Status: "active"}},
+		ApiKeys:   []*configpb.ApiKey{{Id: 4, ConsumerId: 3, Prefix: "abcdefgh", Hash: "00ff", ExpiresAt: timestamppb.New(time.Date(2026, 11, 15, 9, 30, 0, 0, time.UTC))}},
+	}
+	y, err := messageYAML(id.ProtoReflect())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `version: 12
+consumers:
+  - name: alice
+    id: 3
+    tenant_id: 1
+    status: active
+api_keys:
+  - prefix: abcdefgh
+    hash: 00ff
+    id: 4
+    consumer_id: 3
+    expires_at: "2026-11-15T09:30:00Z"
+key_format: spw1
+tenants:
+  - id: 1
+    name: acme
+    plan_id: 2
+    status: active
+`
+	if string(y) != want {
+		t.Errorf("identity YAML:\n%s\nwant:\n%s", y, want)
+	}
+	back := &configpb.Identity{}
+	if err := load(y, back); err != nil || !proto.Equal(back, id) {
+		t.Errorf("the YAML reads back as %v, %v", back, err)
+	}
+}
+
+// load reads YAML as the gateway's loader does: YAML → JSON → protojson.
+func load(y []byte, m proto.Message) error {
+	var doc any
+	if err := yaml.Unmarshal(y, &doc); err != nil {
+		return err
+	}
+	j, err := json.Marshal(doc)
+	if err != nil {
+		return err
+	}
+	return protojson.Unmarshal(j, m)
 }

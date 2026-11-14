@@ -134,3 +134,33 @@ UNION ALL
 SELECT 'access_list'::text, a.id FROM access_lists a
 WHERE a.api_key_id = ANY(ARRAY(SELECT k.id FROM api_keys k WHERE k.consumer_id = @consumer_id::bigint))
 ORDER BY 1, 2;
+
+-- name: NotifyIdentity :exec
+-- Delivered at commit to the Watch streams' LISTEN (CP-20, ADR-0038).
+SELECT pg_notify('spillway_identity', @version::text);
+
+-- name: IdentityVersion :one
+-- identity_state_pkey.
+SELECT version FROM identity_state WHERE id = 1;
+
+-- The identity snapshot (CP-20, ADR-0037): every row that can reach a
+-- gateway, read in one REPEATABLE READ transaction with the version.
+
+-- name: AllTenants :many
+SELECT * FROM tenants ORDER BY id;
+
+-- name: AllConsumers :many
+SELECT * FROM consumers ORDER BY id;
+
+-- name: LiveAPIKeys :many
+-- Keys that are neither revoked nor expired.
+SELECT id, consumer_id, prefix, hash, expires_at FROM api_keys
+WHERE revoked_at IS NULL AND (expires_at IS NULL OR expires_at > clock_timestamp())
+ORDER BY id;
+
+-- name: AllAccessLists :many
+SELECT * FROM access_lists ORDER BY id;
+
+-- name: LiveOverrides :many
+-- Overrides that have not ended.
+SELECT * FROM overrides WHERE ends_at IS NULL OR ends_at > clock_timestamp() ORDER BY id;

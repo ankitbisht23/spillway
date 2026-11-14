@@ -1,6 +1,7 @@
 // Command controlplane is Spillway's control plane (CP-01, CP-10, ADR-0036):
-// a REST admin API over Postgres. `controlplane serve` (the default) runs
-// it; `controlplane migrate` applies the schema migrations and exits (CP-19);
+// a REST admin API over Postgres and, on the one active replica, the config
+// stream to gateways (CP-06, CP-22, ADR-0038). `controlplane serve` (the
+// default) runs it; `controlplane migrate` applies the schema migrations and exits (CP-19);
 // `controlplane healthcheck` exits 0 only if the running control plane is
 // ready; `controlplane version` prints the version.
 package main
@@ -18,9 +19,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/ankitbisht23/spillway/internal/auth"
 	"github.com/ankitbisht23/spillway/internal/controlplane/api"
 	"github.com/ankitbisht23/spillway/internal/controlplane/store"
+	"github.com/ankitbisht23/spillway/internal/controlplane/stream"
 	"github.com/ankitbisht23/spillway/internal/telemetry"
 )
 
@@ -77,10 +81,15 @@ func migrate(log *slog.Logger, getenv func(string) string) error {
 	return nil
 }
 
-// shutdownTimeout bounds how long in-flight requests get after SIGTERM.
-const shutdownTimeout = 10 * time.Second
+// shutdownTimeout bounds how long in-flight REST requests get after
+// SIGTERM, once the config stream has stopped (ADR-0038).
+const shutdownTimeout = 5 * time.Second
 
-// serve runs the REST API and the admin server until SIGTERM or SIGINT.
+// serve runs the REST API, the admin server and the election of the active
+// replica, which serves the config stream (CP-22), until SIGTERM or SIGINT.
+// Standbys serve REST and are ready, but open no gRPC listener (ADR-0038).
+// Shutdown stops the stream and releases the lock first, then gives REST
+// its time.
 func serve(log *slog.Logger, getenv func(string) string) error {
 	log.Info("starting", "version", version)
 	s, err := loadSettings(getenv)
@@ -105,7 +114,11 @@ func serve(log *slog.Logger, getenv func(string) string) error {
 	go verifier.Run(ctx) // readiness does not wait for the keys: until they come, tokens are 503 (ADR-0039)
 
 	var ready atomic.Bool
-	admin := telemetry.NewAdminServer(telemetry.NewRegistry(), ready.Load, log)
+	reg := telemetry.NewRegistry()
+	active := prometheus.NewGauge(prometheus.GaugeOpts{Name: "cp_active", Help: "1 while this replica holds the active replica's lock and serves the config stream."})
+	streams := prometheus.NewGauge(prometheus.GaugeOpts{Name: "cp_watch_streams", Help: "Open Watch streams."})
+	reg.MustRegister(active, streams)
+	admin := telemetry.NewAdminServer(reg, ready.Load, log)
 	apiSrv := &http.Server{
 		Handler:           api.New(st, s.allow, net.DefaultResolver, api.OIDC{Verifier: verifier}, log).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
@@ -133,12 +146,37 @@ func serve(log *slog.Logger, getenv func(string) string) error {
 	}
 	ready.Store(true)
 
+	// The election runs until shutdown starts, then steps down: streams
+	// close, the gRPC listener closes and the lock is released.
+	ectx, stopElection := context.WithCancel(context.Background())
+	elected := make(chan struct{})
+	go func() {
+		defer close(elected)
+		(&stream.Elector{
+			Open: func(ctx context.Context) (stream.Lock, error) { return st.OpenLockSession(ctx) },
+			Active: func(ctx context.Context) {
+				if err := stream.Serve(ctx, s.grpcAddr, st, log, func(d int) { streams.Add(float64(d)) }); err != nil {
+					log.Error("config stream failed", "err", err)
+				}
+			},
+			Changed: func(on bool) {
+				active.Set(0)
+				if on {
+					active.Set(1)
+				}
+			},
+			Log: log,
+		}).Run(ectx)
+	}()
+
 	select {
 	case <-ctx.Done():
 	case err = <-errc:
 	}
 	ready.Store(false)
 	log.Info("shutting down")
+	stopElection()
+	<-elected
 	sctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 	_ = apiSrv.Shutdown(sctx)

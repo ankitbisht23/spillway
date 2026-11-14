@@ -187,10 +187,15 @@ func TestControlPlaneMigrate(t *testing.T) {
 // on any index scan without an index condition (a whole index read in
 // order), outside the reads ADR-0036 lists as intended (ADR-0036).
 func TestControlPlaneQueriesUseIndexes(t *testing.T) {
-	// Query name → why it may read a whole table or index. The whole-table
-	// reads of export and the identity snapshot arrive with their tasks.
+	// Query name → why it may read a whole table or index.
 	wholeTable := map[string]string{
+		"AllTenants":          "the identity snapshot reads every identity row (ADR-0037)",
+		"AllConsumers":        "the identity snapshot reads every identity row (ADR-0037)",
+		"LiveAPIKeys":         "the identity snapshot reads every identity row (ADR-0037)",
+		"AllAccessLists":      "the identity snapshot reads every identity row (ADR-0037)",
+		"LiveOverrides":       "the identity snapshot reads every identity row (ADR-0037)",
 		"LatestConfigVersion": "the first row of a backward scan of config_versions_pkey",
+		"LatestVersions":      "the first row of a backward scan of config_versions_pkey",
 		"AllUpstreams":        "validate, publish and rollback read the whole working set",
 		"AllEndpoints":        "validate, publish and rollback read the whole working set",
 		"AllRoutes":           "validate, publish and rollback read the whole working set",

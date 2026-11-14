@@ -162,6 +162,7 @@ func TestProtoParity(t *testing.T) {
 	schemas := spec(t).Components.Schemas
 	for name, m := range map[string]proto.Message{
 		"Upstream": &configpb.Upstream{}, "Route": &configpb.Route{}, "Policy": &configpb.Policy{}, "Plan": &configpb.Plan{},
+		"RateLimitSettings": &configpb.RateLimitSettings{},
 	} {
 		parity(t, name, schemas[name], m.ProtoReflect().Descriptor())
 	}
