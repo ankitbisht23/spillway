@@ -200,6 +200,7 @@ func TestControlPlanePublish(t *testing.T) {
 	}
 	r.viewer.must(404, "GET", "/config/versions/2/diff?against=9", nil)
 	r.viewer.must(400, "GET", "/config/versions/2/diff?against=-1", nil)
+	r.viewer.must(404, "GET", "/config/versions/0/diff", nil)
 
 	// The audit record: the note, the version, the changes; no snapshot.
 	records := auditPage(t, r.admin, "?entity=config")

@@ -133,12 +133,12 @@ func (s *Server) DiffConfigVersion(ctx context.Context, req apiv1.DiffConfigVers
 	if req.Params.Against != nil {
 		against = *req.Params.Against
 	}
-	if against < 0 {
-		return nil, invalid("against: want a version, or 0 for the empty config")
-	}
 	to, err := s.store.GetPublished(ctx, req.V)
 	if err != nil {
 		return nil, err
+	}
+	if against < 0 {
+		return nil, invalid("against: want a version, or 0 for the empty config")
 	}
 	var from *configpb.Config
 	if against > 0 {
