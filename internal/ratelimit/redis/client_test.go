@@ -23,6 +23,7 @@ import (
 
 	"github.com/ankitbisht23/spillway/internal/config"
 	"github.com/ankitbisht23/spillway/internal/ratelimit"
+	"github.com/ankitbisht23/spillway/internal/secret"
 )
 
 func TestKeys(t *testing.T) {
@@ -371,7 +372,7 @@ func callFake(t *testing.T, c *Client) (Result, error) {
 // the script call (it may have run) sees exactly one send.
 func TestNoResend(t *testing.T) {
 	f := newFakeNode(t, "7.2.4", func(string) string { return "" })
-	c := NewClient([]string{f.addr}, nil, ratelimit.SystemClock, slog.New(slog.DiscardHandler))
+	c := NewClient([]string{f.addr}, nil, Auth{}, ratelimit.SystemClock, slog.New(slog.DiscardHandler))
 	defer func() { _ = c.Close() }()
 
 	_, err := callFake(t, c)
@@ -391,7 +392,7 @@ func TestNoScriptFallback(t *testing.T) {
 		}
 		return allowedReply
 	})
-	c := NewClient([]string{f.addr}, nil, ratelimit.SystemClock, slog.New(slog.DiscardHandler))
+	c := NewClient([]string{f.addr}, nil, Auth{}, ratelimit.SystemClock, slog.New(slog.DiscardHandler))
 	defer func() { _ = c.Close() }()
 
 	for range 2 {
@@ -415,7 +416,7 @@ func TestNoScriptFallback(t *testing.T) {
 func TestOldRedis(t *testing.T) {
 	f := newFakeNode(t, "6.2.14", func(string) string { return allowedReply })
 	var logs bytes.Buffer
-	c := NewClient([]string{f.addr}, nil, ratelimit.SystemClock, slog.New(slog.NewTextHandler(&logs, nil)))
+	c := NewClient([]string{f.addr}, nil, Auth{}, ratelimit.SystemClock, slog.New(slog.NewTextHandler(&logs, nil)))
 	defer func() { _ = c.Close() }()
 
 	for range 3 {
@@ -434,7 +435,7 @@ func TestOldRedis(t *testing.T) {
 }
 
 func TestCallLimitCount(t *testing.T) {
-	c := NewClient([]string{"127.0.0.1:1"}, nil, ratelimit.SystemClock, slog.New(slog.DiscardHandler))
+	c := NewClient([]string{"127.0.0.1:1"}, nil, Auth{}, ratelimit.SystemClock, slog.New(slog.DiscardHandler))
 	defer func() { _ = c.Close() }()
 	for _, n := range []int{0, MaxLimits + 1} {
 		_, err := c.Call(context.Background(), 1, make([]Limit, n))
@@ -470,7 +471,7 @@ func TestClientBreaker(t *testing.T) {
 		return allowedReply
 	})
 	clock := ratelimit.NewFakeClock(time.Unix(1_700_000_000, 0))
-	c := NewClient([]string{f.addr}, nil, clock, slog.New(slog.DiscardHandler))
+	c := NewClient([]string{f.addr}, nil, Auth{}, clock, slog.New(slog.DiscardHandler))
 	defer func() { _ = c.Close() }()
 	c.stop() // the test runs the health check rounds itself
 	// The budget leaves room for a call to dial and set up a connection
@@ -601,11 +602,30 @@ func idleConns(c *Client) uint32 {
 // notifications off, so building one never resolves the node's host name
 // (ADR-0025).
 func TestPingerOptions(t *testing.T) {
-	c := NewClient([]string{"redis-0:6379"}, nil, ratelimit.SystemClock, slog.New(slog.DiscardHandler))
+	c := NewClient([]string{"redis-0:6379"}, nil, Auth{}, ratelimit.SystemClock, slog.New(slog.DiscardHandler))
 	defer func() { _ = c.Close() }()
 	c.stop()
 	if mode := c.pinger("redis-0:6379").Options().MaintNotificationsConfig.Mode; mode != maintnotifications.ModeDisabled {
 		t.Errorf("maintenance notifications %q, want %q", mode, maintnotifications.ModeDisabled)
+	}
+}
+
+// TestAuth: the request clients and the health checks' clients send the
+// same AUTH (SEC-09, ADR-0040); without a password, none. The integration
+// test TestRedisAuth runs it against a Redis with requirepass.
+func TestAuth(t *testing.T) {
+	c := NewClient([]string{"redis-0:6379"}, nil, Auth{Username: "spillway", Password: secret.New("dev-only-not-secret")}, ratelimit.SystemClock, slog.New(slog.DiscardHandler))
+	defer func() { _ = c.Close() }()
+	c.stop()
+	o, p := c.rdb.Options(), c.pinger("redis-0:6379").Options()
+	if o.Username != "spillway" || o.Password != "dev-only-not-secret" || p.Username != "spillway" || p.Password != "dev-only-not-secret" {
+		t.Errorf("cluster %q/%q, health checks %q/%q", o.Username, o.Password, p.Username, p.Password)
+	}
+	none := NewClient([]string{"redis-0:6379"}, nil, Auth{}, ratelimit.SystemClock, slog.New(slog.DiscardHandler))
+	defer func() { _ = none.Close() }()
+	none.stop()
+	if o, p := none.rdb.Options(), none.pinger("redis-0:6379").Options(); o.Password != "" || p.Password != "" || o.Username != "" {
+		t.Errorf("without a password: %+v %+v", o, p)
 	}
 }
 
@@ -614,7 +634,7 @@ func TestPingerOptions(t *testing.T) {
 // closed within a round of answering again (ADR-0025).
 func TestHealthChecks(t *testing.T) {
 	f := newFakeNode(t, "8.0.0", func(string) string { return allowedReply })
-	c := NewClient([]string{f.addr}, nil, ratelimit.SystemClock, slog.New(slog.DiscardHandler))
+	c := NewClient([]string{f.addr}, nil, Auth{}, ratelimit.SystemClock, slog.New(slog.DiscardHandler))
 	defer func() { _ = c.Close() }()
 	budget := func() error {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
@@ -664,7 +684,7 @@ func TestWarm(t *testing.T) {
 
 	cold := newFakeNode(t, "8.0.0", func(string) string { return allowedReply })
 	cold.setup.Store(int64(setup))
-	c := NewClient([]string{cold.addr}, nil, ratelimit.SystemClock, slog.New(slog.DiscardHandler))
+	c := NewClient([]string{cold.addr}, nil, Auth{}, ratelimit.SystemClock, slog.New(slog.DiscardHandler))
 	defer func() { _ = c.Close() }()
 	if _, err := budget(c); !isKind(err, KindTimeout) {
 		t.Errorf("unwarmed first call: %v, want a timeout", err)
@@ -674,7 +694,7 @@ func TestWarm(t *testing.T) {
 	f.setup.Store(int64(setup))
 	f.infoFailures.Store(1) // the first pass fails, the second succeeds
 	var logs bytes.Buffer
-	c = NewClient([]string{f.addr}, nil, ratelimit.SystemClock, slog.New(slog.NewTextHandler(&logs, nil)))
+	c = NewClient([]string{f.addr}, nil, Auth{}, ratelimit.SystemClock, slog.New(slog.NewTextHandler(&logs, nil)))
 	defer func() { _ = c.Close() }()
 	c.stop() // no health checks: the node's slow connection setup would miss them
 	c.Warm(t.Context(), 10*time.Millisecond)
@@ -703,7 +723,7 @@ func TestWarmStops(t *testing.T) {
 	}
 	addr := ln.Addr().String()
 	_ = ln.Close()
-	c := NewClient([]string{addr}, nil, ratelimit.SystemClock, slog.New(slog.DiscardHandler))
+	c := NewClient([]string{addr}, nil, Auth{}, ratelimit.SystemClock, slog.New(slog.DiscardHandler))
 	defer func() { _ = c.Close() }()
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()

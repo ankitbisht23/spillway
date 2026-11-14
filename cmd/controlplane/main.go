@@ -25,6 +25,7 @@ import (
 	"github.com/ankitbisht23/spillway/internal/controlplane/api"
 	"github.com/ankitbisht23/spillway/internal/controlplane/store"
 	"github.com/ankitbisht23/spillway/internal/controlplane/stream"
+	"github.com/ankitbisht23/spillway/internal/mtls"
 	"github.com/ankitbisht23/spillway/internal/telemetry"
 )
 
@@ -70,7 +71,7 @@ func migrate(log *slog.Logger, getenv func(string) string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	applied, err := store.Migrate(ctx, s.databaseURL, s.password, s.databasePassword)
+	applied, err := store.Migrate(ctx, s.databaseURL, s.password.Reveal(), s.databasePassword.Reveal())
 	if err != nil {
 		return err
 	}
@@ -99,7 +100,15 @@ func serve(log *slog.Logger, getenv func(string) string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	st, err := store.Open(ctx, s.databaseURL, s.databasePassword)
+	// The stream's certificate, key and CA (SEC-02, ADR-0040): a set that
+	// does not load stops the start; later ones reload every second.
+	streamCerts, err := mtls.Load(s.grpcTLS, nil, log)
+	if err != nil {
+		return fmt.Errorf("config stream mTLS: %w", err)
+	}
+	go streamCerts.Run(ctx, time.Second)
+
+	st, err := store.Open(ctx, s.databaseURL, s.databasePassword.Reveal())
 	if err != nil {
 		return err
 	}
@@ -155,7 +164,7 @@ func serve(log *slog.Logger, getenv func(string) string) error {
 		(&stream.Elector{
 			Open: func(ctx context.Context) (stream.Lock, error) { return st.OpenLockSession(ctx) },
 			Active: func(ctx context.Context) {
-				if err := stream.Serve(ctx, s.grpcAddr, st, st, log, func(d int) { streams.Add(float64(d)) }); err != nil {
+				if err := stream.Serve(ctx, s.grpcAddr, streamCerts.ServerConfig(), st, st, log, func(d int) { streams.Add(float64(d)) }); err != nil {
 					log.Error("config stream failed", "err", err)
 				}
 			},

@@ -48,10 +48,11 @@ Decisions that shape Spillway and are not obvious from the code or from docs/des
 | [0037](0037-config-publish-rollback-and-the-identity-path.md) | Config publish, versions and rollback; the identity path | Accepted | 2026-11-13 |
 | [0038](0038-config-distribution-watch-heartbeat-snapshots-and-the-active-replica.md) | Config distribution: Watch, Heartbeat, snapshots and the active replica | Accepted | 2026-11-13 |
 | [0039](0039-gateway-authentication-managed-api-keys-jwt-and-auth-modes.md) | Gateway authentication: managed API keys, JWT and auth modes | Accepted | 2026-11-13 |
-| [0040](0040-control-plane-security-mtls-oidc-rbac-audit-and-secrets.md) | Control-plane security: mTLS, OIDC, RBAC, audit and secrets | Accepted; where RBAC is enforced superseded by 0043 | 2026-11-13 |
+| [0040](0040-control-plane-security-mtls-oidc-rbac-audit-and-secrets.md) | Control-plane security: mTLS, OIDC, RBAC, audit and secrets | Accepted; where RBAC is enforced superseded by 0043; the stream certificates' paths superseded by 0047 | 2026-11-13 |
 | [0041](0041-limit-precedence-plans-overrides-access-lists-and-heavy-hitters.md) | Limit precedence: plans, overrides, access lists and heavy hitters | Accepted | 2026-11-13 |
 | [0042](0042-m5-exit-check.md) | The M5 exit check | Accepted | 2026-11-13 |
 | [0043](0043-rbac-and-audit-implementation.md) | RBAC and audit: where tokens are checked, test logins and audit details | Accepted | 2026-11-14 |
 | [0044](0044-config-import-and-export-details.md) | Config import and export: details | Accepted; the ratelimit section superseded by 0045 | 2026-11-14 |
-| [0045](0045-config-settings-and-the-watch-task.md) | Config settings, and the watch task's details | Accepted | 2026-11-14 |
+| [0045](0045-config-settings-and-the-watch-task.md) | Config settings, and the watch task's details | Accepted; the interim until mtls-secrets ended by 0047 | 2026-11-14 |
 | [0046](0046-heartbeats-and-live-replicas-details.md) | Heartbeats and live replicas: details | Accepted | 2026-11-14 |
+| [0047](0047-stream-mtls-and-secrets-details.md) | Config stream mTLS and secrets: details | Accepted | 2026-11-14 |

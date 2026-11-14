@@ -2,16 +2,17 @@ package stream
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net"
-	"regexp"
 	"sync/atomic"
 	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/encoding"
 	"google.golang.org/grpc/encoding/proto"
 	"google.golang.org/grpc/keepalive"
@@ -47,10 +48,6 @@ func acceptSchema(v *configpb.SchemaVersion) bool {
 	return v.GetMajor() == config.SchemaMajor && v.GetMinor() >= config.SchemaMinor-1
 }
 
-// replicaName is a DNS label, as a client certificate's name must be
-// (ADR-0040).
-var replicaName = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
-
 // Service is ConfigService on the active replica (CP-06, CP-08).
 type Service struct {
 	configpb.UnimplementedConfigServiceServer
@@ -73,11 +70,9 @@ func NewService(b *Broadcaster, rec Recorder, log *slog.Logger) *Service {
 // with the same name replaces it (ABORTED), or the replica steps down
 // (UNAVAILABLE) (CP-06, ADR-0038).
 func (s *Service) Watch(req *configpb.WatchRequest, stream grpc.ServerStreamingServer[configpb.WatchResponse]) error {
-	// Until M5's mtls-secrets task the name is the request's; then it is
-	// the client certificate's, which the request must match (ADR-0040).
-	name := req.GetReplicaId()
-	if !replicaName.MatchString(name) {
-		return status.Error(codes.InvalidArgument, "replica_id: want a DNS label, such as gateway-1")
+	name, err := s.replica(stream.Context(), "Watch", req.GetReplicaId())
+	if err != nil {
+		return err
 	}
 	log := s.log.With("replica", name)
 	if !acceptSchema(req.GetSchemaVersion()) {
@@ -138,24 +133,30 @@ const (
 	stopGrace = 5 * time.Second
 )
 
-// serverOptions are the ConfigService server's options, then extra (M5's
-// mtls-secrets task adds transport credentials there).
-func serverOptions(extra ...grpc.ServerOption) []grpc.ServerOption {
-	return append([]grpc.ServerOption{
+// serverOptions are the ConfigService server's options: mTLS with tlsConfig
+// (there is no plaintext listener), handshake failures logged, the replica
+// name taken from the client certificate, then the codec, limits and
+// keepalives (SEC-02, ADR-0038, ADR-0040).
+func serverOptions(tlsConfig *tls.Config, log *slog.Logger) []grpc.ServerOption {
+	return []grpc.ServerOption{
+		grpc.Creds(loggedCreds{credentials.NewTLS(tlsConfig), log}),
+		grpc.ChainUnaryInterceptor(unaryReplica(log)),
+		grpc.ChainStreamInterceptor(streamReplica(log)),
 		grpc.ForceServerCodecV2(codec{encoding.GetCodecV2(proto.Name)}),
 		grpc.MaxRecvMsgSize(maxMessage),
 		grpc.MaxSendMsgSize(maxMessage),
 		grpc.KeepaliveParams(keepalive.ServerParameters{Time: keepaliveTime, Timeout: keepaliveTimeout}),
 		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{MinTime: keepaliveMinPing, PermitWithoutStream: true}),
-	}, extra...)
+	}
 }
 
 // Serve is what the active replica runs (CP-22, ADR-0038): the hourly
 // prune of rec, the broadcaster and, once it has read both sections,
-// ConfigService on a listener at addr. When ctx ends it closes every stream
-// with UNAVAILABLE, stops the broadcaster and the prune, and closes the
-// listener. It returns early only if it cannot listen.
-func Serve(ctx context.Context, addr string, src Source, rec Recorder, log *slog.Logger, streams func(int), opts ...grpc.ServerOption) error {
+// ConfigService on a listener at addr, mTLS with tlsConfig (ADR-0040). When
+// ctx ends it closes every stream with UNAVAILABLE, stops the broadcaster
+// and the prune, and closes the listener. It returns early only if it
+// cannot listen.
+func Serve(ctx context.Context, addr string, tlsConfig *tls.Config, src Source, rec Recorder, log *slog.Logger, streams func(int)) error {
 	bctx, stopB := context.WithCancel(context.Background())
 	b := NewBroadcaster(src, log, streams)
 	bDone, pruned := make(chan struct{}), make(chan struct{})
@@ -181,7 +182,7 @@ func Serve(ctx context.Context, addr string, src Source, rec Recorder, log *slog
 	if err != nil {
 		return fmt.Errorf("gRPC listener: %w", err)
 	}
-	gs := grpc.NewServer(serverOptions(opts...)...)
+	gs := grpc.NewServer(serverOptions(tlsConfig, log)...)
 	configpb.RegisterConfigServiceServer(gs, NewService(b, rec, log))
 	served := make(chan error, 1)
 	go func() { served <- gs.Serve(ln) }()

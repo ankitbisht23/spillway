@@ -6,15 +6,15 @@ import (
 	"fmt"
 	"net"
 	"net/url"
-	"os"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/ankitbisht23/spillway/internal/managed"
+	"github.com/ankitbisht23/spillway/internal/mtls"
 	"github.com/ankitbisht23/spillway/internal/proxy"
 	"github.com/ankitbisht23/spillway/internal/ratelimit/redis"
+	"github.com/ankitbisht23/spillway/internal/secret"
 )
 
 // settings are the gateway's own settings. They come from the environment,
@@ -27,7 +27,11 @@ type settings struct {
 	// Managed mode (ADR-0038): on when the control plane is set.
 	controlPlane string // SPILLWAY_GATEWAY_CONTROL_PLANE: the ConfigService's host:port
 	snapshot     string // SPILLWAY_GATEWAY_SNAPSHOT: the on-disk last good snapshot (CP-07), default /var/lib/spillway/snapshot.pb
-	replicaID    string // SPILLWAY_GATEWAY_REPLICA_ID: the replica name, a DNS label, default the host name; until M5's mtls-secrets task, which takes it from the client certificate (ADR-0045)
+	// The stream's mTLS (SEC-02, ADR-0040), managed mode only: PEM files,
+	// reloaded when they change. The replica name is the certificate's
+	// DNS name (D7).
+	streamTLS    mtls.Files // SPILLWAY_GATEWAY_CP_CERT, SPILLWAY_GATEWAY_CP_KEY: the client certificate and key; SPILLWAY_GATEWAY_CP_CA: the stream CA the control plane's certificate must chain to
+	cpServerName string     // SPILLWAY_GATEWAY_CP_SERVER_NAME: the name the control plane's certificate must carry, default the host part of SPILLWAY_GATEWAY_CONTROL_PLANE
 
 	httpAddr   string          // SPILLWAY_GATEWAY_HTTP_ADDR: plain-HTTP listener, dev and benchmarks only, off when empty (SEC-01)
 	tlsAddr    string          // SPILLWAY_GATEWAY_TLS_ADDR: TLS listener (GW-04, SEC-01), default :8443
@@ -51,6 +55,7 @@ type settings struct {
 	// Rate limiting (ADR-0021)
 	redisAddrs   []string          // SPILLWAY_GATEWAY_REDIS_ADDRS: comma-separated host:port seeds of the limiter's Redis Cluster, none by default
 	redisAddrMap map[string]string // SPILLWAY_REDIS_ADDR_MAP: dev and tests only (ADR-0004)
+	redisAuth    redis.Auth        // SPILLWAY_GATEWAY_REDIS_USERNAME, and SPILLWAY_GATEWAY_REDIS_PASSWORD or _FILE (SEC-09): Redis AUTH, off when the password is unset
 	devMode      bool              // SPILLWAY_GATEWAY_DEV_MODE: dev-only behaviour, the Spillway-Decision-Time header (ADR-0021), default false
 
 	// Logs and traces (OB-03, OB-02)
@@ -91,8 +96,10 @@ func loadSettings(getenv func(string) string) (settings, error) {
 		traceSampleRatio:    1,
 		otlpEndpoint:        getenv("SPILLWAY_GATEWAY_OTLP_ENDPOINT"),
 	}
-	s.controlPlane, s.snapshot, s.replicaID = getenv("SPILLWAY_GATEWAY_CONTROL_PLANE"), getenv("SPILLWAY_GATEWAY_SNAPSHOT"), getenv("SPILLWAY_GATEWAY_REPLICA_ID")
-	if err := s.mode(os.Hostname); err != nil {
+	s.controlPlane, s.snapshot = getenv("SPILLWAY_GATEWAY_CONTROL_PLANE"), getenv("SPILLWAY_GATEWAY_SNAPSHOT")
+	s.streamTLS = mtls.Files{Cert: getenv("SPILLWAY_GATEWAY_CP_CERT"), Key: getenv("SPILLWAY_GATEWAY_CP_KEY"), CA: getenv("SPILLWAY_GATEWAY_CP_CA")}
+	s.cpServerName = getenv("SPILLWAY_GATEWAY_CP_SERVER_NAME")
+	if err := s.mode(); err != nil {
 		return s, err
 	}
 	if (s.tlsCert == "") != (s.tlsKey == "") {
@@ -119,6 +126,13 @@ func loadSettings(getenv func(string) string) (settings, error) {
 	}
 	if s.redisAddrMap, err = redis.ParseAddrMap(getenv(redis.AddrMapEnv)); err != nil {
 		return s, err
+	}
+	s.redisAuth.Username = getenv("SPILLWAY_GATEWAY_REDIS_USERNAME")
+	if s.redisAuth.Password, err = secret.FromEnv(getenv, "SPILLWAY_GATEWAY_REDIS_PASSWORD"); err != nil {
+		return s, err
+	}
+	if s.redisAuth.Username != "" && !s.redisAuth.Password.IsSet() {
+		return s, errors.New("SPILLWAY_GATEWAY_REDIS_USERNAME: set with SPILLWAY_GATEWAY_REDIS_PASSWORD (or _FILE) only")
 	}
 	if v := getenv("SPILLWAY_GATEWAY_DEV_MODE"); v != "" {
 		if s.devMode, err = strconv.ParseBool(v); err != nil {
@@ -175,40 +189,34 @@ func adminAddr(getenv func(string) string) string {
 	return defaultAdminAddr
 }
 
-// replicaName is a DNS label, as a certificate's name must be (ADR-0040).
-var replicaName = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
-
 // mode checks the settings of static or managed mode (ADR-0038): static
-// needs the config file; managed needs the control plane and takes config
-// and identity only from it, so the files are refused.
-func (s *settings) mode(hostname func() (string, error)) error {
+// needs the config file; managed needs the control plane and its mTLS files
+// (ADR-0040) and takes config and identity only from it, so the files are
+// refused. The mTLS settings are ignored in static mode, so compose can set
+// them on every gateway.
+func (s *settings) mode() error {
 	if s.controlPlane == "" {
 		if s.configPath == "" {
 			return errors.New("SPILLWAY_GATEWAY_CONFIG: required, unless SPILLWAY_GATEWAY_CONTROL_PLANE is set (managed mode)")
 		}
-		if s.snapshot != "" || s.replicaID != "" {
-			return errors.New("SPILLWAY_GATEWAY_SNAPSHOT and SPILLWAY_GATEWAY_REPLICA_ID: managed mode only; set SPILLWAY_GATEWAY_CONTROL_PLANE")
+		if s.snapshot != "" {
+			return errors.New("SPILLWAY_GATEWAY_SNAPSHOT: managed mode only; set SPILLWAY_GATEWAY_CONTROL_PLANE")
 		}
 		return nil
 	}
 	if s.configPath != "" || s.identity != "" {
 		return errors.New("SPILLWAY_GATEWAY_CONFIG and SPILLWAY_GATEWAY_IDENTITY: not with SPILLWAY_GATEWAY_CONTROL_PLANE; a managed gateway takes config and identity from the control plane")
 	}
-	if host, port, err := net.SplitHostPort(s.controlPlane); err != nil || host == "" || port == "" {
+	host, port, err := net.SplitHostPort(s.controlPlane)
+	if err != nil || host == "" || port == "" {
 		return fmt.Errorf("SPILLWAY_GATEWAY_CONTROL_PLANE: %q is not host:port", s.controlPlane)
 	}
+	if s.streamTLS.Cert == "" || s.streamTLS.Key == "" || s.streamTLS.CA == "" {
+		return errors.New("SPILLWAY_GATEWAY_CP_CERT, SPILLWAY_GATEWAY_CP_KEY and SPILLWAY_GATEWAY_CP_CA: required with SPILLWAY_GATEWAY_CONTROL_PLANE; the config stream is mTLS only (SEC-02)")
+	}
+	s.cpServerName = cmp.Or(s.cpServerName, host)
 	if s.snapshot == "" {
 		s.snapshot = managed.DefaultSnapshotPath
-	}
-	if s.replicaID == "" {
-		h, err := hostname()
-		if err != nil {
-			return fmt.Errorf("SPILLWAY_GATEWAY_REPLICA_ID: not set, and the host name: %w", err)
-		}
-		s.replicaID = strings.ToLower(h)
-	}
-	if !replicaName.MatchString(s.replicaID) {
-		return fmt.Errorf("SPILLWAY_GATEWAY_REPLICA_ID: %q is not a DNS label (lower-case letters, digits and '-', at most 63)", s.replicaID)
 	}
 	return nil
 }

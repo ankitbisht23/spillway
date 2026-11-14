@@ -20,6 +20,7 @@ import (
 
 	"github.com/ankitbisht23/spillway/internal/config"
 	"github.com/ankitbisht23/spillway/internal/ratelimit"
+	"github.com/ankitbisht23/spillway/internal/secret"
 )
 
 // script is the limiter script (RL-11). Calls use EVALSHA and fall back to
@@ -93,6 +94,7 @@ type Client struct {
 	log      *slog.Logger
 	breakers *breakers
 	dialer   func(ctx context.Context, network, addr string) (net.Conn, error) // nil: go-redis's
+	auth     Auth                                                              // the health checks authenticate as calls do
 	stop     context.CancelFunc                                                // ends the health checks
 	checks   sync.WaitGroup                                                    // the health check loop
 
@@ -101,9 +103,17 @@ type Client struct {
 	pings map[string]*goredis.Client // the health checks' own client per node
 }
 
+// Auth is the limiter's Redis AUTH (SEC-09, ADR-0040): none when Password
+// is unset; Username empty is Redis's default user.
+type Auth struct {
+	Username string
+	Password secret.Value
+}
+
 // NewClient returns the limiter's cluster client, dialing through addrMap
-// when it is set (ADR-0004), with one circuit breaker per node on clock and
-// the health checks that drive them (RL-22, ADR-0025). It never contacts
+// when it is set (ADR-0004) and authenticating with auth, with one circuit
+// breaker per node on clock and the health checks that drive them (RL-22,
+// ADR-0025). It never contacts
 // Redis itself; Warm and calls do (GW-24), and the health checks PING only
 // the nodes those have met.
 //
@@ -113,12 +123,13 @@ type Client struct {
 // routing policies on, go-redis fetches COMMAND on the first call, inside
 // that call's budget, and takes one client-wide lock on every call
 // (ADR-0025).
-func NewClient(addrs []string, addrMap map[string]string, clock ratelimit.Clock, log *slog.Logger) *Client {
-	opt := &goredis.ClusterOptions{Addrs: addrs, MaxRetries: 0, ContextTimeoutEnabled: true, DisableRoutingPolicies: true}
+func NewClient(addrs []string, addrMap map[string]string, auth Auth, clock ratelimit.Clock, log *slog.Logger) *Client {
+	opt := &goredis.ClusterOptions{Addrs: addrs, MaxRetries: 0, ContextTimeoutEnabled: true, DisableRoutingPolicies: true,
+		Username: auth.Username, Password: auth.Password.Reveal()}
 	if addrMap != nil {
 		opt.Dialer = Dialer(addrMap)
 	}
-	c := &Client{rdb: goredis.NewClusterClient(opt), log: log, dialer: opt.Dialer, nodes: make(map[string]bool), pings: make(map[string]*goredis.Client)}
+	c := &Client{rdb: goredis.NewClusterClient(opt), log: log, dialer: opt.Dialer, auth: auth, nodes: make(map[string]bool), pings: make(map[string]*goredis.Client)}
 	// A breaker that opens may mean a failover: reload the slot map now, so
 	// the slot reaches the promoted replica as soon as it is elected
 	// (ADR-0021). The reload runs in the background.
@@ -219,7 +230,7 @@ func (c *Client) pinger(addr string) *goredis.Client {
 	node := c.pings[addr]
 	if node == nil {
 		node = goredis.NewClient(&goredis.Options{
-			Addr: addr, Dialer: c.dialer, MaxRetries: -1, PoolSize: 1, ContextTimeoutEnabled: true,
+			Addr: addr, Dialer: c.dialer, Username: c.auth.Username, Password: c.auth.Password.Reveal(), MaxRetries: -1, PoolSize: 1, ContextTimeoutEnabled: true,
 			DialTimeout: pingTimeout, ReadTimeout: pingTimeout, WriteTimeout: pingTimeout,
 			MaintNotificationsConfig: &maintnotifications.Config{Mode: maintnotifications.ModeDisabled},
 		})

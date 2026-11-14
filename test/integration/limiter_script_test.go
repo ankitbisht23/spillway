@@ -39,7 +39,7 @@ func scriptEnv(t *testing.T) (map[string]string, *redis.Client, *goredis.Cluster
 	if addrMap == nil {
 		t.Fatalf("%s is not set; run make test-integration", redis.AddrMapEnv)
 	}
-	c := redis.NewClient([]string{"redis-0:6379"}, addrMap, ratelimit.SystemClock, slog.New(slog.DiscardHandler))
+	c := redis.NewClient([]string{"redis-0:6379"}, addrMap, redis.Auth{}, ratelimit.SystemClock, slog.New(slog.DiscardHandler))
 	rdb := goredis.NewClusterClient(&goredis.ClusterOptions{Addrs: []string{"redis-0:6379"}, Dialer: redis.Dialer(addrMap)})
 	t.Cleanup(func() { _ = c.Close(); _ = rdb.Close() })
 	return addrMap, c, rdb
@@ -554,7 +554,7 @@ func TestScriptTimeoutAfterExecution(t *testing.T) {
 	for from, to := range addrMap {
 		proxied[from] = delayProxy(t, to, &delay)
 	}
-	c := redis.NewClient([]string{"redis-0:6379"}, proxied, ratelimit.SystemClock, slog.New(slog.DiscardHandler))
+	c := redis.NewClient([]string{"redis-0:6379"}, proxied, redis.Auth{}, ratelimit.SystemClock, slog.New(slog.DiscardHandler))
 	defer func() { _ = c.Close() }()
 
 	name := scriptName("timeout")

@@ -4,23 +4,27 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
-	"os"
 	"strconv"
-	"strings"
 
 	"github.com/ankitbisht23/spillway/internal/auth"
+	"github.com/ankitbisht23/spillway/internal/mtls"
 	"github.com/ankitbisht23/spillway/internal/proxy"
+	"github.com/ankitbisht23/spillway/internal/secret"
 )
 
 // settings are the control plane's settings, from the environment only
 // (ADR-0008, ADR-0036). Each arrives with the M5 task that uses it.
 type settings struct {
 	databaseURL      string          // SPILLWAY_CP_DATABASE_URL: postgres://spillway_app@host:5432/spillway?sslmode=..., without a password
-	databasePassword string          // SPILLWAY_CP_DATABASE_PASSWORD or _FILE: the app role's password (SEC-09)
+	databasePassword secret.Value    // SPILLWAY_CP_DATABASE_PASSWORD or _FILE: the app role's password (SEC-09)
 	httpAddr         string          // SPILLWAY_CP_HTTP_ADDR: REST listener, default :8080
 	grpcAddr         string          // SPILLWAY_CP_GRPC_ADDR: ConfigService listener, active replica only, default :9090 (ADR-0038)
 	adminAddr        string          // SPILLWAY_CP_ADMIN_ADDR: /metrics, pprof, /healthz, /readyz, default 127.0.0.1:8081 (SEC-02)
 	allow            proxy.Allowlist // SPILLWAY_CP_ALLOWED_NETWORKS: upstream allow-list, the gateways' (SEC-06)
+
+	// The config stream's mTLS (SEC-02, ADR-0040): PEM files, reloaded
+	// when they change; there is no plaintext gRPC listener.
+	grpcTLS mtls.Files // SPILLWAY_CP_GRPC_TLS_CERT, SPILLWAY_CP_GRPC_TLS_KEY: the server certificate and key; SPILLWAY_CP_GRPC_CLIENT_CA: the stream CA that gateway certificates must chain to
 
 	// Bearer tokens (CP-11, ADR-0040)
 	oidcIssuer   string // SPILLWAY_CP_OIDC_ISSUER: the browser-facing issuer every token's iss must equal
@@ -31,9 +35,9 @@ type settings struct {
 
 // migrateSettings are what `controlplane migrate` needs (CP-19).
 type migrateSettings struct {
-	databaseURL      string // SPILLWAY_CP_MIGRATE_DATABASE_URL: the owner role's URL, without a password
-	password         string // SPILLWAY_CP_MIGRATE_PASSWORD or _FILE: the owner role's password
-	databasePassword string // SPILLWAY_CP_DATABASE_PASSWORD or _FILE: the app role's password, which migrate sets
+	databaseURL      string       // SPILLWAY_CP_MIGRATE_DATABASE_URL: the owner role's URL, without a password
+	password         secret.Value // SPILLWAY_CP_MIGRATE_PASSWORD or _FILE: the owner role's password
+	databasePassword secret.Value // SPILLWAY_CP_DATABASE_PASSWORD or _FILE: the app role's password, which migrate sets
 }
 
 const defaultAdminAddr = "127.0.0.1:8081"
@@ -49,8 +53,12 @@ func loadSettings(getenv func(string) string) (settings, error) {
 		return s, errors.New("SPILLWAY_CP_DATABASE_URL is required")
 	}
 	var err error
-	if s.databasePassword, err = secret(getenv, "SPILLWAY_CP_DATABASE_PASSWORD"); err != nil {
+	if s.databasePassword, err = secret.Required(getenv, "SPILLWAY_CP_DATABASE_PASSWORD"); err != nil {
 		return s, err
+	}
+	s.grpcTLS = mtls.Files{Cert: getenv("SPILLWAY_CP_GRPC_TLS_CERT"), Key: getenv("SPILLWAY_CP_GRPC_TLS_KEY"), CA: getenv("SPILLWAY_CP_GRPC_CLIENT_CA")}
+	if s.grpcTLS.Cert == "" || s.grpcTLS.Key == "" || s.grpcTLS.CA == "" {
+		return s, errors.New("SPILLWAY_CP_GRPC_TLS_CERT, SPILLWAY_CP_GRPC_TLS_KEY and SPILLWAY_CP_GRPC_CLIENT_CA are required: the config stream is mTLS only (SEC-02)")
 	}
 	nets := getenv("SPILLWAY_CP_ALLOWED_NETWORKS")
 	if nets == "" {
@@ -80,32 +88,11 @@ func loadMigrateSettings(getenv func(string) string) (migrateSettings, error) {
 		return s, errors.New("SPILLWAY_CP_MIGRATE_DATABASE_URL is required")
 	}
 	var err error
-	if s.password, err = secret(getenv, "SPILLWAY_CP_MIGRATE_PASSWORD"); err != nil {
+	if s.password, err = secret.Required(getenv, "SPILLWAY_CP_MIGRATE_PASSWORD"); err != nil {
 		return s, err
 	}
-	s.databasePassword, err = secret(getenv, "SPILLWAY_CP_DATABASE_PASSWORD")
+	s.databasePassword, err = secret.Required(getenv, "SPILLWAY_CP_DATABASE_PASSWORD")
 	return s, err
-}
-
-// secret reads a required secret from name or from the file that name_FILE
-// names, one trailing newline trimmed; setting both is an error (SEC-09,
-// ADR-0040). Errors name the setting, never the value.
-func secret(getenv func(string) string, name string) (string, error) {
-	v, file := getenv(name), getenv(name+"_FILE")
-	switch {
-	case v != "" && file != "":
-		return "", fmt.Errorf("set %s or %s_FILE, not both", name, name)
-	case file != "":
-		b, err := os.ReadFile(file) //nolint:gosec // G304: the operator names the file
-		if err != nil {
-			return "", fmt.Errorf("%s_FILE: cannot read the file", name)
-		}
-		v = strings.TrimSuffix(strings.TrimSuffix(string(b), "\n"), "\r")
-	}
-	if v == "" {
-		return "", fmt.Errorf("%s (or %s_FILE) is required", name, name)
-	}
-	return v, nil
 }
 
 func adminAddr(getenv func(string) string) string {

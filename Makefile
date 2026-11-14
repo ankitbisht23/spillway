@@ -58,13 +58,52 @@ hooks: tool-gitleaks
 # `mkcert -install` (docs/setup.md) only makes browsers trust it. The key is
 # made readable to all, because the gateway containers run as uid 65532 and,
 # on Linux, a bind mount keeps the host's owner and mode (ADR-0012).
-certs: deploy/certs/gateway.pem
+#
+# Then the config stream's mTLS certificates (SEC-02, D7, ADR-0040,
+# ADR-0047), in the gitignored deploy/stream-certs: a second mkcert CA in
+# ca/, never installed in a trust store and never mounted into a container; a
+# server certificate for the control plane (controlplane, localhost,
+# 127.0.0.1); and a client certificate per gateway replica whose only name is
+# the replica's. Each other directory holds cert.pem, key.pem and ca.pem (the
+# stream CA's certificate) and is mounted read-only at /etc/spillway-stream by
+# its own container only. To replace the stream CA, which revokes every
+# stream certificate (the only revocation in M5), delete deploy/stream-certs/ca
+# (not the other directories, which containers mount) and run this again:
+# every certificate is reissued, and running processes load them within a
+# second. Keys are readable to all, as above.
+STREAM := deploy/stream-certs
+STREAM_CA := $(STREAM)/ca/rootCA.pem
+STREAM_GATEWAYS := gateway-1 gateway-2 gateway-3 gateway-4 gateway-5
+
+certs: deploy/certs/gateway.pem $(STREAM_CA) $(STREAM)/controlplane/cert.pem $(STREAM_GATEWAYS:%=$(STREAM)/%/cert.pem)
 
 deploy/certs/gateway.pem: | tool-mkcert
 	@mkdir -p deploy/certs
 	$(BIN)/mkcert -cert-file $@ -key-file deploy/certs/gateway-key.pem \
 		localhost 127.0.0.1 ::1 gateway-1 gateway-2 gateway-3 gateway-4 gateway-5
 	chmod 644 deploy/certs/gateway-key.pem
+
+# $(call stream-cert,directory,mkcert flags and names) issues one stream
+# certificate into directory.
+define stream-cert
+	@mkdir -p $(1)
+	CAROOT=$(STREAM)/ca $(BIN)/mkcert -cert-file $(1)/cert.pem -key-file $(1)/key.pem $(2)
+	cp $(STREAM_CA) $(1)/ca.pem
+	chmod 644 $(1)/key.pem
+endef
+
+# mkcert makes a CA when it first issues a certificate, so the CA's rule
+# issues the control plane's; every certificate is older than a new CA, so
+# each is reissued after it.
+$(STREAM_CA): | tool-mkcert
+	@mkdir -p $(STREAM)/ca
+	$(call stream-cert,$(STREAM)/controlplane,controlplane localhost 127.0.0.1)
+
+$(STREAM)/controlplane/cert.pem: $(STREAM_CA)
+	$(call stream-cert,$(@D),controlplane localhost 127.0.0.1)
+
+$(STREAM)/gateway-%/cert.pem: $(STREAM_CA)
+	$(call stream-cert,$(@D),-client gateway-$*)
 
 # Boots the dev stack and returns once every service is healthy and every
 # one-shot service has exited 0.

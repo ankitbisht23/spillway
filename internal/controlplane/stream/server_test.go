@@ -2,8 +2,11 @@ package stream
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
+	"log/slog"
 	"net"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"testing"
@@ -12,38 +15,82 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 
 	"github.com/ankitbisht23/spillway/internal/config"
 	"github.com/ankitbisht23/spillway/internal/controlplane/store"
 	"github.com/ankitbisht23/spillway/internal/gen/configpb"
+	"github.com/ankitbisht23/spillway/internal/mtls"
+	"github.com/ankitbisht23/spillway/internal/testcert"
 )
 
-// watchServer serves ConfigService over an in-memory connection with the
-// real options, codec included, and returns a client and the broadcaster.
-func watchServer(t *testing.T, src *fakeSource) (configpb.ConfigServiceClient, *Broadcaster) {
-	t.Helper()
-	return configServer(t, src, &fakeRecorder{})
+// clients dials an in-memory ConfigService server as gateways: as(name)
+// is a client whose certificate, from the stream CA, names replica name.
+type clients struct {
+	t     *testing.T
+	ln    *bufconn.Listener
+	ca    *testcert.CA
+	conns map[string]configpb.ConfigServiceClient
 }
 
-// configServer is watchServer with heartbeats recorded in rec.
-func configServer(t *testing.T, src *fakeSource, rec Recorder) (configpb.ConfigServiceClient, *Broadcaster) {
+// as is the client of replica name, dialed once.
+func (c *clients) as(name string) configpb.ConfigServiceClient {
+	c.t.Helper()
+	if cl, ok := c.conns[name]; ok {
+		return cl
+	}
+	dir := c.t.TempDir()
+	c.ca.Issue(c.t, dir, testcert.Leaf{DNSNames: []string{name}, Client: true})
+	cl := c.dial(loadFiles(c.t, dir).ClientConfig("controlplane"))
+	c.conns[name] = cl
+	return cl
+}
+
+// dial is a client with the TLS config cfg.
+func (c *clients) dial(cfg *tls.Config) configpb.ConfigServiceClient {
+	c.t.Helper()
+	conn, err := grpc.NewClient("passthrough:///bufconn", grpc.WithTransportCredentials(credentials.NewTLS(cfg)),
+		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) { return c.ln.DialContext(ctx) }))
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	c.t.Cleanup(func() { _ = conn.Close() })
+	return configpb.NewConfigServiceClient(conn)
+}
+
+func loadFiles(t *testing.T, dir string) *mtls.Reloader {
 	t.Helper()
-	b := started(t, src)
-	ln := bufconn.Listen(1 << 20)
-	gs := grpc.NewServer(serverOptions()...)
-	configpb.RegisterConfigServiceServer(gs, NewService(b, rec, discard()))
-	go func() { _ = gs.Serve(ln) }()
-	t.Cleanup(gs.Stop)
-	conn, err := grpc.NewClient("passthrough:///bufconn", grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) { return ln.DialContext(ctx) }))
+	r, err := mtls.Load(mtls.Files{Cert: filepath.Join(dir, "cert.pem"), Key: filepath.Join(dir, "key.pem"), CA: filepath.Join(dir, "ca.pem")}, nil, discard())
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = conn.Close() })
-	return configpb.NewConfigServiceClient(conn), b
+	return r
+}
+
+// watchServer serves ConfigService over an in-memory connection with the
+// real options, mTLS and codec included, and returns its clients and the
+// broadcaster.
+func watchServer(t *testing.T, src *fakeSource) (*clients, *Broadcaster) {
+	t.Helper()
+	return configServer(t, src, &fakeRecorder{}, discard())
+}
+
+// configServer is watchServer with heartbeats recorded in rec and the
+// server's logs in log.
+func configServer(t *testing.T, src *fakeSource, rec Recorder, log *slog.Logger) (*clients, *Broadcaster) {
+	t.Helper()
+	b := started(t, src)
+	ca := testcert.NewCA(t, "stream CA")
+	dir := t.TempDir()
+	ca.Issue(t, dir, testcert.Leaf{DNSNames: []string{"controlplane"}})
+	ln := bufconn.Listen(1 << 20)
+	gs := grpc.NewServer(serverOptions(loadFiles(t, dir).ServerConfig(), log)...)
+	configpb.RegisterConfigServiceServer(gs, NewService(b, rec, log))
+	go func() { _ = gs.Serve(ln) }()
+	t.Cleanup(gs.Stop)
+	return &clients{t: t, ln: ln, ca: ca, conns: map[string]configpb.ConfigServiceClient{}}, b
 }
 
 func watchReq(name string, config, identity int64) *configpb.WatchRequest {
@@ -79,11 +126,11 @@ func recv(t *testing.T, s grpc.ServerStreamingClient[configpb.WatchResponse]) (s
 // it is published; a lower one too.
 func TestWatch(t *testing.T) {
 	src := newFakeSource(4, 7)
-	client, _ := watchServer(t, src)
+	c, _ := watchServer(t, src)
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 
-	s, err := client.Watch(ctx, watchReq("gateway-1", 0, 0))
+	s, err := c.as("gateway-1").Watch(ctx, watchReq("gateway-1", 0, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +140,7 @@ func TestWatch(t *testing.T) {
 		}
 	}
 	// A gateway with the current config gets only the identity.
-	s2, _ := client.Watch(ctx, watchReq("gateway-2", 4, 6))
+	s2, _ := c.as("gateway-2").Watch(ctx, watchReq("", 4, 6)) // replica_id is optional
 	if got, err := recv(t, s2); got != "identity 7" {
 		t.Fatalf("gateway-2: %q, %v", got, err)
 	}
@@ -116,33 +163,34 @@ func TestWatch(t *testing.T) {
 	}
 }
 
-// TestWatchRefuses checks what Watch refuses (CP-18, ADR-0038): a schema
-// of another major, or more than one minor behind; a replica_id that is
-// not a DNS label. A gateway one minor behind, or ahead, is served.
+// TestWatchRefuses checks what Watch refuses (CP-18, ADR-0038, ADR-0040):
+// a schema of another major, or more than one minor behind; a replica_id
+// that is not the client certificate's name. A gateway one minor behind,
+// or ahead, is served.
 func TestWatchRefuses(t *testing.T) {
-	client, _ := watchServer(t, newFakeSource(1, 1))
+	c, _ := watchServer(t, newFakeSource(1, 1))
 	ctx := t.Context()
-	for _, c := range []struct {
-		name   string
-		schema *configpb.SchemaVersion
-		code   codes.Code
+	for _, tc := range []struct {
+		cert, id string
+		schema   *configpb.SchemaVersion
+		code     codes.Code
 	}{
-		{"gateway-1", &configpb.SchemaVersion{Major: config.SchemaMajor + 1}, codes.FailedPrecondition},
-		{"gateway-1", &configpb.SchemaVersion{Major: config.SchemaMajor - 1, Minor: 99}, codes.FailedPrecondition},
-		{"gateway-1", &configpb.SchemaVersion{Major: config.SchemaMajor, Minor: config.SchemaMinor - 2}, codes.FailedPrecondition},
-		{"gateway-1", nil, codes.FailedPrecondition},
-		{"Gateway_1", currentSchema(), codes.InvalidArgument},
-		{"", currentSchema(), codes.InvalidArgument},
-		{"gateway-1", &configpb.SchemaVersion{Major: config.SchemaMajor, Minor: config.SchemaMinor - 1}, codes.OK},
-		{"gateway-2", &configpb.SchemaVersion{Major: config.SchemaMajor, Minor: config.SchemaMinor + 1}, codes.OK},
+		{"gateway-1", "gateway-1", &configpb.SchemaVersion{Major: config.SchemaMajor + 1}, codes.FailedPrecondition},
+		{"gateway-1", "gateway-1", &configpb.SchemaVersion{Major: config.SchemaMajor - 1, Minor: 99}, codes.FailedPrecondition},
+		{"gateway-1", "gateway-1", &configpb.SchemaVersion{Major: config.SchemaMajor, Minor: config.SchemaMinor - 2}, codes.FailedPrecondition},
+		{"gateway-1", "gateway-1", nil, codes.FailedPrecondition},
+		{"gateway-1", "gateway-2", currentSchema(), codes.PermissionDenied},
+		{"gateway-1", "Gateway_1", currentSchema(), codes.PermissionDenied},
+		{"gateway-1", "gateway-1", &configpb.SchemaVersion{Major: config.SchemaMajor, Minor: config.SchemaMinor - 1}, codes.OK},
+		{"gateway-2", "", &configpb.SchemaVersion{Major: config.SchemaMajor, Minor: config.SchemaMinor + 1}, codes.OK},
 	} {
-		s, err := client.Watch(ctx, &configpb.WatchRequest{ReplicaId: c.name, SchemaVersion: c.schema})
+		s, err := c.as(tc.cert).Watch(ctx, &configpb.WatchRequest{ReplicaId: tc.id, SchemaVersion: tc.schema})
 		if err != nil {
 			t.Fatal(err)
 		}
 		_, err = recv(t, s)
-		if status.Code(err) != c.code {
-			t.Errorf("%q schema %v: %v, want %v", c.name, c.schema, err, c.code)
+		if status.Code(err) != tc.code {
+			t.Errorf("certificate %q, replica_id %q, schema %v: %v, want %v", tc.cert, tc.id, tc.schema, err, tc.code)
 		}
 	}
 }
@@ -151,13 +199,13 @@ func TestWatchRefuses(t *testing.T) {
 // stream with a replica's name ends the first with ABORTED; a replica that
 // steps down ends every stream with UNAVAILABLE.
 func TestWatchReplacedAndStepDown(t *testing.T) {
-	client, b := watchServer(t, newFakeSource(1, 1))
+	c, b := watchServer(t, newFakeSource(1, 1))
 	ctx := t.Context()
-	first, _ := client.Watch(ctx, watchReq("gateway-1", 1, 1))
+	first, _ := c.as("gateway-1").Watch(ctx, watchReq("gateway-1", 1, 1))
 	if _, err := first.Header(); err != nil { // registered
 		t.Fatal(err)
 	}
-	second, _ := client.Watch(ctx, watchReq("gateway-1", 1, 0))
+	second, _ := c.as("gateway-1").Watch(ctx, watchReq("gateway-1", 1, 0))
 	if got, err := recv(t, second); got != "identity 1" {
 		t.Fatalf("second stream: %q %v", got, err)
 	}
