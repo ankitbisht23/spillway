@@ -679,7 +679,7 @@ Exit (`make verify-m4`): with one of three endpoints failing, ≥ 99% of request
 - [x] mTLS for the gRPC stream: dev certs from `make certs`, certs from a Secret in Helm; control-plane API bound to internal networks (SEC-02)
 - [x] Key issue, list, rotate, revoke (revocation through identity); managed API keys from the control plane replace static ones (CP-15–CP-17, GW-17)
 - [x] JWT / JWKS with an algorithm allowlist, `iss` checked against the browser-facing issuer, JWKS from its own URL; identity → tenant and plan (GW-18–GW-20, SEC-04)
-- [ ] Plans with `default_limits` per policy and `from_plan: true` policies, overrides keyed by (consumer, policy), allow and deny lists; Keycloak-only login with confidential clients for service tokens, RBAC on every endpoint, append-only audit log (RL-08, RL-09, CP-11–CP-13, SEC-08)
+- [x] Plans with `default_limits` per policy and `from_plan: true` policies, overrides keyed by (consumer, policy), allow and deny lists; Keycloak-only login with confidential clients for service tokens, RBAC on every endpoint, append-only audit log (RL-08, RL-09, CP-11–CP-13, SEC-08)
 - [x] Postgres, Redis and Keycloak secrets from env or mounted files (SEC-09)
 
 Exit (`make verify-m5`): a publish reaches all replicas in < 5 s (NFR-08); a revoked key is rejected on all replicas in < 5 s (NFR-09); gateways serve unchanged through a 10-minute control-plane outage (NFR-12).
