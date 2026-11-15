@@ -22,9 +22,9 @@ describe("the app shell", () => {
   });
 
   it("shows a placeholder naming the task for a screen not built yet", async () => {
-    renderAt("/policies/12/shadow");
-    expect(await screen.findByRole("heading", { name: "Shadow report" })).toBeInTheDocument();
-    expect(screen.getByText("Arrives with m6-policies.")).toBeInTheDocument();
+    renderAt("/replicas");
+    expect(await screen.findByRole("heading", { name: "Replicas" })).toBeInTheDocument();
+    expect(screen.getByText("Arrives with m6-replicas-history.")).toBeInTheDocument();
   });
 
   it("navigates", async () => {

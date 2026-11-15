@@ -118,6 +118,22 @@ func (q *Queries) HeavyHitterWindows(ctx context.Context, arg HeavyHitterWindows
 	return items, nil
 }
 
+const oldestHeavyHitterWindow = `-- name: OldestHeavyHitterWindow :one
+SELECT window_start FROM heavy_hitters
+WHERE policy_id = $1
+ORDER BY window_start
+LIMIT 1
+`
+
+// heavy_hitters_policy_id_window_start. The start of a policy's oldest
+// window kept; no row when it has none.
+func (q *Queries) OldestHeavyHitterWindow(ctx context.Context, policyID int64) (time.Time, error) {
+	row := q.db.QueryRow(ctx, oldestHeavyHitterWindow, policyID)
+	var window_start time.Time
+	err := row.Scan(&window_start)
+	return window_start, err
+}
+
 const pruneHeavyHitters = `-- name: PruneHeavyHitters :execrows
 DELETE FROM heavy_hitters
 WHERE ctid = ANY(ARRAY(
@@ -134,6 +150,82 @@ func (q *Queries) PruneHeavyHitters(ctx context.Context) (int64, error) {
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const shadowReportKeys = `-- name: ShadowReportKeys :many
+SELECT key_digest,
+       coalesce((array_agg(consumer_id ORDER BY window_start DESC) FILTER (WHERE consumer_id IS NOT NULL))[1], 0)::bigint AS consumer_id,
+       coalesce((array_agg(api_key_id ORDER BY window_start DESC) FILTER (WHERE api_key_id IS NOT NULL))[1], 0)::bigint AS api_key_id,
+       sum(shadow_denied)::bigint AS shadow_denied, sum(denied)::bigint AS denied
+FROM heavy_hitters
+WHERE policy_id = $1 AND window_start >= $2::timestamptz
+GROUP BY key_digest
+ORDER BY sum(shadow_denied) DESC, sum(denied) DESC, key_digest
+LIMIT $3
+`
+
+type ShadowReportKeysParams struct {
+	PolicyID int64
+	Since    time.Time
+	Lim      int32
+}
+
+type ShadowReportKeysRow struct {
+	KeyDigest    string
+	ConsumerID   int64
+	ApiKeyID     int64
+	ShadowDenied int64
+	Denied       int64
+}
+
+// heavy_hitters_policy_id_window_start. One policy's windows that start at
+// or after since, summed by digest, most shadow would-denies first, then
+// most denies, for GET /policies/{id}/shadow-report (UI-01, ADR-0060); the
+// IDs as TopHeavyHitters gives them.
+func (q *Queries) ShadowReportKeys(ctx context.Context, arg ShadowReportKeysParams) ([]ShadowReportKeysRow, error) {
+	rows, err := q.db.Query(ctx, shadowReportKeys, arg.PolicyID, arg.Since, arg.Lim)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ShadowReportKeysRow
+	for rows.Next() {
+		var i ShadowReportKeysRow
+		if err := rows.Scan(
+			&i.KeyDigest,
+			&i.ConsumerID,
+			&i.ApiKeyID,
+			&i.ShadowDenied,
+			&i.Denied,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const shadowReportTotal = `-- name: ShadowReportTotal :one
+SELECT coalesce(sum(shadow_denied), 0)::bigint AS shadow_denied
+FROM heavy_hitters
+WHERE policy_id = $1 AND window_start >= $2::timestamptz
+`
+
+type ShadowReportTotalParams struct {
+	PolicyID int64
+	Since    time.Time
+}
+
+// heavy_hitters_policy_id_window_start. The shadow would-denies of every
+// key of ShadowReportKeys' windows.
+func (q *Queries) ShadowReportTotal(ctx context.Context, arg ShadowReportTotalParams) (int64, error) {
+	row := q.db.QueryRow(ctx, shadowReportTotal, arg.PolicyID, arg.Since)
+	var shadow_denied int64
+	err := row.Scan(&shadow_denied)
+	return shadow_denied, err
 }
 
 const topHeavyHitters = `-- name: TopHeavyHitters :many

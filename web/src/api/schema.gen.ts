@@ -146,6 +146,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/policies/{id}/shadow-report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The entity's ID. */
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /** What a policy of the latest published config version did, or would have done, over a window ending now (UI-01, RL-21, ADR-0060): its decisions in shadow and in enforce mode from Prometheus (gw_ratelimit_decisions_total, by the policy's published name), and its top keys from the heavy-hitter windows (by its ID), with how much of the window each source covers. Without Prometheus the counts are null and metrics_error says why; the keys still answer */
+        get: operations["getShadowReport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/plans": {
         parameters: {
             query?: never;
@@ -1319,6 +1339,95 @@ export interface components {
             /** Format: int64 */
             shadow_denied: number;
         };
+        ShadowReport: {
+            /** Format: int64 */
+            policy_id: number;
+            /** @description The policy's name in the latest published config version: the metric's policy label. Counts under an earlier name are not included. */
+            policy_name: string;
+            /** @description Its mode in that version: enforce, shadow or off. */
+            mode: string;
+            /**
+             * Format: int64
+             * @description The latest published config version.
+             */
+            config_version: number;
+            /** @enum {string} */
+            window: "15m" | "1h" | "24h" | "7d";
+            /**
+             * Format: date-time
+             * @description The window's start.
+             */
+            since: string;
+            /**
+             * Format: date-time
+             * @description The window's end
+             */
+            until: string;
+            /**
+             * Format: double
+             * @description Decisions the policy made in shadow mode (Prometheus increase(), an estimate); null without Prometheus.
+             */
+            evaluated: number | null;
+            /**
+             * Format: double
+             * @description Of those
+             */
+            would_deny: number | null;
+            /**
+             * Format: double
+             * @description would_deny / evaluated; null when nothing was evaluated.
+             */
+            share: number | null;
+            /**
+             * Format: double
+             * @description Decisions the policy made in enforce mode
+             */
+            enforce_evaluated: number | null;
+            /**
+             * Format: double
+             * @description Of those
+             */
+            denied: number | null;
+            /**
+             * Format: double
+             * @description denied / enforce_evaluated; null when nothing was evaluated.
+             */
+            enforce_share: number | null;
+            /**
+             * Format: date-time
+             * @description Where Prometheus's data starts within the window: the later of since and its oldest sample (prometheus_tsdb_lowest_timestamp_seconds); null without Prometheus, or when Prometheus does not report its oldest sample.
+             */
+            metrics_since: string | null;
+            /**
+             * @description Why the Prometheus fields are null; null when they are not.
+             * @enum {string|null}
+             */
+            metrics_error: "prometheus_not_configured" | "prometheus_unavailable" | "query_failed" | null;
+            /** @description The policy's top keys in the window, at most 50, most shadow would-denies first, then most denies. Heavy hitters are each replica's top 100 throttled keys per heartbeat (RL-21), so these are the heaviest keys, not all of them. */
+            keys: components["schemas"]["ShadowReportKey"][];
+            /**
+             * Format: int64
+             * @description The shadow would-denies of every key in the windows, the 50 shown or not; below would_deny when keys outside the top lists would-denied.
+             */
+            keys_shadow_denied_total: number;
+            /**
+             * Format: date-time
+             * @description Where the heavy-hitter windows start within the window: the later of since and the policy's oldest window kept (7 days, CP-22); null when it has none.
+             */
+            keys_since: string | null;
+        };
+        ShadowReportKey: {
+            /** @description The keyed digest of the filled key template (ADR-0053) */
+            key_digest: string;
+            /** Format: int64 */
+            consumer_id: number | null;
+            /** Format: int64 */
+            api_key_id: number | null;
+            /** Format: int64 */
+            shadow_denied: number;
+            /** Format: int64 */
+            denied: number;
+        };
         UpstreamList: {
             items: components["schemas"]["Upstream"][];
             next_cursor: string | null;
@@ -2132,6 +2241,43 @@ export interface operations {
             409: components["responses"]["Conflict"];
             412: components["responses"]["PreconditionFailed"];
             428: components["responses"]["PreconditionRequired"];
+            default: components["responses"]["Error"];
+        };
+    };
+    getShadowReport: {
+        parameters: {
+            query?: {
+                /** @description The window, ending now; 1h by default. */
+                window?: "15m" | "1h" | "24h" | "7d";
+            };
+            header?: never;
+            path: {
+                /** @description The entity's ID. */
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The report */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShadowReport"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            /** @description No such policy in the latest published config version (not_found) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
             default: components["responses"]["Error"];
         };
     };

@@ -36,9 +36,11 @@ type settings struct {
 	devMode      bool   // SPILLWAY_CP_DEV_MODE: accept http:// issuer and JWKS URLs (SEC-04), default false
 
 	// SPILLWAY_CP_PROMETHEUS_URL: the Prometheus the live-data stream's
-	// named queries run against (UI-03, ADR-0059), http or https, no user
-	// info; not a secret. Unset (nil), those queries answer error events
-	// and the stream still serves the Postgres-backed ones.
+	// named queries and the shadow report's counts run against (UI-01,
+	// UI-03, ADR-0059, ADR-0060), http or https, no user info; not a
+	// secret. Unset (nil), those queries answer error events and the
+	// stream still serves the Postgres-backed ones; the report's counts
+	// are null.
 	prometheusURL *url.URL
 }
 

@@ -35,8 +35,8 @@ export function seeded(): Seeded {
   return JSON.parse(s) as Seeded;
 }
 
-/** An API client of the control plane with a spillway-ci token. */
-async function ciApi(): Promise<APIRequestContext> {
+/** An API client of the control plane with a spillway-ci token; specs use it only for what no screen does yet, and to check. */
+export async function ciApi(): Promise<APIRequestContext> {
   const kc = await request.newContext();
   const r = await kc.post(TOKEN_ENDPOINT, {
     form: { grant_type: "client_credentials", client_id: "spillway-ci", client_secret: process.env.SPILLWAY_CI_CLIENT_SECRET || DEV_PASSWORD },

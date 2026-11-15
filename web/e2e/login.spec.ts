@@ -1,22 +1,8 @@
 // The session (UI-08, ADR-0058) against the real Keycloak: login, reload
 // through SSO, a forced silent refresh, sign-out by POST, and the sign-out
 // broadcast to a second tab. The leak guard checks every test.
-import type { Page } from "@playwright/test";
-
-import { APP, AUTH_ENDPOINT, ISSUER, TOKEN_ENDPOINT } from "./env";
-import { expect, login, test } from "./fixtures";
-
-/**
- * Clicks Sign out and waits for Keycloak's redirect to load /signed-out:
- * the tab shows Signed out at once, before its logout POST navigates.
- */
-async function signOut(page: Page) {
-  const back = page.waitForResponse((r) => r.url() === `${APP}/signed-out` && r.request().isNavigationRequest());
-  await page.getByRole("button", { name: "Sign out" }).click();
-  expect((await back).status()).toBe(200);
-  await page.waitForLoadState();
-  await expect(page.getByRole("heading", { name: "Signed out" })).toBeVisible();
-}
+import { AUTH_ENDPOINT, ISSUER, TOKEN_ENDPOINT } from "./env";
+import { expect, login, signOut, test } from "./fixtures";
 
 test("logs in through Keycloak and lands on the page asked for", async ({ page }) => {
   await login(page, "test-admin", "/history");

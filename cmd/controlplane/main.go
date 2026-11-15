@@ -140,9 +140,9 @@ func serve(log *slog.Logger, getenv func(string) string) error {
 		prom = live.NewPrometheus(s.prometheusURL, nil)
 		log.Info("live-data queries use Prometheus", "url", s.prometheusURL.String())
 	} else {
-		log.Warn("SPILLWAY_CP_PROMETHEUS_URL is not set: the stream's Prometheus queries answer prometheus_not_configured")
+		log.Warn("SPILLWAY_CP_PROMETHEUS_URL is not set: the stream's Prometheus queries and the shadow report's counts answer prometheus_not_configured")
 	}
-	apiServer := api.New(st, s.allow, net.DefaultResolver, api.OIDC{Verifier: verifier}, s.hitterSecret, log)
+	apiServer := api.New(st, s.allow, net.DefaultResolver, api.OIDC{Verifier: verifier}, s.hitterSecret, log).WithPrometheus(prom)
 	hub := live.NewHub(live.Config{Prometheus: prom, Postgres: apiServer.LiveSource(), Registerer: reg, Log: log})
 	// The REST API and the admin UI share the listener, same origin (UI-09,
 	// ADR-0057).

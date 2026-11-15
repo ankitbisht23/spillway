@@ -72,3 +72,33 @@ WHERE policy_id = @policy_id AND key_digest = @key_digest
   AND window_start >= coalesce(sqlc.narg(since)::timestamptz, now() - interval '15 minutes')
   AND window_start < coalesce(sqlc.narg(until)::timestamptz, 'infinity')
 ORDER BY window_start DESC;
+
+-- name: ShadowReportKeys :many
+-- heavy_hitters_policy_id_window_start. One policy's windows that start at
+-- or after since, summed by digest, most shadow would-denies first, then
+-- most denies, for GET /policies/{id}/shadow-report (UI-01, ADR-0060); the
+-- IDs as TopHeavyHitters gives them.
+SELECT key_digest,
+       coalesce((array_agg(consumer_id ORDER BY window_start DESC) FILTER (WHERE consumer_id IS NOT NULL))[1], 0)::bigint AS consumer_id,
+       coalesce((array_agg(api_key_id ORDER BY window_start DESC) FILTER (WHERE api_key_id IS NOT NULL))[1], 0)::bigint AS api_key_id,
+       sum(shadow_denied)::bigint AS shadow_denied, sum(denied)::bigint AS denied
+FROM heavy_hitters
+WHERE policy_id = @policy_id AND window_start >= @since::timestamptz
+GROUP BY key_digest
+ORDER BY sum(shadow_denied) DESC, sum(denied) DESC, key_digest
+LIMIT @lim;
+
+-- name: ShadowReportTotal :one
+-- heavy_hitters_policy_id_window_start. The shadow would-denies of every
+-- key of ShadowReportKeys' windows.
+SELECT coalesce(sum(shadow_denied), 0)::bigint AS shadow_denied
+FROM heavy_hitters
+WHERE policy_id = @policy_id AND window_start >= @since::timestamptz;
+
+-- name: OldestHeavyHitterWindow :one
+-- heavy_hitters_policy_id_window_start. The start of a policy's oldest
+-- window kept; no row when it has none.
+SELECT window_start FROM heavy_hitters
+WHERE policy_id = @policy_id
+ORDER BY window_start
+LIMIT 1;

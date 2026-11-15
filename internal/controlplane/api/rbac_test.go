@@ -70,6 +70,7 @@ var matrix = map[string][]string{
 	"lookupHeavyHitters": {"admin"}, // it de-pseudonymises digests (ADR-0053)
 	"getMe":              all,       // the caller's own roles (ADR-0058)
 	"openStream":         all,       // live data, every role (ADR-0059)
+	"getShadowReport":    all,       // a read, every role (ADR-0060)
 }
 
 // specOp is one operation of the spec as a request.
