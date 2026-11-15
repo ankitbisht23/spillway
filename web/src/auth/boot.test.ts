@@ -53,7 +53,13 @@ describe("boot", () => {
     const b = await boot(d);
     expect(b.kind).toBe("session");
     if (b.kind === "session") expect(b.session.accessToken()).toBe("access-1");
-    expect(replaceState.mock.calls.map((c) => c[2])).toEqual(["/oidc/callback", "/history"]);
+    expect(replaceState.mock.calls.map((c) => c[2])).toEqual(["/oidc/callback", "/oidc/callback", "/history"]);
+  });
+
+  it("removes the code from the URL at the callback even when discovery fails", async () => {
+    const { d, replaceState } = deps("http://localhost:8080/oidc/callback?code=c&state=s", { discover: () => Promise.reject(new Error("down")) });
+    expect(await boot(d)).toEqual({ kind: "unavailable" });
+    expect(replaceState.mock.calls.map((c) => c[2])).toEqual(["/oidc/callback"]);
   });
 
   it("reports a failed callback without retrying", async () => {

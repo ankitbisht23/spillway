@@ -44,15 +44,19 @@ export async function signIn(provider: Provider, returnTo: string, deps: Pick<Bo
 }
 
 export async function boot(deps: BootDeps = browserBootDeps()): Promise<Boot> {
+  const { pathname, search, href } = deps.location;
+  // At the callback the code and state leave the address bar before
+  // anything else, even when discovery then fails (ADR-0058).
+  const callback = pathname === CALLBACK_PATH ? new URL(href) : null;
+  if (callback) deps.history.replaceState(null, "", CALLBACK_PATH);
   let provider: Provider;
   try {
     provider = await deps.discover(await deps.loadConfig());
   } catch {
     return { kind: "unavailable" };
   }
-  const { pathname, search, href } = deps.location;
-  if (pathname === CALLBACK_PATH) {
-    const r = await completeLogin(provider, new URL(href), deps.storage, deps.history);
+  if (callback) {
+    const r = await completeLogin(provider, callback, deps.storage, deps.history);
     if (!r.ok) return { kind: "sign-in-failed", provider, reason: r.reason };
     deps.history.replaceState(null, "", r.returnTo);
     return { kind: "session", provider, session: createSession(provider, r.tokens, deps.sessionDeps()) };
