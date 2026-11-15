@@ -55,6 +55,18 @@ for (const role of ["viewer", "editor", "publisher", "key-admin", "admin"]) {
     await page.goto(`/policies/${s.policyId}`);
     await expectAllowed(page.getByRole("button", { name: "Save" }), editor, "Needs the editor or admin role");
     await expectAllowed(page.getByRole("button", { name: "Delete" }), editor, "Needs the editor or admin role");
+
+    // Routes & upstreams (UI-06): an editor edits routes and drains
+    // endpoints; every other role sees both disabled with the reason.
+    await page.goto("/routes");
+    await expectAllowed(page.getByRole("button", { name: "New route" }), editor, "Needs the editor or admin role");
+    await page.getByRole("link", { name: "e2e-orders", exact: true }).click();
+    await expectAllowed(page.getByRole("button", { name: "Save" }), editor, "Needs the editor or admin role");
+    await page.getByRole("definition").getByRole("link", { name: "e2e", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Upstream e2e" })).toBeVisible();
+    await expectAllowed(page.getByRole("button", { name: "Drain upstream-1:8080" }), editor, "Needs the editor or admin role");
+    await expectAllowed(page.getByRole("button", { name: "Save" }), editor, "Needs the editor or admin role");
+
     await page.goto("/publish");
     const publish = page.getByRole("button", { name: /^Publish revision \d+$/ });
     if (publisher) {
