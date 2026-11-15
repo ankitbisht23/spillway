@@ -6,6 +6,9 @@ import { describeError } from "../api/errors";
 import type { OperationId } from "../api/roles.gen";
 import { useCan } from "../auth/SessionContext";
 import { ErrorState, NotAllowed, NotFound } from "../components/states";
+import { Overview } from "../screens/live/Overview";
+import { overviewSearch, throttlingSearch } from "../screens/live/search";
+import { Throttling } from "../screens/live/Throttling";
 import { Placeholder } from "../screens/Placeholder";
 import { Layout } from "./Layout";
 import { navigation, screenOp } from "./screens";
@@ -40,10 +43,27 @@ function Hidden({ op, children }: { op: OperationId; children: ReactNode }) {
   return allowed ? children : <NotAllowed message={`${reason ?? ""}.`} />;
 }
 
+const overviewRoute = createRoute({ getParentRoute: () => rootRoute, path: "/overview", validateSearch: overviewSearch, component: Overview });
+const throttlingRoute = createRoute({ getParentRoute: () => rootRoute, path: "/throttling", validateSearch: throttlingSearch, component: Throttling });
+
+/**
+ * A consumer's screen (m6-consumers-keys). Throttling's Add override opens
+ * it with override_policy, the policy to prefill an override for.
+ */
+const consumerRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/consumers/$id",
+  validateSearch: (s: Record<string, unknown>): { override_policy?: number } => {
+    const p = Number(s.override_policy);
+    return { override_policy: Number.isSafeInteger(p) && p >= 1 ? p : undefined };
+  },
+  component: () => <Placeholder title="Consumer" task="consumers-keys" />,
+});
+
 export const routeTree = rootRoute.addChildren([
   indexRoute,
-  placeholder("/overview", "Overview", "live-screens"),
-  placeholder("/throttling", "Throttling", "live-screens"),
+  overviewRoute,
+  throttlingRoute,
   placeholder("/policies", "Policies", "policies"),
   placeholder("/policies/new", "New policy", "policies"),
   placeholder("/policies/$id", "Policy", "policies"),
@@ -54,7 +74,7 @@ export const routeTree = rootRoute.addChildren([
   placeholder("/upstreams", "Upstreams", "routes"),
   placeholder("/upstreams/$id", "Upstream", "routes"),
   placeholder("/consumers", "Consumers & keys", "consumers-keys"),
-  placeholder("/consumers/$id", "Consumer", "consumers-keys"),
+  consumerRoute,
   placeholder("/access-lists", "Access lists", "consumers-keys"),
   placeholder("/tenants", "Tenants", "consumers-keys"),
   placeholder("/replicas", "Replicas", "replicas-history"),
