@@ -11,7 +11,7 @@ FUZZTIME ?= 5s
 # Committed dev defaults first, then local overrides if present (ADR-0004).
 COMPOSE := docker compose --env-file .env.example $(if $(wildcard .env.local),--env-file .env.local)
 
-.PHONY: tools hooks certs dev test test-go test-web fuzz test-integration proto api sqlc web-gen web-build lint lint-go lint-web lint-proto lint-api lint-sql bench verify-m0 verify-m0-stack verify-m1 verify-m1-reload verify-m2 verify-m2-shadow verify-m3 verify-m4 verify-m5 accuracy chaos-redis-outage chaos-redis-primary chaos-cp-outage
+.PHONY: tools hooks certs dev test test-go test-web test-e2e fuzz test-integration proto api sqlc web-gen web-build lint lint-go lint-web lint-proto lint-api lint-sql bench verify-m0 verify-m0-stack verify-m1 verify-m1-reload verify-m2 verify-m2-shadow verify-m3 verify-m4 verify-m5 accuracy chaos-redis-outage chaos-redis-primary chaos-cp-outage
 
 # Host-run processes and tests reach Redis Cluster nodes through this map
 # (ADR-0004). Set only here, never in compose or .env files.
@@ -123,6 +123,15 @@ test-go:
 test-web:
 	pnpm -C web test
 
+# The admin UI's Playwright flows (ADR-0061): Chromium against the compose
+# stack's embedded UI and the real Keycloak. Needs Chromium once:
+# pnpm -C web exec playwright install chromium. After a passing run the
+# report and results are removed; after a failing one they stay for
+# diagnosis (both gitignored).
+test-e2e: dev
+	pnpm -C web e2e
+	rm -rf web/playwright-report web/test-results
+
 # Runs each Fuzz* target for FUZZTIME (go test -fuzz takes one target per run).
 fuzz:
 	@set -eo pipefail; \
@@ -164,8 +173,14 @@ sqlc: tool-sqlc
 
 lint: lint-go lint-web lint-proto lint-api lint-sql
 
+# Then the webui build tag's files (ADR-0057) against the real build, or an
+# empty stand-in when there is none, removed after.
+WEBUI_DIST := internal/controlplane/webui/dist
 lint-go: tool-golangci-lint
 	$(BIN)/golangci-lint run ./...
+	@if [ -d $(WEBUI_DIST) ]; then $(BIN)/golangci-lint run --build-tags webui ./internal/controlplane/webui/; else \
+		trap 'rm -rf $(WEBUI_DIST)' EXIT && mkdir $(WEBUI_DIST) && touch $(WEBUI_DIST)/index.html && \
+		$(BIN)/golangci-lint run --build-tags webui ./internal/controlplane/webui/; fi
 	go mod tidy -diff
 
 # ESLint and both typechecks, then web/src/api matches what

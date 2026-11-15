@@ -557,3 +557,23 @@ func TestComposeAuditActor(t *testing.T) {
 	}
 	editor.must(403, "GET", "/audit", nil)
 }
+
+// TestComposeMe checks GET /me with tokens Keycloak issues to the dev
+// realm's users (UI-04, ADR-0058): each user's fixed sub, username and
+// single role; the spillway-ci service account is admin.
+func TestComposeMe(t *testing.T) {
+	c := composeControlPlane(t)
+	for i, role := range api.Roles {
+		var me apiv1.Me
+		c.as(keycloakToken(t, "password", "rbac-tests", "test-"+role)).must(200, "GET", "/me", nil).decode(t, &me)
+		sub := fmt.Sprintf("0b5e7c1a-5f1d-4c3e-9a00-00000000000%d", i+1)
+		if me.Subject != sub || me.Name != "test-"+role || !slices.Equal(me.Roles, []apiv1.MeRoles{apiv1.MeRoles(role)}) {
+			t.Errorf("%s: %+v, want sub %s", role, me, sub)
+		}
+	}
+	var me apiv1.Me
+	c.as(keycloakToken(t, "client_credentials", "spillway-ci", "")).must(200, "GET", "/me", nil).decode(t, &me)
+	if me.Name != "service-account-spillway-ci" || !slices.Equal(me.Roles, []apiv1.MeRoles{"admin"}) {
+		t.Errorf("spillway-ci: %+v", me)
+	}
+}

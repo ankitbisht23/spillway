@@ -5,13 +5,15 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "gen": "openapi-typescript ../api/openapi.yaml -o src/api/schema.gen.ts",
+    "gen": "openapi-typescript ../api/openapi.yaml -o src/api/schema.gen.ts && node scripts/gen-roles.mjs",
     "gen:check": "node scripts/gen-check.mjs",
     "lint": "eslint . && tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json",
-    "test": "vitest run --coverage"
+    "test": "vitest run --coverage",
+    "e2e": "playwright test"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
+    "@playwright/test": "1.64.1",
     "@testing-library/dom": "10.4.2",
     "@testing-library/jest-dom": "7.0.1",
     "@testing-library/react": "16.3.3",
@@ -29,11 +31,13 @@
     "typescript": "6.0.3",
     "typescript-eslint": "8.72.1",
     "vite": "8.3.5",
-    "vitest": "5.0.5"
+    "vitest": "5.0.5",
+    "yaml": "2.9.1"
   },
   "dependencies": {
     "@tanstack/react-query": "5.105.1",
     "@tanstack/react-router": "1.170.46",
+    "oauth4webapi": "3.8.8",
     "openapi-fetch": "0.17.0",
     "react": "19.3.1",
     "react-dom": "19.3.1"

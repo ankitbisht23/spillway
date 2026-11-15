@@ -1,10 +1,14 @@
 // Code-based routes (ADR-0057): one route tree, no route generator.
 import { createRootRoute, createRoute, createRouter, redirect, type ErrorComponentProps, type RouterHistory } from "@tanstack/react-router";
+import type { ReactNode } from "react";
 
 import { describeError } from "../api/errors";
-import { ErrorState, NotFound } from "../components/states";
+import type { OperationId } from "../api/roles.gen";
+import { useCan } from "../auth/SessionContext";
+import { ErrorState, NotAllowed, NotFound } from "../components/states";
 import { Placeholder } from "../screens/Placeholder";
 import { Layout } from "./Layout";
+import { navigation, screenOp } from "./screens";
 
 const rootRoute = createRootRoute({ component: Layout, notFoundComponent: () => <NotFound /> });
 
@@ -21,7 +25,19 @@ const indexRoute = createRoute({
  * placeholder that calls no API. Each task replaces its own.
  */
 function placeholder<P extends string>(path: P, title: string, task: string) {
-  return createRoute({ getParentRoute: () => rootRoute, path, component: () => <Placeholder title={title} task={task} /> });
+  const nav = navigation.find((s) => s.to === path);
+  const op = nav && screenOp(nav);
+  const screen = () => <Placeholder title={title} task={task} />;
+  return createRoute({ getParentRoute: () => rootRoute, path, component: op ? () => <Hidden op={op}>{screen()}</Hidden> : screen });
+}
+
+/**
+ * A screen hidden from roles that cannot call op (ADR-0058): its URL shows
+ * Not allowed, and nothing in it renders, so it calls no API.
+ */
+function Hidden({ op, children }: { op: OperationId; children: ReactNode }) {
+  const { allowed, reason } = useCan(op);
+  return allowed ? children : <NotAllowed message={`${reason ?? ""}.`} />;
 }
 
 export const routeTree = rootRoute.addChildren([
