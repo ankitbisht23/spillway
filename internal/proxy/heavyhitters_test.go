@@ -109,18 +109,18 @@ func TestHeavyHitterEvents(t *testing.T) {
 	if len(entries) != 4 {
 		t.Errorf("%d entries, want 4 (none for fail_open redis-open): %+v", len(entries), entries)
 	}
-	if d := by[41].KeyDigest(); d != rlredis.Digest("client-secret-c1") {
+	if d := digestOf(by[41]); d != rlredis.Digest("client-secret-c1") {
 		t.Errorf("per-client digest %s, want the filled template's", d)
 	}
 	// redis-consumer's digest is its Redis key's, degraded events included.
 	w.redis.mu.Lock()
 	calls := strings.Join(w.redis.calls, "\n")
 	w.redis.mu.Unlock()
-	if d := by[43].KeyDigest(); !strings.Contains(calls, "rl:v1:{t:2}:43:1000:"+d+" ") {
+	if d := digestOf(by[43]); !strings.Contains(calls, "rl:v1:{t:2}:43:1000:"+d+" ") {
 		t.Errorf("redis-consumer digest %s is not its Redis key's:\n%s", d, calls)
 	}
 	for _, e := range entries {
-		if strings.Contains(e.KeyDigest(), "c1") || strings.Contains(string(e.Digest[:]), "client") {
+		if strings.Contains(digestOf(e), "c1") || strings.Contains(string(e.Digest[:]), "client") {
 			t.Errorf("entry %+v carries a raw key", e)
 		}
 	}
@@ -216,3 +216,6 @@ func BenchmarkDenied(b *testing.B) {
 		})
 	}
 }
+
+// digestOf is an entry's limiter key digest, as the Redis key carries it.
+func digestOf(e heavyhitters.Entry) string { return rlredis.KeyDigest(string(e.Digest[:])) }

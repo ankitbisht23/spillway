@@ -79,7 +79,7 @@ func (c *Client) heartbeat(ctx context.Context) error {
 	var since time.Time
 	if c.opts.HeavyHitters != nil {
 		hitters, since = c.opts.HeavyHitters.Take()
-		req.IntervalStart, req.TopKeys = timestamppb.New(since), topKeys(hitters)
+		req.IntervalStart, req.TopKeys = timestamppb.New(since), topKeys(hitters, []byte(c.opts.HeavyHitterSecret.Reveal()))
 	}
 	hctx, cancel := context.WithTimeout(ctx, heartbeatTimeout)
 	resp, err := c.cs.Heartbeat(hctx, req)
@@ -162,13 +162,14 @@ func (c *Client) SyncAge() time.Duration {
 }
 
 // topKeys are a heartbeat's top_keys: the sketch's entries with their key
-// digests, never raw keys (RL-21, ADR-0041).
-func topKeys(entries []heavyhitters.Entry) []*configpb.TopKey {
+// digests keyed by secret, never raw keys nor the limiter's unkeyed digests
+// (RL-21, ADR-0041, ADR-0053).
+func topKeys(entries []heavyhitters.Entry, secret []byte) []*configpb.TopKey {
 	out := make([]*configpb.TopKey, len(entries))
 	for i := range entries {
 		e := &entries[i]
 		out[i] = &configpb.TopKey{
-			PolicyId: e.Policy, KeyDigest: e.KeyDigest(), ConsumerId: e.Consumer, ApiKeyId: e.APIKey,
+			PolicyId: e.Policy, KeyDigest: heavyhitters.Pseudonym(secret, string(e.Digest[:])), ConsumerId: e.Consumer, ApiKeyId: e.APIKey,
 			Denied: e.Denied, ShadowDenied: e.ShadowDenied,
 		}
 	}

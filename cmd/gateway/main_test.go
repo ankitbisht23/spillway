@@ -7,6 +7,7 @@ import (
 	"encoding/pem"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -23,6 +24,9 @@ import (
 	"github.com/ankitbisht23/spillway/internal/proxy"
 	"github.com/ankitbisht23/spillway/internal/testcert"
 )
+
+// devHitterSecret is the dev-safe heavy-hitter secret of managed settings.
+const devHitterSecret = "dev-only-not-secret" //nolint:gosec // G101: the dev-safe value .gitleaks.toml allows
 
 func TestLoadSettings(t *testing.T) {
 	base := map[string]string{
@@ -49,22 +53,35 @@ func TestLoadSettings(t *testing.T) {
 		t.Errorf("settings = %+v", s)
 	}
 	streamCerts := map[string]string{"SPILLWAY_GATEWAY_CP_CERT": "/s/cert.pem", "SPILLWAY_GATEWAY_CP_KEY": "/s/key.pem", "SPILLWAY_GATEWAY_CP_CA": "/s/ca.pem"}
-	managedEnv := map[string]string{"SPILLWAY_GATEWAY_CONFIG": "", "SPILLWAY_GATEWAY_CONTROL_PLANE": "controlplane:9090"}
+	managedEnv := map[string]string{"SPILLWAY_GATEWAY_CONFIG": "", "SPILLWAY_GATEWAY_CONTROL_PLANE": "controlplane:9090", "SPILLWAY_GATEWAY_HEAVY_HITTER_SECRET": devHitterSecret}
 	for k, v := range streamCerts {
 		managedEnv[k] = v
 	}
 	if s, err := loadSettings(env(managedEnv)); err != nil || s.controlPlane != "controlplane:9090" || s.snapshot != "/var/lib/spillway/snapshot.pb" ||
-		s.streamTLS.Cert != "/s/cert.pem" || s.streamTLS.Key != "/s/key.pem" || s.streamTLS.CA != "/s/ca.pem" || s.cpServerName != "controlplane" {
+		s.streamTLS.Cert != "/s/cert.pem" || s.streamTLS.Key != "/s/key.pem" || s.streamTLS.CA != "/s/ca.pem" || s.cpServerName != "controlplane" ||
+		s.heavyHitterSecret.Reveal() != devHitterSecret {
 		t.Errorf("managed mode: %+v, %v", s, err)
 	}
 	managedEnv["SPILLWAY_GATEWAY_CP_SERVER_NAME"] = "cp.internal"
 	if s, err := loadSettings(env(managedEnv)); err != nil || s.cpServerName != "cp.internal" {
 		t.Errorf("server name: %+v, %v", s, err)
 	}
-	// Static mode ignores the stream's settings, which compose sets on
-	// every gateway.
+	// Static mode ignores the stream's settings and the heavy-hitter
+	// secret, which compose sets on every gateway (ADR-0053).
 	if s, err := loadSettings(env(streamCerts)); err != nil || s.controlPlane != "" {
 		t.Errorf("static mode with stream certificates: %+v, %v", s, err)
+	}
+	if s, err := loadSettings(env(map[string]string{"SPILLWAY_GATEWAY_HEAVY_HITTER_SECRET_FILE": "/nonexistent/s"})); err != nil || s.heavyHitterSecret.IsSet() {
+		t.Errorf("static mode with a heavy-hitter secret: %+v, %v", s, err)
+	}
+	// A managed gateway without the secret does not start: its digests
+	// would be unkeyed (ADR-0053).
+	for k, v := range map[string]string{"SPILLWAY_GATEWAY_HEAVY_HITTER_SECRET": "", "SPILLWAY_GATEWAY_HEAVY_HITTER_SECRET_FILE": "/nonexistent/s"} {
+		over := maps.Clone(managedEnv)
+		over["SPILLWAY_GATEWAY_HEAVY_HITTER_SECRET"], over[k] = "", v
+		if _, err := loadSettings(env(over)); err == nil || !strings.HasPrefix(err.Error(), "SPILLWAY_GATEWAY_HEAVY_HITTER_SECRET") {
+			t.Errorf("managed mode with %s=%q: %v", k, v, err)
+		}
 	}
 	tlsOnly := map[string]string{"SPILLWAY_GATEWAY_HTTP_ADDR": "", "SPILLWAY_GATEWAY_TLS_CERT": "/c.pem", "SPILLWAY_GATEWAY_TLS_KEY": "/k.pem"}
 	if s, err := loadSettings(env(tlsOnly)); err != nil || s.httpAddr != "" || s.tlsAddr != ":8443" || s.tlsCert != "/c.pem" || s.tlsKey != "/k.pem" {

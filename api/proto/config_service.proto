@@ -80,6 +80,10 @@ message HeartbeatRequest {
 // TopKey is one heavy hitter of a heartbeat's interval (RL-21, ADR-0041).
 message TopKey {
   int64 policy_id = 1;
+  // base64url, 22 characters, of the first 16 bytes of HMAC-SHA256 under
+  // the deployment's heavy-hitter secret of the filled key template's
+  // 16-byte digest: never the raw key, nor the digest in its Redis key
+  // (ADR-0053).
   string key_digest = 2;
   int64 consumer_id = 3;
   int64 api_key_id = 4;

@@ -13,6 +13,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/ankitbisht23/spillway/internal/testcert"
 )
 
 const redisSecret = "redis-dev-only-not-secret" //nolint:gosec // G101: a fake password the test looks for in logs
@@ -123,14 +126,15 @@ func TestRedisPasswordNeverLogged(t *testing.T) {
 func TestServeManagedNeedsStreamCerts(t *testing.T) {
 	dir := t.TempDir()
 	kv := map[string]string{
-		"SPILLWAY_GATEWAY_CONTROL_PLANE":    "127.0.0.1:1",
-		"SPILLWAY_GATEWAY_CP_CERT":          filepath.Join(dir, "cert.pem"),
-		"SPILLWAY_GATEWAY_CP_KEY":           filepath.Join(dir, "key.pem"),
-		"SPILLWAY_GATEWAY_CP_CA":            filepath.Join(dir, "ca.pem"),
-		"SPILLWAY_GATEWAY_SNAPSHOT":         filepath.Join(dir, "snapshot.pb"),
-		"SPILLWAY_GATEWAY_HTTP_ADDR":        freeAddr(t),
-		"SPILLWAY_GATEWAY_ADMIN_ADDR":       freeAddr(t),
-		"SPILLWAY_GATEWAY_ALLOWED_NETWORKS": "127.0.0.0/8",
+		"SPILLWAY_GATEWAY_CONTROL_PLANE":       "127.0.0.1:1",
+		"SPILLWAY_GATEWAY_CP_CERT":             filepath.Join(dir, "cert.pem"),
+		"SPILLWAY_GATEWAY_CP_KEY":              filepath.Join(dir, "key.pem"),
+		"SPILLWAY_GATEWAY_CP_CA":               filepath.Join(dir, "ca.pem"),
+		"SPILLWAY_GATEWAY_SNAPSHOT":            filepath.Join(dir, "snapshot.pb"),
+		"SPILLWAY_GATEWAY_HEAVY_HITTER_SECRET": devHitterSecret,
+		"SPILLWAY_GATEWAY_HTTP_ADDR":           freeAddr(t),
+		"SPILLWAY_GATEWAY_ADMIN_ADDR":          freeAddr(t),
+		"SPILLWAY_GATEWAY_ALLOWED_NETWORKS":    "127.0.0.0/8",
 	}
 	s, err := loadSettings(func(k string) string { return kv[k] })
 	if err != nil {
@@ -138,5 +142,56 @@ func TestServeManagedNeedsStreamCerts(t *testing.T) {
 	}
 	if err := serve(t.Context(), s, slog.New(slog.DiscardHandler), nil, noFlush); err == nil || !strings.Contains(err.Error(), "config stream mTLS: certificate:") {
 		t.Errorf("serve = %v, want the stream certificate error", err)
+	}
+}
+
+// TestHeavyHitterSecretNeverLogged loads the heavy-hitter secret from a
+// file (SEC-09, ADR-0053) and runs a managed gateway whose control plane
+// cannot be reached, so its heartbeats fail and are logged: neither the
+// settings dump nor a log line shows the secret.
+func TestHeavyHitterSecretNeverLogged(t *testing.T) {
+	const hhSecret = "hh-dev-only-not-secret" //nolint:gosec // G101: a fake secret the test looks for in logs
+	dir := t.TempDir()
+	testcert.NewCA(t, "stream CA").Issue(t, dir, testcert.Leaf{DNSNames: []string{"gateway-1"}, Client: true})
+	file := filepath.Join(dir, "heavy-hitter-secret")
+	if err := os.WriteFile(file, []byte(hhSecret+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	kv := map[string]string{
+		"SPILLWAY_GATEWAY_CONTROL_PLANE":            "127.0.0.1:1",
+		"SPILLWAY_GATEWAY_CP_CERT":                  filepath.Join(dir, "cert.pem"),
+		"SPILLWAY_GATEWAY_CP_KEY":                   filepath.Join(dir, "key.pem"),
+		"SPILLWAY_GATEWAY_CP_CA":                    filepath.Join(dir, "ca.pem"),
+		"SPILLWAY_GATEWAY_SNAPSHOT":                 filepath.Join(dir, "snapshot.pb"),
+		"SPILLWAY_GATEWAY_HEAVY_HITTER_SECRET_FILE": file,
+		"SPILLWAY_GATEWAY_HTTP_ADDR":                freeAddr(t),
+		"SPILLWAY_GATEWAY_ADMIN_ADDR":               freeAddr(t),
+		"SPILLWAY_GATEWAY_ALLOWED_NETWORKS":         "127.0.0.0/8",
+		"SPILLWAY_GATEWAY_SHUTDOWN_GRACE":           "1s",
+		"SPILLWAY_GATEWAY_DRAIN":                    "0s",
+	}
+	s, err := loadSettings(func(k string) string { return kv[k] })
+	if err != nil || s.heavyHitterSecret.Reveal() != hhSecret {
+		t.Fatalf("settings: %v", err)
+	}
+	logs := &lockedBuffer{}
+	log := slog.New(slog.NewJSONHandler(logs, nil))
+	log.Info("settings", "settings", s, "secret", s.heavyHitterSecret)
+	dump := fmt.Sprintf("%v %+v %#v", s, s, s)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- serve(ctx, s, log, nil, noFlush) }()
+	// The first heartbeat goes after 5 s and fails within its 4 s deadline.
+	for deadline := time.Now().Add(30 * time.Second); !strings.Contains(logs.String(), "heartbeat to the control plane failed"); time.Sleep(50 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("no failed heartbeat logged in 30 s")
+		}
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Errorf("serve: %v", err)
+	}
+	if out := logs.String() + dump; strings.Contains(out, hhSecret) {
+		t.Errorf("a log line or the settings dump shows the heavy-hitter secret:\n%s", out)
 	}
 }

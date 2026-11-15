@@ -2,6 +2,7 @@ package heavyhitters
 
 import (
 	"crypto/sha256"
+	"encoding/base64"
 	"fmt"
 	"math"
 	"sync"
@@ -114,14 +115,11 @@ func TestSketchCounts(t *testing.T) {
 	if len(entries) != 2 {
 		t.Fatalf("entries %+v", entries)
 	}
-	if e := entries[0]; e.Policy != 7 || e.Denied != 2 || e.ShadowDenied != 1 || e.Count != 3 || e.Consumer != 4 || e.APIKey != 40 || e.KeyDigest() != "VwTeGPxgReTQjDomEWJ5Vg" {
-		t.Errorf("entry %+v, digest %s", e, e.KeyDigest())
+	if e := entries[0]; e.Policy != 7 || e.Denied != 2 || e.ShadowDenied != 1 || e.Count != 3 || e.Consumer != 4 || e.APIKey != 40 || string(e.Digest[:]) != digest(1) {
+		t.Errorf("entry %+v", e)
 	}
 	if e := entries[1]; e.Policy != 8 || e.Denied != 0 || e.ShadowDenied != 1 || e.Count != 1 {
 		t.Errorf("entry %+v", e)
-	}
-	if len(entries[0].KeyDigest()) != 22 {
-		t.Errorf("digest %q", entries[0].KeyDigest())
 	}
 
 	// Full: a new key replaces the smallest count and inherits it.
@@ -267,4 +265,32 @@ func BenchmarkAdd(b *testing.B) {
 			}
 		})
 	})
+}
+
+// TestPseudonym checks the reported digest (ADR-0053): HMAC-SHA256 of the
+// limiter's key under the secret, cut to 16 bytes, 22 base64url
+// characters; never the unkeyed digest that the limiter's own Redis key
+// carries; the same for one secret wherever it is computed, and another
+// under another secret or for another key.
+func TestPseudonym(t *testing.T) {
+	secret := []byte("dev-only-not-secret")
+	key := digest(1)
+	p := Pseudonym(secret, key)
+	// HMAC-SHA256("dev-only-not-secret", ratelimit.Key("client-1")),
+	// computed with openssl apart from this code.
+	if p != "W9NTdi9m1FG65Nq5kR9D6g" {
+		t.Errorf("Pseudonym = %q", p)
+	}
+	if b, err := base64.RawURLEncoding.Strict().DecodeString(p); err != nil || len(b) != 16 {
+		t.Errorf("Pseudonym %q is not 16 bytes of base64url: %v", p, err)
+	}
+	if unkeyed := base64.RawURLEncoding.EncodeToString([]byte(key)); p == unkeyed {
+		t.Error("the pseudonym is the unkeyed digest")
+	}
+	if Pseudonym(secret, key) != p || Pseudonym([]byte("dev-only-not-secret"), digest(1)) != p {
+		t.Error("the pseudonym is not deterministic")
+	}
+	if Pseudonym([]byte("another-dev-only-not-secret"), key) == p || Pseudonym(secret, digest(2)) == p {
+		t.Error("another secret or another key gives the same pseudonym")
+	}
 }

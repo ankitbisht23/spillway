@@ -26,6 +26,7 @@ import (
 	"github.com/ankitbisht23/spillway/internal/config"
 	"github.com/ankitbisht23/spillway/internal/gen/configpb"
 	"github.com/ankitbisht23/spillway/internal/heavyhitters"
+	"github.com/ankitbisht23/spillway/internal/secret"
 )
 
 // Options configure a managed gateway.
@@ -43,7 +44,10 @@ type Options struct {
 	// HeavyHitters is the sketch the gateway counts throttled keys in;
 	// each heartbeat reports and resets it (RL-21, ADR-0041). Nil: none.
 	HeavyHitters *heavyhitters.Sketch
-	Log          *slog.Logger
+	// HeavyHitterSecret keys the digests heartbeats report
+	// (heavyhitters.Pseudonym, ADR-0053); required with HeavyHitters.
+	HeavyHitterSecret secret.Value
+	Log               *slog.Logger
 }
 
 // Client is a managed gateway's view of the control plane: the config and
@@ -78,7 +82,12 @@ type Client struct {
 }
 
 // New returns a client of the ConfigService that cs calls.
+// It panics if opts has a sketch without a secret: its digests would be
+// reported unkeyed (ADR-0053).
 func New(cs configpb.ConfigServiceClient, opts Options) *Client {
+	if opts.HeavyHitters != nil && !opts.HeavyHitterSecret.IsSet() {
+		panic("managed: a heavy-hitter sketch needs HeavyHitterSecret")
+	}
 	c := &Client{opts: opts, cs: cs, beat: make(chan struct{}, 1), both: make(chan struct{}), lastSync: time.Now()}
 	c.writer = newWriter(opts.SnapshotPath, c.snapshotFile, opts.Log)
 	return c

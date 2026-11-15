@@ -226,7 +226,7 @@ func serve(ctx context.Context, s settings, log *slog.Logger, tracer trace.Trace
 		defer func() { _ = conn.Close() }()
 		hitters = heavyhitters.New()
 		m := managed.New(configpb.NewConfigServiceClient(conn), managed.Options{
-			ReplicaID: replica, SnapshotPath: s.snapshot, Log: log, HeavyHitters: hitters,
+			ReplicaID: replica, SnapshotPath: s.snapshot, Log: log, HeavyHitters: hitters, HeavyHitterSecret: s.heavyHitterSecret,
 			Compile: func(c *configpb.Config) (*config.Snapshot, error) { return config.PrepareManaged(c, log, apply) },
 		})
 		log.Info("managed mode", "control_plane", s.controlPlane, "server_name", s.cpServerName, "replica", replica, "snapshot", s.snapshot)
