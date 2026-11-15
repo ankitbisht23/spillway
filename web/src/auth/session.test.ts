@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { provider, TOKEN_ENDPOINT, tokenAnswer } from "../test/keycloak";
 import { server } from "../test/server";
 import { refreshTokens, type Tokens } from "./oidc";
-import { authFetch, createSession, refreshDelayMs, sessionEndedResponse, setSession, SIGNED_OUT_MESSAGE, type SessionDeps } from "./session";
+import { authFetch, createSession, onSessionChange, refreshDelayMs, sessionEndedResponse, setSession, SIGNED_OUT_MESSAGE, type SessionDeps } from "./session";
 
 const API = "http://localhost:8080/api/v1";
 const first: Tokens = { access: "access-0", refresh: "refresh-0", idToken: "id-0", expiresIn: 300 };
@@ -225,6 +225,25 @@ describe("authFetch", () => {
     const { s } = setup();
     setSession(s);
     expect((await authFetch(new Request(`${API}/me`))).status).toBe(200);
+    setSession(null);
+  });
+
+  it("tells the stream of each refresh and the end of the session, without a token", async () => {
+    setSession(null);
+    const none = vi.fn();
+    onSessionChange(none)();
+    tokenEndpoint(ok(1));
+    const { s } = setup();
+    setSession(s);
+    const listener = vi.fn();
+    const unsubscribe = onSessionChange(listener);
+    expect(await s.refresh()).toBe(true);
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith();
+    unsubscribe();
+    s.signOut();
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(none).not.toHaveBeenCalled();
     setSession(null);
   });
 
