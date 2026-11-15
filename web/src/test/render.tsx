@@ -21,12 +21,12 @@ export function appRouterAt(path: string) {
 }
 
 /** The app at path inside a session of a user with roles. */
-export function renderApp(path: string, roles: Role[] = ["admin"], signOut: () => void = () => {}) {
+export function renderApp(path: string, roles: Role[] = ["admin"], signOut: () => void = () => {}, queryClient = createQueryClient()) {
   const router = appRouterAt(path);
   const user = { subject: "sub-1", name: "test-user", roles };
   render(
     <SessionContext value={{ user, signOut }}>
-      <App router={router} queryClient={createQueryClient()} />
+      <App router={router} queryClient={queryClient} />
     </SessionContext>,
   );
   return router;

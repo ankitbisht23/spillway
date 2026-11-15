@@ -10,6 +10,8 @@ import { APP } from "./e2e/env";
 export default defineConfig({
   testDir: "e2e",
   testMatch: "*.spec.ts",
+  globalSetup: "./e2e/global-setup.ts",
+  globalTeardown: "./e2e/global-teardown.ts",
   retries: 0,
   workers: 1,
   fullyParallel: false,

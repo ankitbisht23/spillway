@@ -688,7 +688,7 @@ Exit (`make verify-m5`): a publish reaches all replicas in < 5 s (NFR-08); a rev
 ### M6 Admin UI · est. 3 weeks
 
 - [x] App shell embedded in the control-plane binary at `/`, Vite proxy in dev; OIDC login with in-memory tokens, role-aware navigation; typed client generated from `api/openapi.yaml` (UI-04, UI-05, UI-08, UI-09)
-- [ ] Overview and Throttling screens with SSE live data from named server-side queries (UI-03)
+- [x] Overview and Throttling screens with SSE live data from named server-side queries (UI-03)
 - [ ] Policy editor: validation, diff, publish with `If-Match` on the previewed revision, shadow report, promote to enforce (UI-01, UI-02)
 - [ ] Routes & upstreams, Consumers & keys (quota usage waits for M7), Replicas, History with rollback (UI-06)
 - [ ] Vitest and Playwright tests for the main flows, run in CI from M6

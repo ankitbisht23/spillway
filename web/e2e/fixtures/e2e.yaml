@@ -1,0 +1,28 @@
+# The config every Playwright run starts from (ADR-0061): global setup
+# imports it with If-Match and publishes it, so flows see the same working
+# set and latest version whatever ran before. In make dev the gateways are
+# static, so no gateway serves it; the flows check the UI and the control
+# plane. Later tasks add what their flows need.
+upstreams:
+  - name: e2e
+    endpoints:
+      - address: upstream-1:8080
+      - address: upstream-2:8080
+      - address: upstream-3:8080
+routes:
+  - name: e2e-orders
+    match: { path_prefix: /anything/e2e }
+    upstream: e2e
+    auth_mode: none
+policies:
+  # The policy of the seeded heavy-hitter windows on the Throttling screen.
+  - name: e2e-per-client
+    level: route
+    match: { routes: [e2e-orders] }
+    key_template: '{header:X-E2E-Client}'
+    algorithm: gcra
+    limits: [{ rate: 100, period: 1s }]
+    local: true
+plans:
+  # The plan of the run's tenant e2e-<run id>.
+  - name: e2e

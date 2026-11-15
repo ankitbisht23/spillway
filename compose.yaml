@@ -211,7 +211,14 @@ services:
   prometheus:
     image: prom/prometheus:v3.15.1
     env_file: *env-local
-    volumes: ["./deploy/compose/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro"]
+    # The image's defaults plus an explicit 15 d retention, which covers the
+    # admin UI's 7 d range; the data volume keeps history across restarts
+    # until docker compose down -v (UI-03, ADR-0059).
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+    volumes: ["./deploy/compose/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro", "prometheus-data:/prometheus"]
     # Host 9091: 9090 is the control plane's gRPC port (docs/ports.md).
     ports: ["127.0.0.1:9091:9090"]
     healthcheck:
@@ -428,6 +435,7 @@ networks:
 
 volumes:
   pgdata:
+  prometheus-data:
   gateway-1-state:
   gateway-2-state:
   gateway-3-state:

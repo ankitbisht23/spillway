@@ -88,3 +88,63 @@ button:disabled { background: var(--panel); color: var(--muted); border-color: v
 .topbar button { background: transparent; border-color: var(--accent-text); }
 .modal-backdrop { position: fixed; inset: 0; display: grid; place-items: center; background: rgb(28 36 48 / 45%); }
 .modal { max-width: 28rem; padding: calc(var(--space) * 1.5); border-radius: var(--radius); background: var(--panel); }
+
+/* Shared controls */
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+button.secondary { background: var(--panel); color: var(--accent); }
+button.danger { background: var(--danger); border-color: var(--danger); }
+button.link-button { padding: 0; border: 0; background: none; color: var(--accent); text-decoration: underline; }
+.button-link {
+  display: inline-block;
+  padding: 0.35rem 0.9rem;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  color: var(--accent);
+  text-decoration: none;
+}
+.actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-top: var(--space); }
+.field { display: flex; flex-direction: column; gap: 0.25rem; margin: 0.75rem 0; }
+.field input { font: inherit; padding: 0.35rem 0.5rem; border: 1px solid var(--border); border-radius: var(--radius); }
+.form-error { color: var(--danger); }
+.match { font-weight: 600; }
+.facts { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1rem; margin: 0.5rem 0; }
+.facts dt { color: var(--muted); }
+.facts dd { margin: 0; }
+
+/* Tables */
+.table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.table th, .table td { padding: 0.35rem 0.5rem; border-bottom: 1px solid var(--border); text-align: left; }
+.table thead th { color: var(--muted); font-weight: 500; font-size: 0.85rem; }
+.table tbody th { font-weight: 500; }
+.table tr.selected { background: var(--bg); }
+.table meter { width: 5rem; vertical-align: middle; }
+
+/* Live screens (UI-03) */
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space); margin-bottom: var(--space); }
+.filters { display: flex; flex-wrap: wrap; gap: var(--space); }
+.filters select { font: inherit; padding: 0.25rem 0.4rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); }
+.stream-status { margin: 0; font-size: 0.85rem; color: var(--muted); }
+.stream-status::before { content: ""; display: inline-block; width: 0.6rem; height: 0.6rem; margin-right: 0.4rem; border-radius: 50%; background: var(--muted); }
+.stream-open::before { background: #2e7d32; }
+.stream-reconnecting::before, .stream-failed::before { background: var(--danger); }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(22rem, 1fr)); gap: var(--space); }
+.card { min-width: 0; padding: var(--space); border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); }
+.card-wide { grid-column: 1 / -1; }
+.live-stale .chart, .live-stale .table { opacity: 0.45; }
+.live-error { margin: 0 0 0.5rem; color: var(--danger); }
+.stream-stopped { display: grid; gap: 0.5rem; }
+.chart { margin: 0; }
+.chart-canvas { width: 100%; min-height: 200px; }
+.legend { display: flex; flex-wrap: wrap; gap: 0.25rem 1rem; margin: 0.5rem 0 0; padding: 0; list-style: none; font-size: 0.85rem; }
+.legend-value { font-variant-numeric: tabular-nums; color: var(--muted); }
+.swatch { display: inline-block; width: 0.75rem; height: 0.2rem; margin-right: 0.35rem; vertical-align: middle; border-radius: 1px; }
+/* The chart palette, in LineChart.tsx's PALETTE order. */
+.swatch-0 { background: #1f4e79; }
+.swatch-1 { background: #2e7d32; }
+.swatch-2 { background: #b26a00; }
+.swatch-3 { background: #a4262c; }
+.swatch-4 { background: #6a3d9a; }
+.swatch-5 { background: #00838f; }
+.swatch-6 { background: #5b6676; }
+.key-actions { margin-top: var(--space); padding-top: var(--space); border-top: 1px solid var(--border); }
+.key-actions h3 { margin: 0; font-size: 1rem; }

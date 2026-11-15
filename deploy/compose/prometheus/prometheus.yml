@@ -16,9 +16,18 @@ scrape_configs:
   - job_name: loki
     static_configs:
       - targets: ["loki:3100"]
+  # All five gateways (gateway-2 … gateway-5 run only under --profile
+  # replicas; a target that is down costs nothing), each labelled with its
+  # replica name, which is its host name (ADR-0040), so the admin UI can
+  # show per-replica state (ADR-0059).
   - job_name: gateway
     static_configs:
-      - targets: ["gateway-1:8001"]
+      - targets: ["gateway-1:8001", "gateway-2:8001", "gateway-3:8001", "gateway-4:8001", "gateway-5:8001"]
+    relabel_configs:
+      - source_labels: [__address__]
+        regex: "([^:]+):.*"
+        target_label: replica
+        replacement: "$1"
   - job_name: controlplane
     static_configs:
       - targets: ["controlplane:8081"]
