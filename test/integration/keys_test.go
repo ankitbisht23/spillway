@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -384,6 +385,111 @@ func TestConfigRollbackKeepsKeys(t *testing.T) {
 	}
 }
 
+// TestRotationCarriesAccessLists: a rotation gives the new key a copy of
+// the old key's own access-list entries, allow and deny, in the rotation's
+// identity version and audit record (CP-16, RL-09, CP-13, CP-20,
+// ADR-0054). The old key keeps its entries; consumer entries are not
+// copied (they cover both keys); a key with no entries rotates as before;
+// no key, secret or hash shows in the audit log or the control plane's
+// log.
+func TestRotationCarriesAccessLists(t *testing.T) {
+	e := newKeyEnv(t)
+	denied, allowed, plain := e.issue(t, nil), e.issue(t, nil), e.issue(t, nil)
+	keys := []keyParts{partsOf(t, denied.Key), partsOf(t, allowed.Key), partsOf(t, plain.Key)}
+	entry := func(body map[string]any) apiv1.AccessListEntry {
+		t.Helper()
+		var a apiv1.AccessListEntry
+		e.r.keyAdmin.must(201, "POST", "/access-lists", body).decode(t, &a)
+		return a
+	}
+	deny := entry(map[string]any{"action": "deny", "subject_type": "key", "api_key_id": denied.Id, "note": "leaked"})
+	allow := entry(map[string]any{"action": "allow", "subject_type": "key", "api_key_id": allowed.Id, "note": "partner"})
+	entry(map[string]any{"action": "allow", "subject_type": "consumer", "consumer_id": e.consumer})
+	lists := func() []apiv1.AccessListEntry {
+		t.Helper()
+		var l apiv1.AccessListEntryList
+		e.r.viewer.must(200, "GET", "/access-lists?limit=500", nil).decode(t, &l)
+		return l.Items
+	}
+	auditCount := func() int {
+		t.Helper()
+		var n int
+		if err := e.owner.QueryRow(t.Context(), "SELECT count(*) FROM audit_log").Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+
+	for _, tt := range []struct {
+		name   string
+		key    apiv1.IssuedApiKey
+		copied *apiv1.AccessListEntry // nil: the key has no entries
+	}{
+		{"a deny-listed key", denied, &deny},
+		{"an allow-listed key", allowed, &allow},
+		{"a key with no entries", plain, nil},
+	} {
+		before, v, records := lists(), e.identityVersion(t), auditCount()
+		var r apiv1.KeyRotation
+		e.r.keyAdmin.must(200, "POST", fmt.Sprintf("/keys/%d/rotate", tt.key.Id), nil).decode(t, &r)
+		keys = append(keys, partsOf(t, r.New.Key))
+		if got := e.identityVersion(t); got != v+1 || r.New.Version != v+1 {
+			t.Errorf("%s: identity version %d, new key's %d; want one change, %d", tt.name, got, r.New.Version, v+1)
+		}
+		if n := auditCount(); n != records+1 {
+			t.Errorf("%s: %d audit records written, want 1", tt.name, n-records)
+		}
+		after := lists()
+		// Every entry before is still there, unchanged; the copy is the
+		// only new one.
+		var added []apiv1.AccessListEntry
+		for _, a := range after {
+			if !slices.ContainsFunc(before, func(b apiv1.AccessListEntry) bool { return *b.Id == *a.Id && *b.Version == *a.Version }) {
+				added = append(added, a)
+			}
+		}
+		if len(after) != len(before)+len(added) {
+			t.Errorf("%s: entries before %+v, after %+v: one went or changed", tt.name, before, after)
+		}
+		rec := auditPage(t, e.r.admin, fmt.Sprintf("?entity=key&entity_id=%d&limit=1", tt.key.Id)).Items[0]
+		diff := mustJSON(t, rec.Diff)
+		if rec.Action != "key.rotate" || rec.IdentityVersion == nil || *rec.IdentityVersion != v+1 {
+			t.Errorf("%s: the rotation's record %s at identity version %v", tt.name, rec.Action, rec.IdentityVersion)
+		}
+		if tt.copied == nil {
+			if len(added) != 0 || strings.Contains(diff, "new_access_lists") {
+				t.Errorf("%s: entries added %+v, diff %s; want none", tt.name, added, diff)
+			}
+			continue
+		}
+		want := *tt.copied
+		if len(added) != 1 {
+			t.Fatalf("%s: entries added %+v, want the copy of %+v", tt.name, added, want)
+		}
+		got := added[0]
+		if got.Action != want.Action || got.SubjectType != apiv1.AccessListEntrySubjectTypeKey || got.ApiKeyId == nil || *got.ApiKeyId != r.New.Id ||
+			got.Note == nil || *got.Note != *want.Note || *got.Version != v+1 {
+			t.Errorf("%s: the copy %+v, want %s on key %d with note %q at version %d", tt.name, got, want.Action, r.New.Id, *want.Note, v+1)
+		}
+		var copies struct {
+			NewAccessLists []apiv1.AccessListEntry `json:"new_access_lists"`
+		}
+		if err := json.Unmarshal([]byte(diff), &copies); err != nil {
+			t.Fatal(err)
+		}
+		if len(copies.NewAccessLists) != 1 || *copies.NewAccessLists[0].Id != *got.Id || *copies.NewAccessLists[0].ApiKeyId != r.New.Id {
+			t.Errorf("%s: the rotation's diff %s does not list the copy %d", tt.name, diff, *got.Id)
+		}
+	}
+
+	var audit string
+	if err := e.owner.QueryRow(t.Context(), "SELECT coalesce(string_agg(row_to_json(a)::text, E'\\n'), '') FROM audit_log a").Scan(&audit); err != nil {
+		t.Fatal(err)
+	}
+	noKeyIn(t, "the audit log", audit, true, keys...)
+	noKeyIn(t, "the control plane's log", e.log.String(), true, keys...)
+}
+
 // runChaosRevocation runs "chaos revocation" (cmd/chaos) with the token on
 // stdin and returns its report and its PASS/FAIL line.
 func runChaosRevocation(t *testing.T, cmd *exec.Cmd, token string) (chaosRevocationReport, string) {
@@ -594,6 +700,120 @@ func TestComposeRevocation(t *testing.T) {
 	t.Logf("samples (ms, latest replica's first 401 after the revoke was sent): %s", strings.Join(samples, " "))
 	if len(rep.Rounds) != 20 {
 		t.Errorf("%d rounds, want 20", len(rep.Rounds))
+	}
+}
+
+// TestComposeRotateBlockedKey blocks a key and rotates it with the compose
+// gateways in managed mode (CP-16, RL-09, CP-20, ADR-0054): the new key
+// comes with its copy of the deny entry in the same identity version, so
+// gateway-1 never lets it in — 401 while it does not know the key yet,
+// then 403 {"error":"forbidden"} (ADR-0050) — and the old key, in its
+// grace period, stays 403. gateway-1 … gateway-5 heartbeat the rotation's
+// identity version; gateway-1 is probed (the others publish no port). No
+// key, secret or hash shows in the gateways' or the control plane's logs
+// or in the audit records. Every wait allows 30 s, far above the 820 ms
+// host stalls of ADR-0034; no check here is timed. The test's tenant and
+// consumer go afterwards, with their keys and entries.
+func TestComposeRotateBlockedKey(t *testing.T) {
+	c := composeControlPlane(t)
+	c = c.as(keycloakToken(t, "client_credentials", "spillway-ci", ""))
+	root := filepath.Join("..", "..")
+
+	// The compose config plus plan it-keys, published.
+	data, err := os.ReadFile(filepath.Join(root, "deploy", "compose", "gateway", "config.yaml")) //nolint:gosec // G304: a config file of this repo
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = append(data, []byte("plans:\n  - name: it-keys\n")...)
+	_, tag := exportYAML(t, c, "")
+	importYAML(t, c, 200, data, tag, "?note=TestComposeRotateBlockedKey")
+	_, tag = validate(t, c)
+	if a := c.call("POST", "/config/publish", note("TestComposeRotateBlockedKey: the compose config and plan it-keys"), "If-Match", tag); a.status != 200 && a.status != 409 {
+		t.Fatalf("publish: %d %s", a.status, a.body)
+	}
+	plan, _ := lookup(t, c, "/plans", "it-keys")
+	removeTestTenants(t, c, "it-rotate-") // left by a run that did not finish
+	name := fmt.Sprintf("it-rotate-%d", time.Now().UnixNano()%1e9)
+	tenant, _ := created(t, c, "/tenants", map[string]any{"name": name, "plan_id": plan})
+	consumer, _ := created(t, c, "/consumers", map[string]any{"tenant_id": tenant, "name": name})
+	t.Cleanup(func() { removeTestTenants(t, c, "it-rotate-") })
+	var old apiv1.IssuedApiKey
+	c.must(201, "POST", fmt.Sprintf("/consumers/%d/keys", consumer), nil).decode(t, &old)
+	keys := []keyParts{partsOf(t, old.Key)}
+	composeManaged(t)
+
+	send := func(key string) (int, string) {
+		ctx, cancel := context.WithTimeout(t.Context(), 4*time.Second)
+		defer cancel()
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1:8000/status/200", nil)
+		req.Header.Set("X-API-Key", key)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return 0, ""
+		}
+		defer func() { _ = resp.Body.Close() }()
+		body, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(body)
+	}
+	eventually(t, "gateway-1 letting the key in", func() bool { s, _ := send(old.Key); return s == 200 })
+
+	// Block the key, then rotate it.
+	c.must(201, "POST", "/access-lists", map[string]any{"action": "deny", "subject_type": "key", "api_key_id": old.Id, "note": "TestComposeRotateBlockedKey"})
+	eventually(t, "gateway-1 refusing the blocked key", func() bool { s, _ := send(old.Key); return s == 403 })
+	var r apiv1.KeyRotation
+	c.must(200, "POST", fmt.Sprintf("/keys/%d/rotate", old.Id), map[string]any{"note": "TestComposeRotateBlockedKey"}).decode(t, &r)
+	keys = append(keys, partsOf(t, r.New.Key))
+	answers := map[int]int{}
+	eventually(t, "gateway-1 refusing the new key with 403", func() bool {
+		s, _ := send(r.New.Key)
+		answers[s]++
+		return s == 403
+	})
+	t.Logf("gateway-1's answers to the new key until its 403: %v", answers)
+	if answers[200] > 0 {
+		t.Errorf("gateway-1 let the new key of a blocked key in %d times", answers[200])
+	}
+	eventually(t, fmt.Sprintf("gateway-1 … gateway-5 live at identity version %d", r.New.Version), func() bool {
+		n := 0
+		for _, rp := range listReplicas(t, c, "").Items {
+			if slices.Contains(composeGateways, rp.Id) && rp.Live && rp.IdentityVersion >= r.New.Version {
+				n++
+			}
+		}
+		return n == len(composeGateways)
+	})
+	for what, k := range map[string]string{"the new key": r.New.Key, "the old key, in its grace period": old.Key} {
+		if s, b := send(k); s != 403 || b != `{"error":"forbidden"}` {
+			t.Errorf("%s: %d %q, want 403 {\"error\":\"forbidden\"}", what, s, b)
+		}
+	}
+
+	// The rotation's one audit record lists the copy.
+	page := c.must(200, "GET", fmt.Sprintf("/audit?entity=key&entity_id=%d&limit=1", old.Id), nil)
+	var recs apiv1.AuditList
+	page.decode(t, &recs)
+	var copies struct {
+		NewAccessLists []apiv1.AccessListEntry `json:"new_access_lists"`
+	}
+	if err := json.Unmarshal([]byte(mustJSON(t, recs.Items[0].Diff)), &copies); err != nil {
+		t.Fatal(err)
+	}
+	if rec := recs.Items[0]; rec.Action != "key.rotate" || rec.IdentityVersion == nil || *rec.IdentityVersion != r.New.Version ||
+		len(copies.NewAccessLists) != 1 || copies.NewAccessLists[0].Action != apiv1.AccessListEntryActionDeny || *copies.NewAccessLists[0].ApiKeyId != r.New.Id {
+		t.Errorf("the rotation's audit record: %s %v %+v", rec.Action, rec.IdentityVersion, copies)
+	}
+
+	// No key material in the logs or the audit records.
+	recent := c.must(200, "GET", "/audit?limit=50", nil)
+	noKeyIn(t, "the audit records", string(page.body)+string(recent.body), true, keys...)
+	for _, svc := range append([]string{"controlplane"}, composeGateways...) {
+		cmd := exec.CommandContext(t.Context(), "docker", "compose", "--env-file", ".env.example", "logs", "--no-log-prefix", svc) //nolint:gosec // G204: fixed docker compose commands
+		cmd.Dir = root
+		logs, err := cmd.Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		noKeyIn(t, svc+"'s log", string(logs), true, keys...)
 	}
 }
 

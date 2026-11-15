@@ -56,9 +56,10 @@ Decisions that shape Spillway and are not obvious from the code or from docs/des
 | [0045](0045-config-settings-and-the-watch-task.md) | Config settings, and the watch task's details | Accepted; the interim until mtls-secrets ended by 0047; managed identity without key lookup ended by 0048 | 2026-11-14 |
 | [0046](0046-heartbeats-and-live-replicas-details.md) | Heartbeats and live replicas: details | Accepted | 2026-11-14 |
 | [0047](0047-stream-mtls-and-secrets-details.md) | Config stream mTLS and secrets: details | Accepted | 2026-11-14 |
-| [0048](0048-managed-api-keys-and-the-identity-path-details.md) | Managed API keys and the identity path: details | Accepted; policy names in managed keys ended by 0050 | 2026-11-14 |
+| [0048](0048-managed-api-keys-and-the-identity-path-details.md) | Managed API keys and the identity path: details | Accepted; policy names in managed keys ended by 0050; a rotation's transaction and audit record refined by 0054 | 2026-11-14 |
 | [0049](0049-gateway-jwt-and-auth-modes-details.md) | Gateway JWT and auth modes: details | Accepted | 2026-11-14 |
-| [0050](0050-plans-overrides-and-access-lists-details.md) | Plans, overrides and access lists: details | Accepted | 2026-11-14 |
+| [0050](0050-plans-overrides-and-access-lists-details.md) | Plans, overrides and access lists: details | Accepted; key-level entries across a rotation refined by 0054 | 2026-11-14 |
 | [0051](0051-heavy-hitters-details.md) | Heavy hitters: details | Accepted; the reported key digest refined by 0053 | 2026-11-14 |
 | [0052](0052-make-verify-m5-details.md) | make verify-m5: details | Accepted | 2026-11-14 |
 | [0053](0053-keyed-heavy-hitter-digests.md) | Keyed heavy-hitter digests and the admin lookup | Accepted | 2026-11-15 |
+| [0054](0054-key-rotation-carries-key-level-access-list-entries.md) | Key rotation carries key-level access-list entries | Accepted | 2026-11-15 |

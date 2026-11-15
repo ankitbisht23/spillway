@@ -8,6 +8,7 @@ import (
 
 	"github.com/ankitbisht23/spillway/internal/apikey"
 	"github.com/ankitbisht23/spillway/internal/controlplane/store"
+	"github.com/ankitbisht23/spillway/internal/controlplane/store/db"
 	"github.com/ankitbisht23/spillway/internal/gen/apiv1"
 )
 
@@ -19,6 +20,15 @@ import (
 // showKey is a key's REST form, for audit records: never the key or its
 // hash (ADR-0040).
 var showKey = showAs(func(k store.Key) (apiv1.ApiKey, error) { return keyOut(k), nil })
+
+// showRotation is showKey, plus the access-list entries a rotation copies
+// to the new key (ADR-0054).
+func showRotation(row any) (any, error) {
+	if e, ok := row.(db.AccessList); ok {
+		return showAccessList(e)
+	}
+	return showKey(row)
+}
 
 // noStore keeps caches from holding an answer with a key.
 var noStore = "no-store"
@@ -91,7 +101,7 @@ func (s *Server) RotateKey(ctx context.Context, req apiv1.RotateKeyRequestObject
 		}
 		note = req.Body.Note
 	}
-	old, rotated, key, err := s.store.RotateKey(ctx, audit(ctx, showKey), s.newKey, req.Id, grace, note)
+	old, rotated, key, err := s.store.RotateKey(ctx, audit(ctx, showRotation), s.newKey, req.Id, grace, note)
 	if err != nil {
 		return nil, err
 	}

@@ -1,6 +1,6 @@
 # 0048. Managed API keys and the identity path: details
 
-- **Status:** Accepted; policy names in managed keys ended by [ADR-0050](0050-plans-overrides-and-access-lists-details.md)
+- **Status:** Accepted; policy names in managed keys ended by [ADR-0050](0050-plans-overrides-and-access-lists-details.md); a rotation's transaction and audit record refined by [ADR-0054](0054-key-rotation-carries-key-level-access-list-entries.md) (key-level access-list entries copied to the new key)
 - **Date:** 2026-11-14
 - **Requirement IDs:** CP-15, CP-16, CP-17, CP-20, GW-17, GW-19, NFR-09, SEC-03, OB-01
 
