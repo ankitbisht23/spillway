@@ -178,3 +178,48 @@ describe("an upstream's live state (UI-03, ADR-0059)", () => {
     expect(screen.getByText("Prometheus is not configured on the control plane.")).toBeInTheDocument();
   });
 });
+
+describe("an upstream's create and delete (UI-06, CP-14)", () => {
+  it("deletes after confirming, with If-Match", async () => {
+    mockUpstream(upstream());
+    let ifMatch: string | null = null;
+    server.use(
+      http.delete("/api/v1/upstreams/2", ({ request }) => {
+        ifMatch = request.headers.get("If-Match");
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+    const stream = mockStream();
+    const router = renderApp("/upstreams/2", ["admin"]);
+    await screen.findByRole("heading", { name: "Upstream orders-up" });
+    await waitFor(() => expect(stream.opened).toHaveLength(1));
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+    expect(screen.getByRole("dialog", { name: "Delete upstream orders-up?" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Delete upstream" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/upstreams"));
+    expect(ifMatch).toBe('"9"');
+  });
+
+  it("creates one with its endpoints and opens its page", async () => {
+    let sent: unknown;
+    server.use(
+      http.post("/api/v1/upstreams", async ({ request }) => {
+        sent = await request.json();
+        return HttpResponse.json({ ...(sent as object), id: 2, version: 1, created_at: "", updated_at: "" }, { status: 201, headers: { ETag: '"1"' } });
+      }),
+      http.get("/api/v1/upstreams/2", () => HttpResponse.json({ ...(sent as object), id: 2, version: 1, created_at: "", updated_at: "" }, { headers: { ETag: '"1"' } })),
+    );
+    mockStream();
+    const router = renderApp("/upstreams/new", ["editor"]);
+    await userEvent.type(await screen.findByRole("textbox", { name: "Name (required)" }), "orders-up");
+    await userEvent.click(screen.getByRole("button", { name: "Create upstream" }));
+    expect(await screen.findByText("Required")).toBeInTheDocument();
+    expect(sent).toBeUndefined();
+    await userEvent.type(screen.getByRole("textbox", { name: "Endpoints (required)" }), "orders-1:8080{Enter}orders-2:8080");
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Load balancing" }), "round_robin");
+    await userEvent.click(screen.getByRole("button", { name: "Create upstream" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/upstreams/2"));
+    expect(await screen.findByText(/^Saved to the working set\./)).toBeInTheDocument();
+    expect(sent).toEqual({ name: "orders-up", lb: "round_robin", endpoints: [{ address: "orders-1:8080" }, { address: "orders-2:8080" }] });
+  });
+});
