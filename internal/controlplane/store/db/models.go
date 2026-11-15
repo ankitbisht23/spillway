@@ -183,6 +183,12 @@ type Route struct {
 	UpdatedAt time.Time
 }
 
+type StreamEpoch struct {
+	ID        int16
+	Epoch     string
+	ChangedAt time.Time
+}
+
 type Tenant struct {
 	ID        int64
 	Name      string

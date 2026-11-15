@@ -6,6 +6,7 @@ package stream
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -20,9 +21,17 @@ import (
 
 // Source is what the broadcaster reads: the store.
 type Source interface {
-	LatestConfig(ctx context.Context) (*configpb.ConfigUpdate, error)
-	Identity(ctx context.Context) (*configpb.Identity, error)
-	LatestVersions(ctx context.Context) (configVersion, identityVersion int64, err error)
+	// StreamConfig and StreamIdentity return a section with the stream
+	// epoch it was read under, and when its version was made (the
+	// config's published_at); StreamConfig's Config is nil before the
+	// first publish.
+	StreamConfig(ctx context.Context) (*configpb.ConfigUpdate, error)
+	StreamIdentity(ctx context.Context) (*configpb.IdentityUpdate, time.Time, error)
+	LatestVersions(ctx context.Context) (store.Versions, error)
+	// RotateEpoch sets a new stream epoch, only while the epoch is old
+	// unless old is empty; it returns the epoch now in place and whether
+	// it set it (ADR-0055).
+	RotateEpoch(ctx context.Context, old string) (epoch string, rotated bool, err error)
 	Listen(ctx context.Context, ready func(), notify func(channel string)) error
 }
 
@@ -37,11 +46,13 @@ const (
 
 func (s section) String() string { return [...]string{"config", "identity"}[s] }
 
-// update is one section's version, marshalled once as the WatchResponse
-// that every stream sends.
+// update is one section's version and the stream epoch it was read
+// under, marshalled once as the WatchResponse that every stream sends.
 type update struct {
 	version int64
-	msg     encoded
+	at      time.Time // when the version was made; zero for no config
+	epoch   string
+	msg     encoded // nil: nothing to send (no config published yet)
 }
 
 // The broadcaster's timing (ADR-0038).
@@ -68,8 +79,7 @@ type Broadcaster struct {
 	loaded chan struct{}           // closed once both sections are read
 
 	mu      sync.Mutex
-	cur     [sections]*update
-	have    [sections]bool // the section was read at least once
+	cur     [sections]*update // nil until the section is read
 	subs    map[string]*Subscriber
 	stopped bool
 }
@@ -90,9 +100,14 @@ func NewBroadcaster(src Source, log *slog.Logger, streams func(delta int)) *Broa
 // Loaded is closed once the broadcaster has read both sections.
 func (b *Broadcaster) Loaded() <-chan struct{} { return b.loaded }
 
-// Run keeps the broadcaster current until ctx ends, then closes every
-// subscriber with UNAVAILABLE: the replica is stepping down or stopping.
+// Run starts a new stream epoch, keeps the broadcaster current until ctx
+// ends, then closes every subscriber with UNAVAILABLE: the replica is
+// stepping down or stopping.
 func (b *Broadcaster) Run(ctx context.Context) {
+	if !b.startEpoch(ctx) {
+		b.stop()
+		return
+	}
 	var wg sync.WaitGroup
 	for s := range sections {
 		wg.Go(func() { b.refreshLoop(ctx, s) })
@@ -109,6 +124,32 @@ func (b *Broadcaster) Run(ctx context.Context) {
 		case <-t.C:
 			b.kickAll()
 		}
+	}
+}
+
+// startEpoch begins the replica's active term with a new stream epoch, so
+// that a database restored while no replica was active cannot hand a
+// gateway different content under the version numbers it has (ADR-0055).
+// It retries with the LISTEN connection's backoff until it succeeds, or
+// ctx ends (false).
+func (b *Broadcaster) startEpoch(ctx context.Context) bool {
+	backoff := listenBackoffMin
+	for {
+		epoch, _, err := b.src.RotateEpoch(ctx, "")
+		if err == nil {
+			b.log.Info("new stream epoch for this active term", "epoch", epoch)
+			return true
+		}
+		if ctx.Err() != nil {
+			return false
+		}
+		b.log.Error("setting a new stream epoch failed; retrying", "err", err, "backoff", backoff.String())
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(backoff):
+		}
+		backoff = min(2*backoff, listenBackoffMax)
 	}
 }
 
@@ -172,47 +213,50 @@ func (b *Broadcaster) refreshLoop(ctx context.Context, s section) {
 	}
 }
 
-// refresh reads section s and, if its version differs from the one held,
-// builds its update and wakes every subscriber. A different version is
-// sent whether higher or lower: Postgres is the source of truth.
+// refresh reads section s and, if its version, the time that version was
+// made or the stream epoch differs from what is held, builds its update
+// and wakes every subscriber. A different version is sent whether higher
+// or lower: Postgres is the source of truth. Under the epoch held, a lower
+// version, or the same version made at another time, means the database
+// was restored from an older copy of itself: the update is not kept, a new
+// epoch is set, and the section is read again under it, so every gateway,
+// including one offline now, gets both sections in full (ADR-0055).
 func (b *Broadcaster) refresh(ctx context.Context, s section) error {
-	cv, iv, err := b.src.LatestVersions(ctx)
+	v, err := b.src.LatestVersions(ctx)
 	if err != nil {
 		return err
 	}
-	b.mu.Lock()
-	cur, have := b.cur[s], b.have[s]
-	b.mu.Unlock()
-	if want := [...]int64{cv, iv}[s]; have && (cur == nil && want == 0 || cur != nil && cur.version == want) {
+	want, wantAt := v.Config, v.ConfigAt
+	if s == sectionIdentity {
+		want, wantAt = v.Identity, v.IdentityAt
+	}
+	cur := b.current(s)
+	if cur != nil && cur.epoch == v.Epoch && cur.version == want && cur.at.Equal(wantAt) {
 		return nil
 	}
-	var u *update
-	switch s {
-	case sectionConfig:
-		c, err := b.src.LatestConfig(ctx)
+	u, err := b.read(ctx, s)
+	if err != nil {
+		return err
+	}
+	if cur != nil && u.epoch == cur.epoch && (u.version < cur.version || u.version == cur.version && !u.at.Equal(cur.at)) {
+		next, rotated, err := b.src.RotateEpoch(ctx, u.epoch)
 		if err != nil {
-			return err
+			return fmt.Errorf("the %s went back from version %d to %d; setting a new stream epoch: %w", s, cur.version, u.version, err)
 		}
-		if c != nil {
-			if u, err = marshal(c.GetConfig().GetVersion(), &configpb.WatchResponse{Update: &configpb.WatchResponse_Config{Config: c}}); err != nil {
-				return err
-			}
+		if rotated {
+			b.log.Warn("the "+s.String()+" went back under the same stream epoch: the database was restored; new stream epoch",
+				"from_version", cur.version, "from_made_at", cur.at, "to_version", u.version, "to_made_at", u.at, "epoch", next)
 		}
-	case sectionIdentity:
-		id, err := b.src.Identity(ctx)
-		if err != nil {
-			return err
-		}
-		if u, err = marshal(id.GetVersion(), &configpb.WatchResponse{Update: &configpb.WatchResponse_Identity{Identity: &configpb.IdentityUpdate{
-			SchemaVersion: currentSchema(), Identity: id,
-		}}}); err != nil {
-			return err
-		}
+		b.kickSection(s)
+		return nil
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.cur[s], b.have[s] = u, true
-	if b.have[sectionConfig] && b.have[sectionIdentity] {
+	b.cur[s] = u
+	if other := b.cur[1-s]; other != nil && other.epoch != u.epoch {
+		b.kickSection(1 - s) // it is sent again under this epoch
+	}
+	if b.cur[sectionConfig] != nil && b.cur[sectionIdentity] != nil {
 		select {
 		case <-b.loaded:
 		default:
@@ -222,18 +266,42 @@ func (b *Broadcaster) refresh(ctx context.Context, s section) error {
 	for _, sub := range b.subs {
 		sub.wakeUp()
 	}
-	if u != nil {
-		b.log.Info(s.String()+" ready to stream", "version", u.version, "bytes", len(u.msg), "streams", len(b.subs))
+	if u.msg != nil {
+		b.log.Info(s.String()+" ready to stream", "version", u.version, "epoch", u.epoch, "bytes", len(u.msg), "streams", len(b.subs))
 	}
 	return nil
 }
 
-func marshal(version int64, m *configpb.WatchResponse) (*update, error) {
-	b, err := proto.Marshal(m)
-	if err != nil {
-		return nil, err
+// read reads section s as the stream sends it.
+func (b *Broadcaster) read(ctx context.Context, s section) (*update, error) {
+	var m *configpb.WatchResponse
+	u := &update{}
+	switch s {
+	case sectionConfig:
+		c, err := b.src.StreamConfig(ctx)
+		if err != nil {
+			return nil, err
+		}
+		u.version, u.epoch = c.GetConfig().GetVersion(), c.GetEpoch()
+		if c.GetConfig() != nil {
+			u.at = c.GetPublishedAt().AsTime()
+			m = &configpb.WatchResponse{Update: &configpb.WatchResponse_Config{Config: c}}
+		}
+	case sectionIdentity:
+		id, at, err := b.src.StreamIdentity(ctx)
+		if err != nil {
+			return nil, err
+		}
+		u.version, u.at, u.epoch = id.GetIdentity().GetVersion(), at, id.GetEpoch()
+		m = &configpb.WatchResponse{Update: &configpb.WatchResponse_Identity{Identity: id}}
 	}
-	return &update{version: version, msg: b}, nil
+	if m != nil {
+		var err error
+		if u.msg, err = proto.Marshal(m); err != nil {
+			return nil, err
+		}
+	}
+	return u, nil
 }
 
 // current returns what section s holds, nil for none.

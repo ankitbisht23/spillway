@@ -14,8 +14,9 @@ import "google/protobuf/timestamp.proto";
 // ConfigService is served by the active control-plane replica only
 // (CP-22, ADR-0038).
 service ConfigService {
-  // Watch sends the current config and identity, each when its version
-  // differs from the request's, then every new version (CP-06).
+  // Watch sends the current config and identity, each when its version or
+  // the stream epoch differs from the request's, then every new version
+  // (CP-06, ADR-0055).
   rpc Watch(WatchRequest) returns (stream WatchResponse);
   // Heartbeat records what the gateway runs and answers the live replica
   // count (CP-08, RL-24).
@@ -38,6 +39,11 @@ message WatchRequest {
   int64 identity_version = 3;
   // The schema the gateway was built with.
   SchemaVersion schema_version = 4;
+  // The stream epoch both sections the gateway has came from; empty when
+  // they came from different epochs, or none (an older gateway, a first
+  // boot). A different epoch gets both sections whatever their versions
+  // (ADR-0055).
+  string epoch = 5;
 }
 
 // WatchResponse is a full config snapshot or a full identity snapshot.
@@ -52,11 +58,15 @@ message ConfigUpdate {
   SchemaVersion schema_version = 1;
   Config config = 2;
   google.protobuf.Timestamp published_at = 3;
+  // The stream epoch the config was read under (ADR-0055).
+  string epoch = 4;
 }
 
 message IdentityUpdate {
   SchemaVersion schema_version = 1;
   Identity identity = 2;
+  // The stream epoch the identity was read under (ADR-0055).
+  string epoch = 3;
 }
 
 message HeartbeatRequest {
@@ -106,4 +116,7 @@ message SnapshotFile {
   google.protobuf.Timestamp synced_at = 4;
   // The latest live replica count when it was written.
   int32 live_replicas = 5;
+  // The stream epoch of both sections; empty when they came from different
+  // epochs (ADR-0055).
+  string epoch = 6;
 }

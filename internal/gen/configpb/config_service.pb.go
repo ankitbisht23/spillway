@@ -91,6 +91,11 @@ type WatchRequest struct {
 	IdentityVersion int64 `protobuf:"varint,3,opt,name=identity_version,json=identityVersion,proto3" json:"identity_version,omitempty"`
 	// The schema the gateway was built with.
 	SchemaVersion *SchemaVersion `protobuf:"bytes,4,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	// The stream epoch both sections the gateway has came from; empty when
+	// they came from different epochs, or none (an older gateway, a first
+	// boot). A different epoch gets both sections whatever their versions
+	// (ADR-0055).
+	Epoch         string `protobuf:"bytes,5,opt,name=epoch,proto3" json:"epoch,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -151,6 +156,13 @@ func (x *WatchRequest) GetSchemaVersion() *SchemaVersion {
 		return x.SchemaVersion
 	}
 	return nil
+}
+
+func (x *WatchRequest) GetEpoch() string {
+	if x != nil {
+		return x.Epoch
+	}
+	return ""
 }
 
 // WatchResponse is a full config snapshot or a full identity snapshot.
@@ -241,6 +253,8 @@ type ConfigUpdate struct {
 	SchemaVersion *SchemaVersion         `protobuf:"bytes,1,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
 	Config        *Config                `protobuf:"bytes,2,opt,name=config,proto3" json:"config,omitempty"`
 	PublishedAt   *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=published_at,json=publishedAt,proto3" json:"published_at,omitempty"`
+	// The stream epoch the config was read under (ADR-0055).
+	Epoch         string `protobuf:"bytes,4,opt,name=epoch,proto3" json:"epoch,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -296,10 +310,19 @@ func (x *ConfigUpdate) GetPublishedAt() *timestamppb.Timestamp {
 	return nil
 }
 
+func (x *ConfigUpdate) GetEpoch() string {
+	if x != nil {
+		return x.Epoch
+	}
+	return ""
+}
+
 type IdentityUpdate struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	SchemaVersion *SchemaVersion         `protobuf:"bytes,1,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
 	Identity      *Identity              `protobuf:"bytes,2,opt,name=identity,proto3" json:"identity,omitempty"`
+	// The stream epoch the identity was read under (ADR-0055).
+	Epoch         string `protobuf:"bytes,3,opt,name=epoch,proto3" json:"epoch,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -346,6 +369,13 @@ func (x *IdentityUpdate) GetIdentity() *Identity {
 		return x.Identity
 	}
 	return nil
+}
+
+func (x *IdentityUpdate) GetEpoch() string {
+	if x != nil {
+		return x.Epoch
+	}
+	return ""
 }
 
 type HeartbeatRequest struct {
@@ -613,7 +643,10 @@ type SnapshotFile struct {
 	// When the file was written, after an apply.
 	SyncedAt *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=synced_at,json=syncedAt,proto3" json:"synced_at,omitempty"`
 	// The latest live replica count when it was written.
-	LiveReplicas  int32 `protobuf:"varint,5,opt,name=live_replicas,json=liveReplicas,proto3" json:"live_replicas,omitempty"`
+	LiveReplicas int32 `protobuf:"varint,5,opt,name=live_replicas,json=liveReplicas,proto3" json:"live_replicas,omitempty"`
+	// The stream epoch of both sections; empty when they came from different
+	// epochs (ADR-0055).
+	Epoch         string `protobuf:"bytes,6,opt,name=epoch,proto3" json:"epoch,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -683,6 +716,13 @@ func (x *SnapshotFile) GetLiveReplicas() int32 {
 	return 0
 }
 
+func (x *SnapshotFile) GetEpoch() string {
+	if x != nil {
+		return x.Epoch
+	}
+	return ""
+}
+
 var File_config_service_proto protoreflect.FileDescriptor
 
 const file_config_service_proto_rawDesc = "" +
@@ -690,24 +730,27 @@ const file_config_service_proto_rawDesc = "" +
 	"\x14config_service.proto\x12\x12spillway.config.v1\x1a\fconfig.proto\x1a\x1fgoogle/protobuf/timestamp.proto\";\n" +
 	"\rSchemaVersion\x12\x14\n" +
 	"\x05major\x18\x01 \x01(\x05R\x05major\x12\x14\n" +
-	"\x05minor\x18\x02 \x01(\x05R\x05minor\"\xc9\x01\n" +
+	"\x05minor\x18\x02 \x01(\x05R\x05minor\"\xdf\x01\n" +
 	"\fWatchRequest\x12\x1d\n" +
 	"\n" +
 	"replica_id\x18\x01 \x01(\tR\treplicaId\x12%\n" +
 	"\x0econfig_version\x18\x02 \x01(\x03R\rconfigVersion\x12)\n" +
 	"\x10identity_version\x18\x03 \x01(\x03R\x0fidentityVersion\x12H\n" +
-	"\x0eschema_version\x18\x04 \x01(\v2!.spillway.config.v1.SchemaVersionR\rschemaVersion\"\x97\x01\n" +
+	"\x0eschema_version\x18\x04 \x01(\v2!.spillway.config.v1.SchemaVersionR\rschemaVersion\x12\x14\n" +
+	"\x05epoch\x18\x05 \x01(\tR\x05epoch\"\x97\x01\n" +
 	"\rWatchResponse\x12:\n" +
 	"\x06config\x18\x01 \x01(\v2 .spillway.config.v1.ConfigUpdateH\x00R\x06config\x12@\n" +
 	"\bidentity\x18\x02 \x01(\v2\".spillway.config.v1.IdentityUpdateH\x00R\bidentityB\b\n" +
-	"\x06update\"\xcb\x01\n" +
+	"\x06update\"\xe1\x01\n" +
 	"\fConfigUpdate\x12H\n" +
 	"\x0eschema_version\x18\x01 \x01(\v2!.spillway.config.v1.SchemaVersionR\rschemaVersion\x122\n" +
 	"\x06config\x18\x02 \x01(\v2\x1a.spillway.config.v1.ConfigR\x06config\x12=\n" +
-	"\fpublished_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\vpublishedAt\"\x94\x01\n" +
+	"\fpublished_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\vpublishedAt\x12\x14\n" +
+	"\x05epoch\x18\x04 \x01(\tR\x05epoch\"\xaa\x01\n" +
 	"\x0eIdentityUpdate\x12H\n" +
 	"\x0eschema_version\x18\x01 \x01(\v2!.spillway.config.v1.SchemaVersionR\rschemaVersion\x128\n" +
-	"\bidentity\x18\x02 \x01(\v2\x1c.spillway.config.v1.IdentityR\bidentity\"\x8c\x04\n" +
+	"\bidentity\x18\x02 \x01(\v2\x1c.spillway.config.v1.IdentityR\bidentity\x12\x14\n" +
+	"\x05epoch\x18\x03 \x01(\tR\x05epoch\"\x8c\x04\n" +
 	"\x10HeartbeatRequest\x12\x1d\n" +
 	"\n" +
 	"replica_id\x18\x01 \x01(\tR\treplicaId\x12%\n" +
@@ -733,13 +776,14 @@ const file_config_service_proto_rawDesc = "" +
 	"\x06denied\x18\x05 \x01(\x03R\x06denied\x12#\n" +
 	"\rshadow_denied\x18\x06 \x01(\x03R\fshadowDenied\"8\n" +
 	"\x11HeartbeatResponse\x12#\n" +
-	"\rlive_replicas\x18\x01 \x01(\x05R\fliveReplicas\"\xa4\x02\n" +
+	"\rlive_replicas\x18\x01 \x01(\x05R\fliveReplicas\"\xba\x02\n" +
 	"\fSnapshotFile\x12H\n" +
 	"\x0eschema_version\x18\x01 \x01(\v2!.spillway.config.v1.SchemaVersionR\rschemaVersion\x122\n" +
 	"\x06config\x18\x02 \x01(\v2\x1a.spillway.config.v1.ConfigR\x06config\x128\n" +
 	"\bidentity\x18\x03 \x01(\v2\x1c.spillway.config.v1.IdentityR\bidentity\x127\n" +
 	"\tsynced_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\bsyncedAt\x12#\n" +
-	"\rlive_replicas\x18\x05 \x01(\x05R\fliveReplicas2\xb9\x01\n" +
+	"\rlive_replicas\x18\x05 \x01(\x05R\fliveReplicas\x12\x14\n" +
+	"\x05epoch\x18\x06 \x01(\tR\x05epoch2\xb9\x01\n" +
 	"\rConfigService\x12N\n" +
 	"\x05Watch\x12 .spillway.config.v1.WatchRequest\x1a!.spillway.config.v1.WatchResponse0\x01\x12X\n" +
 	"\tHeartbeat\x12$.spillway.config.v1.HeartbeatRequest\x1a%.spillway.config.v1.HeartbeatResponseB8Z6github.com/ankitbisht23/spillway/internal/gen/configpbb\x06proto3"

@@ -600,6 +600,18 @@ func (q *Queries) GetTenant(ctx context.Context, id int64) (Tenant, error) {
 	return i, err
 }
 
+const identityChangedAt = `-- name: IdentityChangedAt :one
+SELECT changed_at FROM identity_state WHERE id = 1
+`
+
+// identity_state_pkey. When the identity version was made (ADR-0055).
+func (q *Queries) IdentityChangedAt(ctx context.Context) (time.Time, error) {
+	row := q.db.QueryRow(ctx, identityChangedAt)
+	var changed_at time.Time
+	err := row.Scan(&changed_at)
+	return changed_at, err
+}
+
 const identityVersion = `-- name: IdentityVersion :one
 SELECT version FROM identity_state WHERE id = 1
 `

@@ -106,8 +106,25 @@ INSERT INTO plans (id, name, spec, version, created_at)
 VALUES (@id, @name, @spec, @version, coalesce(sqlc.narg(created_at)::timestamptz, clock_timestamp()));
 
 -- name: LatestVersions :one
--- config_versions_pkey backward scan and identity_state_pkey: the newest
--- config and identity versions, which the broadcaster compares with what it
--- holds every 10 s (ADR-0038).
+-- config_versions_pkey backward scans, identity_state_pkey and
+-- stream_epoch_pkey: the newest config and identity versions, when each was
+-- made (to_timestamp(0) before the first publish), and the stream epoch,
+-- which the broadcaster compares with what it holds every 10 s (ADR-0038,
+-- ADR-0055).
 SELECT (SELECT coalesce(max(version), 0) FROM config_versions)::bigint AS config_version,
-       (SELECT version FROM identity_state WHERE id = 1)::bigint AS identity_version;
+       coalesce((SELECT published_at FROM config_versions ORDER BY version DESC LIMIT 1), to_timestamp(0))::timestamptz AS config_at,
+       (SELECT version FROM identity_state WHERE id = 1)::bigint AS identity_version,
+       (SELECT changed_at FROM identity_state WHERE id = 1)::timestamptz AS identity_at,
+       coalesce((SELECT epoch FROM stream_epoch WHERE id = 1), '')::text AS epoch;
+
+-- name: StreamEpoch :one
+-- stream_epoch_pkey. Empty when the row is missing.
+SELECT coalesce((SELECT epoch FROM stream_epoch WHERE id = 1), '')::text AS epoch;
+
+-- name: RotateStreamEpoch :one
+-- stream_epoch_pkey. Sets epoch next when old is empty or is the epoch held
+-- (ADR-0055); no row when another value replaced old first.
+INSERT INTO stream_epoch (id, epoch) VALUES (1, @next::text)
+ON CONFLICT (id) DO UPDATE SET epoch = excluded.epoch, changed_at = clock_timestamp()
+WHERE @old::text = '' OR stream_epoch.epoch = @old::text
+RETURNING epoch;

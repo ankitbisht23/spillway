@@ -80,7 +80,7 @@ func TestStreamMTLS(t *testing.T) {
 	} {
 		before := logs.String()
 		_, hbErr := tc.client.Heartbeat(ctx, &configpb.HeartbeatRequest{ReplicaId: "gateway-1"})
-		s, err := tc.client.Watch(ctx, watchReq("gateway-1", 0, 0))
+		s, err := tc.client.Watch(ctx, watchReq("gateway-1", "", 0, 0))
 		if err == nil {
 			_, err = recv(t, s)
 		}
@@ -105,7 +105,7 @@ func TestStreamMTLS(t *testing.T) {
 	if _, err := gw.Heartbeat(ctx, &configpb.HeartbeatRequest{}); err != nil {
 		t.Fatal(err)
 	}
-	s, err := gw.Watch(ctx, watchReq("gateway-3", 0, 0))
+	s, err := gw.Watch(ctx, watchReq("gateway-3", "", 0, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
