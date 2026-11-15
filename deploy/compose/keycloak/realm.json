@@ -1,6 +1,11 @@
 {
   "realm": "spillway",
   "enabled": true,
+  "accessTokenLifespan": 300,
+  "ssoSessionIdleTimeout": 1800,
+  "ssoSessionMaxLifespan": 36000,
+  "revokeRefreshToken": true,
+  "refreshTokenMaxReuse": 0,
   "roles": {
     "realm": [
       { "name": "viewer", "description": "Reads everything except the audit log (CP-12)" },
@@ -18,11 +23,13 @@
       "standardFlowEnabled": true,
       "directAccessGrantsEnabled": false,
       "implicitFlowEnabled": false,
-      "redirectUris": ["http://localhost:5173/*", "http://localhost:8080/*"],
-      "webOrigins": ["http://localhost:5173", "http://localhost:8080"],
+      "serviceAccountsEnabled": false,
+      "consentRequired": false,
+      "redirectUris": ["http://localhost:8080/oidc/callback", "http://localhost:5173/oidc/callback"],
+      "webOrigins": ["http://localhost:8080", "http://localhost:5173"],
       "attributes": {
         "pkce.code.challenge.method": "S256",
-        "post.logout.redirect.uris": "http://localhost:5173/*##http://localhost:8080/*"
+        "post.logout.redirect.uris": "http://localhost:8080/signed-out##http://localhost:5173/signed-out"
       },
       "protocolMappers": [
         {
