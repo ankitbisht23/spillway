@@ -314,6 +314,7 @@ Prometheus scrapes RED metrics, limiter decisions and dependency health from the
 | `gw_retries_total` | counter | upstream, outcome (sent, budget\_exhausted) |
 | `gw_circuit_state` | gauge | upstream |
 | `gw_upstream_endpoint_healthy` | gauge | upstream, endpoint |
+| `gw_upstream_endpoint_ejected` | gauge | upstream, endpoint |
 | `gw_config_version`, `gw_identity_version` | gauge | none |
 | `gw_config_sync_age_seconds` | gauge | none (time since the last successful sync with the control plane) |
 
@@ -479,9 +480,9 @@ plans:
 | GET | `/api/v1/config/versions`, `/{v}/diff` | History and diffs |
 | GET | `/api/v1/policies/{id}/shadow-report` | Would-be denials over a window |
 | GET | `/api/v1/replicas` | Replicas, applied config and identity versions, last heartbeat |
-| GET | `/api/v1/metrics/query` | Named server-side Prometheus queries for the UI; never raw PromQL |
 | GET | `/api/v1/stream` | SSE: live metrics, replica status, heavy hitters, Playground results (demo mode) |
 | GET | `/api/v1/audit` | Audit log, paginated |
+| GET | `/api/v1/me` | The caller’s subject, display name and Spillway roles (UI-04) |
 
 Config entities (routes, upstreams, policies, plans) change the working set until a publish; identity entities (tenants, consumers, keys, overrides, access lists) apply immediately (CP-20). The spec is `api/openapi.yaml`; Go server stubs (oapi-codegen) and the UI client are generated from it (CP-10).
 
@@ -517,7 +518,7 @@ Limiter maths is proven with a fake clock and property tests, distributed accura
 | Accuracy | Admitted vs allowed per key across 1, 3, 5 replicas | Custom Go harness (below) |
 | Load | Throughput, added latency, scaling, regressions | `cmd/loadgen` (open model, HDR; fails a run below 99% of its target rate) for benchmarks, k6 for scenarios; results on the `bench-results` branch |
 | Chaos | Failure modes, draining, outage survival | toxiproxy, `docker kill`, `docker pause` |
-| UI | Screens and flows against a mocked API | Vitest, Testing Library, Playwright |
+| UI | Screens and hooks against a mocked network (MSW) with Vitest and Testing Library; main flows against the compose stack with a real Keycloak login (Playwright) | Vitest, Testing Library, Playwright |
 
 ### Accuracy harness
 
@@ -570,7 +571,7 @@ A reviewer should see the limiter earn its keep in under five minutes: `make dem
 - **SC-06** (M8) README: architecture diagram, one GIF per scenario, benchmark, accuracy and chaos tables, a quick start of three commands or fewer.
 - **SC-07** (M8) A 3–4 minute walkthrough video (D1, D2, D4, D5) and a live-demo script in `docs/demo.md`.
 - **SC-08** (M8) Demo mode is off by default: Playground, demo endpoints and fault switches return 404 unless `DEMO_MODE=true`, and demo keys expire after 30 minutes with their own limits.
-- **SC-09** (M8) Public demo: one reverse proxy (Caddy, port 8888) behind one tunnel — UI at `/`, Keycloak at `/auth`, Grafana at `/grafana`. `make demo-share` starts a quick tunnel and, from its URL, sets Keycloak’s `KC_HOSTNAME`, the control plane’s and gateways’ expected issuer (`<url>/auth/realms/spillway`), the UI’s OIDC authority and Grafana’s root URL, adds `<url>/*` to the `admin-ui` client’s redirect URIs and web origins through the Keycloak admin API, and restarts what changed; a named tunnel gives a stable link.
+- **SC-09** (M8) Public demo: one reverse proxy (Caddy, port 8888) behind one tunnel — UI at `/`, Keycloak at `/auth`, Grafana at `/grafana`. `make demo-share` starts a quick tunnel and, from its URL, sets Keycloak’s `KC_HOSTNAME`, the control plane’s and gateways’ expected issuer (`<url>/auth/realms/spillway`), the UI’s OIDC authority and Grafana’s root URL, adds `<url>/oidc/callback` to the `admin-ui` client’s redirect URIs, `<url>/signed-out` to its post-logout redirect URIs and `<url>` to its web origins through the Keycloak admin API, and restarts what changed; a named tunnel gives a stable link.
 
 ## Build plan
 
@@ -778,7 +779,7 @@ spillway/
 | RPC | gRPC for the config stream; `buf` for lint and breaking-change checks from M1 |
 | Config and API schemas | `api/proto/config.proto` for config (protojson for YAML and jsonb); OpenAPI-first `api/openapi.yaml` with oapi-codegen server stubs and a generated UI client |
 | Telemetry | Prometheus client (scraped from admin ports); OpenTelemetry SDK with OTLP for traces; `log/slog` with JSON to stdout plus an OTLP handler for logs |
-| UI | React, TypeScript, Vite, TanStack Query and Router, Recharts or ECharts, pnpm |
+| UI | React, TypeScript, Vite, TanStack Query and Router, uPlot, pnpm |
 | Identity (dev, demo) | Keycloak (OIDC, PKCE; JWT issuer for tests) |
 | Testing | testcontainers-go, `rapid`, Go fuzzing, `cmd/loadgen`, k6, toxiproxy, Vitest, Playwright |
 | Deploy | Docker, docker compose (every Spillway process as a compose service, ADR-0004), Helm, kind (gateway as the edge, no ingress controller) |
