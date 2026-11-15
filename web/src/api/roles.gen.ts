@@ -32,6 +32,7 @@ export const operationRoles = {
   getPlan: ["viewer", "editor", "publisher", "key-admin", "admin"],
   getPolicy: ["viewer", "editor", "publisher", "key-admin", "admin"],
   getRoute: ["viewer", "editor", "publisher", "key-admin", "admin"],
+  getShadowReport: ["viewer", "editor", "publisher", "key-admin", "admin"],
   getTenant: ["viewer", "editor", "publisher", "key-admin", "admin"],
   getUpstream: ["viewer", "editor", "publisher", "key-admin", "admin"],
   importConfig: ["editor", "admin"],
