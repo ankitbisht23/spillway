@@ -1534,6 +1534,13 @@ paths:
             range). throttling.heavy_hitters: the top 50 throttled keys since
             the range's start (HeavyHitterList; range, policy_id). replicas: the
             gateway replicas with their staleness (StreamReplicas).
+            routes.endpoints: each gateway replica's upstream endpoints now,
+            by resolved address, with stat healthy (1 while it takes traffic)
+            and ejected (1 while outlier detection has it ejected), labelled
+            replica, upstream, endpoint and stat (vector; no parameters).
+            routes.circuits: each gateway replica's circuit state per upstream
+            now, 0 closed, 1 open, 2 half-open, labelled replica and upstream
+            (vector; no parameters).
           style: form
           explode: true
           schema:
@@ -2478,7 +2485,7 @@ components:
     StreamQueryName:
       type: string
       description: A named query of the stream's catalogue (ADR-0059); openStream's sub parameter says what each answers.
-      enum: [overview.requests, overview.ratelimited, overview.latency, overview.routes, overview.tenants, throttling.policies, throttling.heavy_hitters, replicas]
+      enum: [overview.requests, overview.ratelimited, overview.latency, overview.routes, overview.tenants, throttling.policies, throttling.heavy_hitters, replicas, routes.endpoints, routes.circuits]
     StreamReady:
       type: object
       additionalProperties: false

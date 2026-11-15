@@ -178,6 +178,35 @@ func TestStreamCatalogueOnPrometheus(t *testing.T) {
 	if !ok {
 		t.Error("overview.requests shows no series 30 s after gateway-1's requests")
 	}
+
+	// routes.*: gateway-1's endpoints, healthy and ejected, and its
+	// circuits, labelled with its replica name by the scrape (ADR-0059).
+	// 30 s: a fresh gateway shows within two scrapes.
+	req, _ = http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/?sub=routes.endpoints&sub=routes.circuits", nil)
+	resp2, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp2.Body.Close() }()
+	has := func(e streamEvent, label, value string) bool {
+		series, _ := e.data["data"].(map[string]any)["series"].([]any)
+		for _, s := range series {
+			l, _ := s.(map[string]any)["labels"].(map[string]any)
+			if l["replica"] == "gateway-1" && l[label] == value {
+				return true
+			}
+		}
+		return false
+	}
+	events, ok := readEvents(t, bufio.NewReader(resp2.Body), 30*time.Second, func(ev []streamEvent) bool {
+		last := lastBySub(ev)
+		eps, circuits := last["routes.endpoints"], last["routes.circuits"]
+		return eps.name == "result" && has(eps, "stat", "healthy") && has(eps, "stat", "ejected") &&
+			circuits.name == "result" && has(circuits, "upstream", "httpbin")
+	})
+	if !ok {
+		t.Errorf("routes.endpoints and routes.circuits show no gateway-1 series in 30 s: %v", events)
+	}
 }
 
 // TestComposeStream opens the compose control plane's stream with Keycloak

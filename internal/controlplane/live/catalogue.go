@@ -50,8 +50,7 @@ type query struct {
 	eval   func(ctx context.Context, h *Hub, p Params, at time.Time) (any, error)
 }
 
-// catalogue is every named query, by name (ADR-0059's table; routes.*
-// arrive with the routes task, ADR-0060).
+// catalogue is every named query, by name (ADR-0059's table).
 var catalogue = map[string]*query{
 	"overview.requests":    {source: fromPrometheus, params: []string{paramRoute, paramTenant, paramRange}, eval: evalRequests},
 	"overview.ratelimited": {source: fromPrometheus, params: []string{paramRoute, paramTenant, paramRange}, eval: evalRateLimited},
@@ -65,6 +64,8 @@ var catalogue = map[string]*query{
 	"replicas": {source: fromPostgres, eval: func(ctx context.Context, h *Hub, _ Params, _ time.Time) (any, error) {
 		return h.cfg.Postgres.Replicas(ctx)
 	}},
+	"routes.endpoints": {source: fromPrometheus, eval: evalEndpoints},
+	"routes.circuits":  {source: fromPrometheus, eval: evalCircuits},
 }
 
 func init() {
@@ -375,4 +376,49 @@ func evalTop(by string) func(ctx context.Context, h *Hub, p Params, at time.Time
 
 func evalPolicies(ctx context.Context, h *Hub, p Params, at time.Time) (any, error) {
 	return h.rangeQuery(ctx, p.Range, at, fmt.Sprintf(`sum by (policy, mode) (rate(gw_ratelimit_decisions_total{decision="deny"}[%s]))`, p.Range.window))
+}
+
+// evalEndpoints is routes.endpoints: each gateway replica's endpoints with
+// gw_upstream_endpoint_healthy and gw_upstream_endpoint_ejected now, as
+// series labelled replica, upstream, endpoint and stat (healthy or
+// ejected), sorted. Healthy 0 and ejected 0 is an endpoint failing its
+// health checks (ADR-0059).
+func evalEndpoints(ctx context.Context, h *Hub, _ Params, at time.Time) (any, error) {
+	out := vector{Kind: "vector", Series: []sample{}}
+	for _, stat := range []string{"healthy", "ejected"} {
+		v, err := h.instantQuery(ctx, at, fmt.Sprintf(`max by (replica, upstream, endpoint) (gw_upstream_endpoint_%s)`, stat))
+		if err != nil {
+			return nil, err
+		}
+		for _, s := range v.Series {
+			s.Labels["stat"] = stat
+			out.Series = append(out.Series, s)
+		}
+	}
+	sortSamples(out.Series, "replica", "upstream", "endpoint", "stat")
+	return out, nil
+}
+
+// evalCircuits is routes.circuits: each gateway replica's circuit state
+// per upstream now (0 closed, 1 open, 2 half-open), as series labelled
+// replica and upstream, sorted.
+func evalCircuits(ctx context.Context, h *Hub, _ Params, at time.Time) (any, error) {
+	v, err := h.instantQuery(ctx, at, `max by (replica, upstream) (gw_circuit_state)`)
+	if err != nil {
+		return nil, err
+	}
+	sortSamples(v.Series, "replica", "upstream")
+	return v, nil
+}
+
+// sortSamples orders s by the values of the given labels, in turn.
+func sortSamples(s []sample, by ...string) {
+	slices.SortFunc(s, func(a, b sample) int {
+		for _, l := range by {
+			if c := strings.Compare(a.Labels[l], b.Labels[l]); c != 0 {
+				return c
+			}
+		}
+		return 0
+	})
 }
