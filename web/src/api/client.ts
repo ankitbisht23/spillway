@@ -2,6 +2,7 @@
 // paths of api/openapi.yaml, same origin, so no CORS and no credentials.
 import createClient from "openapi-fetch";
 
+import { authFetch } from "../auth/session";
 import { apiErrorFrom, networkError } from "./errors";
 import type { paths } from "./schema.gen";
 
@@ -13,6 +14,9 @@ export function createApi(fetchFn: Fetch = (req) => fetch(req)) {
 }
 
 export type Api = ReturnType<typeof createApi>;
+
+/** The app's client: bearer token from the session, one retry on a 401 (ADR-0058). */
+export const api = createApi(authFetch);
 
 interface Result {
   data?: unknown;
