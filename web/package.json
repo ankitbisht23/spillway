@@ -3,12 +3,39 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "lint": "eslint . && tsc --noEmit"
+    "dev": "vite",
+    "build": "vite build",
+    "gen": "openapi-typescript ../api/openapi.yaml -o src/api/schema.gen.ts",
+    "gen:check": "node scripts/gen-check.mjs",
+    "lint": "eslint . && tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json",
+    "test": "vitest run --coverage"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
+    "@testing-library/dom": "10.4.2",
+    "@testing-library/jest-dom": "7.0.1",
+    "@testing-library/react": "16.3.3",
+    "@testing-library/user-event": "14.6.8",
+    "@types/node": "26.6.6",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.2",
+    "@vitest/coverage-v8": "5.0.5",
     "eslint": "10.14.0",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "jsdom": "30.1.3",
+    "msw": "3.0.3",
+    "openapi-typescript": "7.13.0",
     "typescript": "6.0.3",
-    "typescript-eslint": "8.72.1"
+    "typescript-eslint": "8.72.1",
+    "vite": "8.3.5",
+    "vitest": "5.0.5"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "5.105.1",
+    "@tanstack/react-router": "1.170.46",
+    "openapi-fetch": "0.17.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
   }
 }

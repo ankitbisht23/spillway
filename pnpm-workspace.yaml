@@ -10,3 +10,10 @@ overrides:
 
 minimumReleaseAgeExclude:
   - minimatch@11.0.4
+
+peerDependencyRules:
+  allowedVersions:
+    # openapi-typescript 7.13.0 asks for typescript ^5.x; generation works
+    # under 6.0.3 and make lint-web's drift check proves it on every PR
+    # (ADR-0057).
+    openapi-typescript>typescript: 6.0.3

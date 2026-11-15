@@ -4,3 +4,14 @@
 !go.sum
 !cmd/
 !internal/
+# The admin UI's sources for the web stage (ADR-0057); never a local build
+# or test output.
+!package.json
+!pnpm-workspace.yaml
+!pnpm-lock.yaml
+!web/
+web/node_modules
+web/playwright-report
+web/test-results
+web/coverage
+internal/controlplane/webui/dist
