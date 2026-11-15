@@ -11,7 +11,7 @@ FUZZTIME ?= 5s
 # Committed dev defaults first, then local overrides if present (ADR-0004).
 COMPOSE := docker compose --env-file .env.example $(if $(wildcard .env.local),--env-file .env.local)
 
-.PHONY: tools hooks certs dev test test-go test-web fuzz test-integration proto api sqlc web-gen web-build lint lint-go lint-web lint-proto lint-api lint-sql bench verify-m0 verify-m0-stack verify-m1 verify-m1-reload verify-m2 verify-m2-shadow verify-m3 verify-m4 verify-m5 accuracy chaos-redis-outage chaos-redis-primary chaos-cp-outage
+.PHONY: tools hooks certs dev test test-go test-web test-e2e fuzz test-integration proto api sqlc web-gen web-build lint lint-go lint-web lint-proto lint-api lint-sql bench verify-m0 verify-m0-stack verify-m1 verify-m1-reload verify-m2 verify-m2-shadow verify-m3 verify-m4 verify-m5 accuracy chaos-redis-outage chaos-redis-primary chaos-cp-outage
 
 # Host-run processes and tests reach Redis Cluster nodes through this map
 # (ADR-0004). Set only here, never in compose or .env files.
@@ -122,6 +122,15 @@ test-go:
 # The admin UI's Vitest suite with its coverage thresholds (ADR-0061).
 test-web:
 	pnpm -C web test
+
+# The admin UI's Playwright flows (ADR-0061): Chromium against the compose
+# stack's embedded UI and the real Keycloak. Needs Chromium once:
+# pnpm -C web exec playwright install chromium. After a passing run the
+# report and results are removed; after a failing one they stay for
+# diagnosis (both gitignored).
+test-e2e: dev
+	pnpm -C web e2e
+	rm -rf web/playwright-report web/test-results
 
 # Runs each Fuzz* target for FUZZTIME (go test -fuzz takes one target per run).
 fuzz:

@@ -144,9 +144,53 @@ jobs:
           docker compose ps -a
           docker compose logs --no-color --tail 200
 
+  # The admin UI's main flows (D10, ADR-0061): Chromium against make dev's
+  # embedded UI and the real Keycloak, every test under the leak guard.
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod # make certs installs mkcert with go
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: make dev
+        run: make dev
+      - name: Playwright version
+        id: playwright
+        run: echo "version=$(pnpm -C web exec playwright --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
+      - name: Chromium and its OS packages
+        run: pnpm -C web exec playwright install --with-deps chromium
+      - name: Playwright flows (ADR-0061)
+        run: make test-e2e
+      - name: Compose state and logs
+        if: failure()
+        run: |
+          docker compose ps -a
+          docker compose logs --no-color --tail 200
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: playwright
+          path: |
+            web/playwright-report
+            web/test-results
+          retention-days: 7
+
   ci-ok:
     if: always()
-    needs: [go, web, gitleaks, image, integration]
+    needs: [go, web, gitleaks, image, integration, e2e]
     runs-on: ubuntu-latest
     steps:
       - name: Every job succeeded
