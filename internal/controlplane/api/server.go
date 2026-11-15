@@ -55,7 +55,10 @@ type Server struct {
 	// (ADR-0053).
 	hitterSecret secret.Value
 	streams      *live.Hub // GET /stream (ADR-0059); nil answers 503
-	log          *slog.Logger
+	// prometheus answers the shadow report's counts (ADR-0060); nil
+	// leaves them null.
+	prometheus *live.Prometheus
+	log        *slog.Logger
 }
 
 // Allowlist is the upstream allow-list of SEC-06, the same networks as the

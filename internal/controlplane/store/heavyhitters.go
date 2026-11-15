@@ -4,10 +4,13 @@ import (
 	"cmp"
 	"context"
 	"encoding/base64"
+	"errors"
 	"maps"
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/ankitbisht23/spillway/internal/controlplane/store/db"
 	"github.com/ankitbisht23/spillway/internal/gen/configpb"
@@ -42,6 +45,44 @@ func (s *Store) TopHeavyHitters(ctx context.Context, f HeavyHitterFilter, limit 
 	out := make([]HeavyHitter, len(rows))
 	for i, r := range rows {
 		out[i] = HeavyHitter(r)
+	}
+	return out, nil
+}
+
+// ShadowKey is a key digest's throttled requests under one policy summed
+// over a time range, with the latest consumer and API key IDs, 0 for none.
+type ShadowKey = db.ShadowReportKeysRow
+
+// ShadowKeys are what the shadow report reads from a policy's heavy-hitter
+// windows (UI-01, ADR-0060).
+type ShadowKeys struct {
+	// Keys are at most limit keys, most shadow would-denies first.
+	Keys []ShadowKey
+	// ShadowDenied sums the shadow would-denies of every key.
+	ShadowDenied int64
+	// Oldest is the start of the policy's oldest window kept, nil if none.
+	Oldest *time.Time
+}
+
+// ShadowKeys returns the policy's windows that start at or after since,
+// summed by key digest, and the start of its oldest window kept.
+func (s *Store) ShadowKeys(ctx context.Context, policy int64, since time.Time, limit int32) (ShadowKeys, error) {
+	q := db.New(s.pool)
+	var out ShadowKeys
+	var err error
+	if out.Keys, err = q.ShadowReportKeys(ctx, db.ShadowReportKeysParams{PolicyID: policy, Since: since, Lim: limit}); err != nil {
+		return out, err
+	}
+	if out.ShadowDenied, err = q.ShadowReportTotal(ctx, db.ShadowReportTotalParams{PolicyID: policy, Since: since}); err != nil {
+		return out, err
+	}
+	oldest, err := q.OldestHeavyHitterWindow(ctx, policy)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+	case err != nil:
+		return out, err
+	default:
+		out.Oldest = &oldest
 	}
 	return out, nil
 }

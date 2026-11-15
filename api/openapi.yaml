@@ -384,6 +384,39 @@ paths:
         '412': { $ref: '#/components/responses/PreconditionFailed' }
         '428': { $ref: '#/components/responses/PreconditionRequired' }
         default: { $ref: '#/components/responses/Error' }
+  /policies/{id}/shadow-report:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      operationId: getShadowReport
+      tags: [config]
+      summary: >-
+        What a policy of the latest published config version did, or would
+        have done, over a window ending now (UI-01, RL-21, ADR-0060): its
+        decisions in shadow and in enforce mode from Prometheus
+        (gw_ratelimit_decisions_total, by the policy's published name), and
+        its top keys from the heavy-hitter windows (by its ID), with how much
+        of the window each source covers. Without Prometheus the counts are
+        null and metrics_error says why; the keys still answer
+      x-spillway-roles: [viewer, editor, publisher, key-admin, admin]
+      parameters:
+        - name: window
+          in: query
+          description: The window, ending now; 1h by default.
+          schema: { type: string, enum: ['15m', '1h', '24h', '7d'], default: '1h' }
+      responses:
+        '200':
+          description: The report
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ShadowReport' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404':
+          description: No such policy in the latest published config version (not_found)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        default: { $ref: '#/components/responses/Error' }
   /plans:
     get:
       operationId: listPlans
@@ -2266,6 +2299,56 @@ components:
         api_key_id: { type: integer, format: int64, nullable: true, description: The API key of the window's latest throttled request that had one; null when none did. }
         denied: { type: integer, format: int64 }
         shadow_denied: { type: integer, format: int64 }
+
+    # The shadow report (UI-01, ADR-0060).
+    ShadowReport:
+      type: object
+      additionalProperties: false
+      required: [policy_id, policy_name, mode, config_version, window, since, until, evaluated, would_deny, share, enforce_evaluated, denied, enforce_share, metrics_since, metrics_error, keys, keys_shadow_denied_total, keys_since]
+      properties:
+        policy_id: { type: integer, format: int64 }
+        policy_name: { type: string, description: "The policy's name in the latest published config version: the metric's policy label. Counts under an earlier name are not included." }
+        mode: { type: string, description: 'Its mode in that version: enforce, shadow or off.' }
+        config_version: { type: integer, format: int64, description: The latest published config version. }
+        window: { type: string, enum: ['15m', '1h', '24h', '7d'] }
+        since: { type: string, format: date-time, description: The window's start. }
+        until: { type: string, format: date-time, description: The window's end, now. }
+        evaluated: { type: number, format: double, nullable: true, description: 'Decisions the policy made in shadow mode (Prometheus increase(), an estimate); null without Prometheus.' }
+        would_deny: { type: number, format: double, nullable: true, description: Of those, the requests it would have denied. }
+        share: { type: number, format: double, nullable: true, description: 'would_deny / evaluated; null when nothing was evaluated.' }
+        enforce_evaluated: { type: number, format: double, nullable: true, description: Decisions the policy made in enforce mode, as after a promotion. }
+        denied: { type: number, format: double, nullable: true, description: Of those, the requests it denied. }
+        enforce_share: { type: number, format: double, nullable: true, description: 'denied / enforce_evaluated; null when nothing was evaluated.' }
+        metrics_since:
+          type: string
+          format: date-time
+          nullable: true
+          description: "Where Prometheus's data starts within the window: the later of since and its oldest sample (prometheus_tsdb_lowest_timestamp_seconds); null without Prometheus, or when Prometheus does not report its oldest sample."
+        metrics_error:
+          type: string
+          nullable: true
+          enum: [prometheus_not_configured, prometheus_unavailable, query_failed]
+          description: Why the Prometheus fields are null; null when they are not.
+        keys:
+          type: array
+          description: "The policy's top keys in the window, at most 50, most shadow would-denies first, then most denies. Heavy hitters are each replica's top 100 throttled keys per heartbeat (RL-21), so these are the heaviest keys, not all of them."
+          items: { $ref: '#/components/schemas/ShadowReportKey' }
+        keys_shadow_denied_total: { type: integer, format: int64, description: 'The shadow would-denies of every key in the windows, the 50 shown or not; below would_deny when keys outside the top lists would-denied.' }
+        keys_since:
+          type: string
+          format: date-time
+          nullable: true
+          description: "Where the heavy-hitter windows start within the window: the later of since and the policy's oldest window kept (7 days, CP-22); null when it has none."
+    ShadowReportKey:
+      type: object
+      additionalProperties: false
+      required: [key_digest, consumer_id, api_key_id, shadow_denied, denied]
+      properties:
+        key_digest: { type: string, description: The keyed digest of the filled key template (ADR-0053), never the key. }
+        consumer_id: { type: integer, format: int64, nullable: true }
+        api_key_id: { type: integer, format: int64, nullable: true }
+        shadow_denied: { type: integer, format: int64 }
+        denied: { type: integer, format: int64 }
 
     # Pages (UI-06): next_cursor is null on the last page.
     UpstreamList:
