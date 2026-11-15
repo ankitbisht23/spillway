@@ -1,6 +1,6 @@
 # 0050. Plans, overrides and access lists: details
 
-- **Status:** Accepted
+- **Status:** Accepted; key-level entries across a rotation refined by [ADR-0054](0054-key-rotation-carries-key-level-access-list-entries.md)
 - **Date:** 2026-11-14
 - **Requirement IDs:** RL-08, RL-09, RL-03, RL-13, RL-25, RL-31, CP-03, CP-04, CP-20, GW-29, SEC-03
 
