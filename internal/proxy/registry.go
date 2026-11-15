@@ -37,7 +37,8 @@ type Resolver interface {
 // health and outlier state, keyed by the endpoint's resolved ip:port. A
 // reload keeps the state of the upstreams and endpoints it still has (GW-29,
 // ADR-0030). The registry is a Prometheus collector of
-// gw_upstream_endpoint_healthy and gw_circuit_state.
+// gw_upstream_endpoint_healthy, gw_upstream_endpoint_ejected and
+// gw_circuit_state.
 type Registry struct {
 	allow    Allowlist
 	resolver Resolver
@@ -46,6 +47,7 @@ type Registry struct {
 	clock    resilience.Clock
 	probes   *http.Transport // health checks', apart from the request pools (ADR-0030)
 	healthy  *prometheus.Desc
+	ejected  *prometheus.Desc
 	circuit  *prometheus.Desc
 	ctx      context.Context // probers run until it ends (Close)
 	cancel   context.CancelFunc
@@ -106,6 +108,8 @@ func NewRegistry(allow Allowlist, resolver Resolver, log *slog.Logger) *Registry
 		clock:    ratelimit.SystemClock,
 		healthy: prometheus.NewDesc("gw_upstream_endpoint_healthy",
 			"1 while the endpoint takes traffic (healthy and not ejected), else 0.", []string{"upstream", "endpoint"}, nil),
+		ejected: prometheus.NewDesc("gw_upstream_endpoint_ejected",
+			"1 while outlier detection has the endpoint ejected, else 0.", []string{"upstream", "endpoint"}, nil),
 		circuit: prometheus.NewDesc("gw_circuit_state",
 			"The upstream's circuit breaker: 0 closed, 1 open, 2 half-open.", []string{"upstream"}, nil),
 	}
@@ -640,11 +644,22 @@ func (p *pool) record(e *endpoint, now time.Time, failed bool) {
 func (e *endpoint) ejected(now time.Time) bool { return e.outlier.Ejected(now) }
 
 // Describe and Collect make the registry a Prometheus collector of
-// gw_upstream_endpoint_healthy, one series per endpoint while it exists, and
-// gw_circuit_state, one per upstream.
+// gw_upstream_endpoint_healthy and gw_upstream_endpoint_ejected, one series
+// each per endpoint while it exists, and gw_circuit_state, one per upstream.
+// Healthy 0 with ejected 0 is an endpoint failing its health checks
+// (ADR-0059).
 func (r *Registry) Describe(ch chan<- *prometheus.Desc) {
 	ch <- r.healthy
+	ch <- r.ejected
 	ch <- r.circuit
+}
+
+// oneIf is 1 for true, else 0.
+func oneIf(b bool) float64 {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 func (r *Registry) Collect(ch chan<- prometheus.Metric) {
@@ -652,11 +667,8 @@ func (r *Registry) Collect(ch chan<- prometheus.Metric) {
 	for _, p := range *r.pools.Load() {
 		ch <- prometheus.MustNewConstMetric(r.circuit, prometheus.GaugeValue, float64(p.breaker.State()), p.name)
 		for _, e := range *p.endpoints.Load() {
-			v := 0.0
-			if e.selectable(now) {
-				v = 1
-			}
-			ch <- prometheus.MustNewConstMetric(r.healthy, prometheus.GaugeValue, v, p.name, e.addr)
+			ch <- prometheus.MustNewConstMetric(r.healthy, prometheus.GaugeValue, oneIf(e.selectable(now)), p.name, e.addr)
+			ch <- prometheus.MustNewConstMetric(r.ejected, prometheus.GaugeValue, oneIf(e.ejected(now)), p.name, e.addr)
 		}
 	}
 }

@@ -37,6 +37,7 @@ gw_request_duration_seconds_count{route="default",tenant="none"} `,
 		`
 gw_upstream_duration_seconds_count{attempt="1",upstream="httpbin"} `,
 		"\ngw_upstream_endpoint_healthy{endpoint=",
+		"\ngw_upstream_endpoint_ejected{endpoint=",
 	} {
 		if !strings.Contains(metrics, m) {
 			t.Errorf("admin /metrics has no %s", strings.TrimSpace(m))

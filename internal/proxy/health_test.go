@@ -28,6 +28,13 @@ var discard = slog.New(slog.DiscardHandler)
 // "upstream endpoint".
 func endpointGauge(t *testing.T, r *Registry) map[string]float64 {
 	t.Helper()
+	return endpointMetric(t, r, "gw_upstream_endpoint_healthy")
+}
+
+// endpointMetric gathers the per-endpoint gauge name from r, by "upstream
+// endpoint".
+func endpointMetric(t *testing.T, r *Registry, name string) map[string]float64 {
+	t.Helper()
 	reg := prometheus.NewPedanticRegistry()
 	reg.MustRegister(r)
 	mfs, err := reg.Gather()
@@ -36,7 +43,7 @@ func endpointGauge(t *testing.T, r *Registry) map[string]float64 {
 	}
 	out := map[string]float64{}
 	for _, mf := range mfs {
-		if mf.GetName() != "gw_upstream_endpoint_healthy" {
+		if mf.GetName() != name {
 			continue
 		}
 		for _, m := range mf.GetMetric() {
@@ -197,6 +204,10 @@ func TestHealthChecks(t *testing.T) {
 
 	a.probeStatus.Store(http.StatusServiceUnavailable)
 	waitFor(t, "a unhealthy", func() bool { return gauge(a) == 0 })
+	// Failing health checks is not an ejection (ADR-0059).
+	if ej := endpointMetric(t, g.reg, "gw_upstream_endpoint_ejected"); ej["u "+a.addr()] != 0 || ej["u "+b.addr()] != 0 || len(ej) != 2 {
+		t.Errorf("gw_upstream_endpoint_ejected = %v, want 0 for a and b", ej)
+	}
 	if _, from := g.served(t, 6); strings.Join(from, ",") != "b,b,b,b,b,b" {
 		t.Errorf("with a unhealthy, served by %v, want only b", from)
 	}
@@ -257,6 +268,7 @@ func TestOutlierEjection(t *testing.T) {
 	clock := ratelimit.NewFakeClock(t0)
 	g.reg.clock = clock
 	gauge := func() float64 { return endpointGauge(t, g.reg)["u "+a.addr()] }
+	ejected := func() float64 { return endpointMetric(t, g.reg, "gw_upstream_endpoint_ejected")["u "+a.addr()] }
 	for i, want := range []time.Duration{10 * time.Second, 20 * time.Second, 25 * time.Second} {
 		failures := 0
 		for range 20 {
@@ -266,8 +278,8 @@ func TestOutlierEjection(t *testing.T) {
 				}
 			}
 		}
-		if failures != 2 || gauge() != 0 {
-			t.Fatalf("ejection %d: %d failures from a, gauge %v; want ejected after 2", i+1, failures, gauge())
+		if failures != 2 || gauge() != 0 || ejected() != 1 {
+			t.Fatalf("ejection %d: %d failures from a, healthy %v, ejected %v; want ejected after 2", i+1, failures, gauge(), ejected())
 		}
 		if codes, from := g.served(t, 6); strings.Contains(strings.Join(from, ","), "a") || strings.Contains(fmt.Sprint(codes), "503") {
 			t.Errorf("ejection %d: %v from %v while a is ejected", i+1, codes, from)
@@ -280,8 +292,8 @@ func TestOutlierEjection(t *testing.T) {
 			t.Fatalf("ejection %d ended before %v", i+1, want)
 		}
 		clock.Advance(time.Nanosecond)
-		if gauge() != 1 {
-			t.Fatalf("ejection %d did not end after %v", i+1, want)
+		if gauge() != 1 || ejected() != 0 {
+			t.Fatalf("ejection %d did not end after %v: healthy %v, ejected %v", i+1, want, gauge(), ejected())
 		}
 	}
 	a.status.Store(0)
