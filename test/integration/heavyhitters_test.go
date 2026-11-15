@@ -8,15 +8,23 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
+	"github.com/pressly/goose/v3"
+
 	"github.com/ankitbisht23/spillway/internal/controlplane/store"
 	"github.com/ankitbisht23/spillway/internal/gen/apiv1"
 	"github.com/ankitbisht23/spillway/internal/gen/configpb"
+	"github.com/ankitbisht23/spillway/internal/heavyhitters"
+	"github.com/ankitbisht23/spillway/internal/ratelimit"
 	rlredis "github.com/ankitbisht23/spillway/internal/ratelimit/redis"
 )
 
@@ -140,9 +148,10 @@ func TestHeavyHitterWindows(t *testing.T) {
 
 // TestHeavyHittersReported is RL-21 end to end: a managed gateway
 // throttles a key, enforce and shadow, and the key shows up in GET
-// /heavy-hitters with its denies and shadow would-denies, under the
-// digest of its filled key template; the key itself appears in no answer
-// and in no log of the gateway or the control plane.
+// /heavy-hitters with its denies and shadow would-denies, under the keyed
+// digest of its filled key template (ADR-0053), not the unkeyed one of its
+// Redis key; the key itself appears in no answer and in no log of the
+// gateway or the control plane.
 func TestHeavyHittersReported(t *testing.T) {
 	iss := newTestIssuer(t)
 	db := migratedDatabase(t)
@@ -190,7 +199,10 @@ func TestHeavyHittersReported(t *testing.T) {
 	if denied != 10 {
 		t.Fatalf("%d of 30 denied, want 10", denied)
 	}
-	digest := rlredis.Digest(key)
+	digest := heavyhitters.Pseudonym([]byte(hitterSecret), ratelimit.Key(key))
+	if digest == rlredis.Digest(key) {
+		t.Fatal("the reported digest is the limiter key's")
+	}
 	want := []hitter{{shadow, digest, 0, 0, 0, 25}, {enforce, digest, 0, 0, 10, 0}}
 	var got []hitter
 	took := eventually(t, "the throttled key in /heavy-hitters", func() bool {
@@ -205,8 +217,145 @@ func TestHeavyHittersReported(t *testing.T) {
 	}
 	body := string(cp.rest.must(200, "GET", "/heavy-hitters", nil).body)
 	for name, out := range map[string]string{"the API answer": body, "the gateway's log": gw.out.String(), "the control plane's log": cp.out.String()} {
-		if strings.Contains(out, key) {
-			t.Errorf("the raw key appears in %s", name)
+		if strings.Contains(out, key) || strings.Contains(out, rlredis.Digest(key)) {
+			t.Errorf("the raw key or its unkeyed digest appears in %s", name)
+		}
+	}
+}
+
+// lookupHitters is POST /heavy-hitters/lookup's answer to c.
+func lookupHitters(t *testing.T, c cpClient, want int, body map[string]any) apiv1.HeavyHitterLookupResult {
+	t.Helper()
+	var r apiv1.HeavyHitterLookupResult
+	a := c.must(want, "POST", "/heavy-hitters/lookup", body)
+	if want == 200 {
+		a.decode(t, &r)
+	}
+	return r
+}
+
+// TestHeavyHitterLookup is ADR-0053 end to end: a managed gateway behind
+// a trusted proxy throttles a client IP, which GET /heavy-hitters shows
+// only as its keyed digest; an admin's lookup of the IP computes the same
+// digest and finds its windows, an IPv4-mapped form included, and is in
+// the audit log with the digest but not the IP; every other role is
+// refused; a subject that does not fill the template, a policy that is not
+// published and an {api_key} template are refused; neither the IP nor the
+// secret reaches the control plane's log.
+func TestHeavyHitterLookup(t *testing.T) {
+	iss := newTestIssuer(t)
+	db := migratedDatabase(t)
+	grpcAddr := freeAddr(t)
+	cp := startCP(t, "controlplane", db, grpcAddr, iss)
+	r := newRoles(t, cp.rest, iss)
+	config := fmt.Sprintf(`upstreams: [{name: u, endpoints: [{address: '%s'}]}]
+routes: [{name: r, upstream: u, match: {path_prefix: /r}}]
+policies:
+  - name: per-ip
+    level: global
+    algorithm: gcra
+    local: true
+    key_template: '{ip}'
+    match: {routes: ['*']}
+    limits: [{rate: 5, period: 1h, burst: 5}]
+  - name: per-key
+    level: consumer
+    algorithm: gcra
+    local: true
+    key_template: '{api_key}'
+    match: {routes: ['*']}
+    limits: [{rate: 1000, period: 1s, burst: 1000}]
+`, upstreamAnswering(t, "ok"))
+	v := publishYAML(t, cp.rest, []byte(config), "per-ip and per-key")
+	gw := startManaged(t, "gateway-1", grpcAddr, t.TempDir(), "SPILLWAY_GATEWAY_TRUSTED_PROXIES=127.0.0.0/8")
+	eventually(t, "gateway-1 live at the published version", func() bool { return liveAt(listReplicas(t, cp.rest, ""), []string{"gateway-1"}, v, 1) })
+	policyID := func(name string) int64 {
+		var l apiv1.PolicyList
+		cp.rest.must(200, "GET", "/policies?name="+name, nil).decode(t, &l)
+		if len(l.Items) != 1 || l.Items[0].Id == nil {
+			t.Fatalf("policy %s: %+v", name, l)
+		}
+		return *l.Items[0].Id
+	}
+	perIP, perKey := policyID("per-ip"), policyID("per-key")
+
+	// 8 requests from one client IP: 5 admitted, 3 denied.
+	const ip = "198.51.100.77"
+	var denied int
+	for range 8 {
+		req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, gw.url+"/r", nil)
+		req.Header.Set("X-Forwarded-For", ip)
+		resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode == http.StatusTooManyRequests {
+			denied++
+		}
+	}
+	if denied != 3 {
+		t.Fatalf("%d of 8 denied, want 3", denied)
+	}
+	digest := heavyhitters.Pseudonym([]byte(hitterSecret), ratelimit.Key(ip))
+	if digest == rlredis.Digest(ip) || digest == heavyhitters.Pseudonym([]byte("another-"+hitterSecret), ratelimit.Key(ip)) {
+		t.Fatal("the keyed digest is the unkeyed one, or the same under another secret")
+	}
+	want := []hitter{{perIP, digest, 0, 0, 3, 0}}
+	eventually(t, "the throttled IP in /heavy-hitters", func() bool {
+		return fmt.Sprint(hittersOf(listHeavyHitters(t, r.viewer, ""))) == fmt.Sprint(want)
+	})
+	if body := string(r.viewer.must(200, "GET", "/heavy-hitters", nil).body); strings.Contains(body, ip) || strings.Contains(body, rlredis.Digest(ip)) {
+		t.Errorf("GET /heavy-hitters shows the IP or its unkeyed digest: %s", body)
+	}
+
+	// The admin's lookup finds the windows; ::ffff:IP is the same client.
+	for _, subject := range []string{ip, "::ffff:" + ip} {
+		got := lookupHitters(t, r.admin, 200, map[string]any{"policy_id": perIP, "subject": map[string]any{"ip": subject}})
+		var sum int64
+		for _, w := range got.Items {
+			if w.KeyDigest != digest || w.PolicyId != perIP || w.ConsumerId != nil || w.ApiKeyId != nil || w.ShadowDenied != 0 {
+				t.Errorf("window %+v", w)
+			}
+			sum += w.Denied
+		}
+		if got.KeyDigest != digest || len(got.Items) == 0 || sum != 3 {
+			t.Errorf("lookup of %s: %+v, want %s with 3 denies", subject, got, digest)
+		}
+	}
+	other := lookupHitters(t, r.admin, 200, map[string]any{"policy_id": perIP, "subject": map[string]any{"ip": "198.51.100.78"}, "since": time.Now().Add(-time.Hour).Format(time.RFC3339)})
+	if len(other.Items) != 0 || other.KeyDigest == digest {
+		t.Errorf("lookup of another IP: %+v", other)
+	}
+	body := map[string]any{"policy_id": perIP, "subject": map[string]any{"ip": ip}}
+	for _, c := range []cpClient{r.viewer, r.editor, r.publisher, r.keyAdmin} {
+		c.must(403, "POST", "/heavy-hitters/lookup", body)
+	}
+	cp.rest.as("").must(401, "POST", "/heavy-hitters/lookup", body)
+	r.admin.must(400, "POST", "/heavy-hitters/lookup", map[string]any{"policy_id": perIP, "subject": map[string]any{"route": "r"}})
+	r.admin.must(404, "POST", "/heavy-hitters/lookup", map[string]any{"policy_id": perKey + 100, "subject": map[string]any{"ip": ip}})
+	if a := r.admin.must(400, "POST", "/heavy-hitters/lookup", map[string]any{"policy_id": perKey, "subject": map[string]any{"ip": ip}}); !strings.Contains(string(a.body), "api_key_id") {
+		t.Errorf("an {api_key} template: %s", a.body)
+	}
+
+	// Three lookups were answered, each audited with the digest, never
+	// the IP; the refused ones are not.
+	audit := auditPage(t, r.admin, "?entity=heavy_hitters")
+	if len(audit.Items) != 3 {
+		t.Fatalf("%d audit records, want 3: %+v", len(audit.Items), audit.Items)
+	}
+	for i, a := range audit.Items {
+		d := a.Diff
+		if a.Action != "heavy_hitters.lookup" || a.Actor.Sub != "sub-admin" || a.EntityId == nil || *a.EntityId != fmt.Sprint(perIP) ||
+			d["policy_id"] != float64(perIP) || (i > 0 && d["key_digest"] != digest) || (i > 0 && d["windows"] == float64(0)) {
+			t.Errorf("audit record %d: %+v", i, a)
+		}
+	}
+	raw := string(r.admin.must(200, "GET", "/audit?entity=heavy_hitters", nil).body)
+	for name, out := range map[string]string{"the audit log": raw, "the control plane's log": cp.out.String()} {
+		if strings.Contains(out, ip) || strings.Contains(out, "198.51.100.78") {
+			t.Errorf("the IP appears in %s", name)
 		}
 	}
 }
@@ -256,5 +405,40 @@ func TestHeavyHitterConcurrentHeartbeats(t *testing.T) {
 	// The heartbeats may straddle a minute: the windows' sum is exact.
 	if len(rows) != len(keys) || total != replicas*rounds*int64(len(keys)) {
 		t.Errorf("%d keys, %d denies; want %d, %d", len(rows), total, len(keys), replicas*rounds*len(keys))
+	}
+}
+
+// TestUnkeyedHeavyHittersDeleted: migration 00006 deletes the windows
+// written before it, whose digests are unkeyed (ADR-0053), and nothing
+// else.
+func TestUnkeyedHeavyHittersDeleted(t *testing.T) {
+	ctx := t.Context()
+	name := emptyDatabase(t)
+	dsn := pgURL(t, "spillway", name)
+	cfg, err := pgx.ParseConfig(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Password = pgOwnerPassword
+	sqlDB := stdlib.OpenDB(*cfg)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	p, err := goose.NewProvider(goose.DialectPostgres, sqlDB, os.DirFS(filepath.Join("..", "..", "internal", "controlplane", "store", "migrations")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.UpTo(ctx, 5); err != nil {
+		t.Fatal(err)
+	}
+	owner := pgConnect(t, dsn, pgOwnerPassword)
+	if _, err := owner.Exec(ctx, `INSERT INTO heavy_hitters VALUES (date_trunc('minute', clock_timestamp(), 'UTC'), 1, $1, NULL, NULL, 5, 0)`, rlredis.Digest("198.51.100.77")); err != nil {
+		t.Fatal(err)
+	}
+	applied, err := store.Migrate(ctx, dsn, pgOwnerPassword, pgAppPassword)
+	if err != nil || len(applied) == 0 || applied[0] != 6 {
+		t.Fatalf("applied %v, %v; want 6 first", applied, err)
+	}
+	var n int
+	if err := owner.QueryRow(ctx, "SELECT count(*) FROM heavy_hitters").Scan(&n); err != nil || n != 0 {
+		t.Errorf("%d windows left, %v; want none", n, err)
 	}
 }

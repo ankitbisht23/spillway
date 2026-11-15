@@ -396,7 +396,7 @@ func hashKey(up *config.Upstream, lim *limits, ip netip.Addr) string {
 		return ""
 	}
 	if lim.values.IP == "" && ip.IsValid() {
-		lim.values.IP = ipKey(ip) // newLimits fills it only for policies
+		lim.values.IP = config.IPKey(ip) // newLimits fills it only for policies
 	}
 	key, _ := up.HashOn.Fill(&lim.values)
 	return key

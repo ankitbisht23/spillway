@@ -46,6 +46,29 @@ func (s *Store) TopHeavyHitters(ctx context.Context, f HeavyHitterFilter, limit 
 	return out, nil
 }
 
+// HeavyHitterWindow is one window of a (policy, key digest), IDs 0 for none.
+type HeavyHitterWindow = db.HeavyHitterWindowsRow
+
+// LookupHeavyHitters returns the windows of policy's key digest that start
+// in [f.Since, f.Until), newest first, and writes the lookup's audit record
+// in the same transaction (ADR-0053): the policy, the digest, the range and
+// the number of windows, never the subject the digest was computed from.
+// A lookup that cannot be audited answers nothing.
+func (s *Store) LookupHeavyHitters(ctx context.Context, a Audit, policy int64, digest string, f HeavyHitterFilter) ([]HeavyHitterWindow, error) {
+	var rows []HeavyHitterWindow
+	err := s.inTx(ctx, func(q *db.Queries) error {
+		var err error
+		rows, err = q.HeavyHitterWindows(ctx, db.HeavyHitterWindowsParams{PolicyID: policy, KeyDigest: digest, Since: f.Since, Until: f.Until})
+		if err != nil {
+			return err
+		}
+		return a.write(ctx, q, change{action: "heavy_hitters.lookup", entity: "heavy_hitters", id: policy, diff: map[string]any{
+			"policy_id": policy, "key_digest": digest, "since": f.Since, "until": f.Until, "windows": len(rows),
+		}})
+	})
+	return rows, err
+}
+
 // heavyHitters are the rows a heartbeat's top_keys add (ADR-0041): one per
 // (policy, key digest), duplicates summed with the later IDs kept, in
 // (policy, key digest) order, so that heartbeats of several replicas lock

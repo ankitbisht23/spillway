@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/netip"
 	"slices"
 	"strconv"
 	"strings"
@@ -251,7 +252,7 @@ func compilePolicy(p *configpb.Policy, replicas int64, routes []Route) (Policy, 
 		return pol, err
 	}
 	var err error
-	if pol.Key, err = parseKeyTemplate(p.GetKeyTemplate()); err != nil {
+	if pol.Key, err = ParseKeyTemplate(p.GetKeyTemplate()); err != nil {
 		return pol, err
 	}
 	pol.PerConsumer = (pol.Level == "consumer" || pol.Level == "route") && pol.Key.perConsumer
@@ -607,7 +608,19 @@ func (t *KeyTemplate) Fill(v *KeyValues) (string, bool) {
 	return b.String(), true
 }
 
-func parseKeyTemplate(tmpl string) (KeyTemplate, error) {
+// IPKey is {ip} for a client IP: an IPv4 address in full, an IPv6 one as its
+// /64, the smallest block one subscriber is normally given, so a client
+// cannot get a fresh bucket per address (ADR-0021, U2). The caller has
+// already made an IPv4-mapped address IPv4.
+func IPKey(ip netip.Addr) string {
+	if ip.Is4() {
+		return ip.String()
+	}
+	return netip.PrefixFrom(ip, 64).Masked().String()
+}
+
+// ParseKeyTemplate compiles a key template (RL-04, ADR-0017).
+func ParseKeyTemplate(tmpl string) (KeyTemplate, error) {
 	var t KeyTemplate
 	if tmpl == "" {
 		return t, errors.New("key_template is required")

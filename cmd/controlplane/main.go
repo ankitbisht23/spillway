@@ -129,7 +129,7 @@ func serve(log *slog.Logger, getenv func(string) string) error {
 	reg.MustRegister(active, streams)
 	admin := telemetry.NewAdminServer(reg, ready.Load, log)
 	apiSrv := &http.Server{
-		Handler:           api.New(st, s.allow, net.DefaultResolver, api.OIDC{Verifier: verifier}, log).Handler(),
+		Handler:           api.New(st, s.allow, net.DefaultResolver, api.OIDC{Verifier: verifier}, s.hitterSecret, log).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,

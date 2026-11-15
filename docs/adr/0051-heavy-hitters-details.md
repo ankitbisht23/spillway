@@ -1,6 +1,6 @@
 # 0051. Heavy hitters: details
 
-- **Status:** Accepted
+- **Status:** Accepted; the reported key digest refined by 0053 (keyed with a per-deployment secret)
 - **Date:** 2026-11-14
 - **Requirement IDs:** RL-21, CP-22, RL-26, OB-01, UI-01
 

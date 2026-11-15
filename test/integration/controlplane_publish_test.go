@@ -22,6 +22,7 @@ import (
 	"github.com/ankitbisht23/spillway/internal/controlplane/api"
 	"github.com/ankitbisht23/spillway/internal/gen/apiv1"
 	"github.com/ankitbisht23/spillway/internal/proxy"
+	"github.com/ankitbisht23/spillway/internal/secret"
 )
 
 // serveOn serves the API over database db as the app role with the
@@ -33,7 +34,7 @@ func serveOn(t *testing.T, db, allow string, iss *testIssuer, log io.Writer) cpC
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(api.New(openStore(t, db), allowed, net.DefaultResolver, api.OIDC{Verifier: iss.verifier(t)}, slog.New(slog.NewJSONHandler(log, nil))).Handler())
+	srv := httptest.NewServer(api.New(openStore(t, db), allowed, net.DefaultResolver, api.OIDC{Verifier: iss.verifier(t)}, secret.New(hitterSecret), slog.New(slog.NewJSONHandler(log, nil))).Handler())
 	t.Cleanup(srv.Close)
 	return cpClient{t: t, base: srv.URL}
 }

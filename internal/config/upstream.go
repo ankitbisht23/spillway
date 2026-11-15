@@ -35,7 +35,7 @@ func compileLB(lb, hashOn string) (string, *KeyTemplate, error) {
 	case hashOn == "":
 		return lb, nil, nil
 	}
-	t, err := parseKeyTemplate(hashOn)
+	t, err := ParseKeyTemplate(hashOn)
 	if err != nil {
 		return "", nil, fmt.Errorf("hash_on: %w", err)
 	}

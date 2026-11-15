@@ -1,9 +1,12 @@
 // Package heavyhitters keeps a gateway's top throttled keys (RL-21,
 // ADR-0041): one Space-Saving sketch of 100 counters over all policies,
-// keyed by (policy ID, key digest), that each heartbeat reports as top_keys.
+// keyed by (policy ID, key digest), that each heartbeat reports as top_keys
+// under keyed digests (ADR-0053).
 package heavyhitters
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/base64"
 	"slices"
 	"sync"
@@ -17,7 +20,8 @@ const Capacity = 100
 type Entry struct {
 	Policy int64 // the policy's control-plane ID
 	// Digest is the first 16 bytes of the SHA-256 of the policy's filled
-	// key template (ratelimit.Key): never the raw key.
+	// key template (ratelimit.Key): never the raw key, and never reported
+	// as it is (Pseudonym).
 	Digest [16]byte
 	// Consumer and APIKey are the IDs of the latest event's consumer and
 	// API key; 0 when anonymous or unknown.
@@ -32,10 +36,16 @@ type Entry struct {
 	Count int64
 }
 
-// KeyDigest is the entry's key digest as top_keys carry it: base64url
-// without padding, 22 characters (ADR-0041).
-func (e Entry) KeyDigest() string {
-	return base64.RawURLEncoding.EncodeToString(e.Digest[:])
+// Pseudonym is the key digest that top_keys carry, the control plane keeps
+// and its lookup computes (ADR-0053): base64url without padding, 22
+// characters, of the first 16 bytes of HMAC-SHA256 under the deployment's
+// heavy-hitter secret of key, a ratelimit.Key. Without the secret, a digest
+// cannot be matched to a subject by trying candidates, as an unkeyed one of
+// an IP could.
+func Pseudonym(secret []byte, key string) string {
+	mac := hmac.New(sha256.New, secret)
+	mac.Write([]byte(key))
+	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil)[:16])
 }
 
 type key struct {

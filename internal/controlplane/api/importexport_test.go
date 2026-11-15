@@ -20,6 +20,7 @@ import (
 	"github.com/ankitbisht23/spillway/internal/config"
 	"github.com/ankitbisht23/spillway/internal/gen/configpb"
 	"github.com/ankitbisht23/spillway/internal/proxy"
+	"github.com/ankitbisht23/spillway/internal/secret"
 )
 
 // exampleConfigs are the repo's static config files (CP-05): the example
@@ -105,7 +106,7 @@ func checkImportOf(t *testing.T, c *configpb.Config) []string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := New(nil, allowed, fakeResolver{}, fakeAuth{}, nil)
+	s := New(nil, allowed, fakeResolver{}, fakeAuth{}, secret.New("dev-only-not-secret"), nil)
 	var out []string
 	for _, d := range s.checkImport(t.Context(), c) {
 		out = append(out, *d.Message)

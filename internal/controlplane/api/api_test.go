@@ -21,6 +21,7 @@ import (
 	"github.com/ankitbisht23/spillway/internal/gen/apiv1"
 	"github.com/ankitbisht23/spillway/internal/gen/configpb"
 	"github.com/ankitbisht23/spillway/internal/proxy"
+	"github.com/ankitbisht23/spillway/internal/secret"
 )
 
 func spec(t *testing.T) *openapi3.T {
@@ -57,7 +58,7 @@ func newHandler(t *testing.T, log io.Writer) http.Handler {
 		"metadata":   {netip.MustParseAddr("172.29.0.11"), netip.MustParseAddr("169.254.169.254")},
 		"outside":    {netip.MustParseAddr("10.1.2.3")},
 	}
-	h := New(nil, allowed, res, fakeAuth{}, slog.New(slog.NewJSONHandler(log, nil))).Handler()
+	h := New(nil, allowed, res, fakeAuth{}, secret.New("dev-only-not-secret"), slog.New(slog.NewJSONHandler(log, nil))).Handler()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if recover() != nil {

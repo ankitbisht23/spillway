@@ -18,6 +18,7 @@ import (
 	"github.com/ankitbisht23/spillway/internal/controlplane/api"
 	"github.com/ankitbisht23/spillway/internal/gen/apiv1"
 	"github.com/ankitbisht23/spillway/internal/proxy"
+	"github.com/ankitbisht23/spillway/internal/secret"
 )
 
 // cpClient calls a control plane's REST API with a bearer token.
@@ -119,7 +120,7 @@ func startControlPlane(t *testing.T, log io.Writer) (cpClient, *testIssuer, stri
 		t.Fatal(err)
 	}
 	iss := newTestIssuer(t)
-	srv := httptest.NewServer(api.New(openStore(t, db), allowed, net.DefaultResolver, api.OIDC{Verifier: iss.verifier(t)}, slog.New(slog.NewJSONHandler(log, nil))).Handler())
+	srv := httptest.NewServer(api.New(openStore(t, db), allowed, net.DefaultResolver, api.OIDC{Verifier: iss.verifier(t)}, secret.New(hitterSecret), slog.New(slog.NewJSONHandler(log, nil))).Handler())
 	t.Cleanup(srv.Close)
 	return cpClient{t: t, base: srv.URL}, iss, db
 }

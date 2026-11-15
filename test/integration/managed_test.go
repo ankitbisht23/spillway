@@ -190,9 +190,14 @@ func issueStream(t *testing.T, l testcert.Leaf) string {
 	return dir
 }
 
-// noSecretsLogged fails the test if the process logged a password or PEM
-// key material (SEC-09, ADR-0040). Registered before the process starts,
-// it runs after the process has stopped.
+// hitterSecret is the heavy-hitter secret of the host processes the tests
+// run (ADR-0053); the compose stack's is dev-only-not-secret.
+const hitterSecret = "hh-dev-only-not-secret" //nolint:gosec // G101: a fake secret the tests look for in logs
+
+// noSecretsLogged fails the test if the process logged a password, the
+// heavy-hitter secret or PEM key material (SEC-09, ADR-0040, ADR-0053).
+// Registered before the process starts, it runs after the process has
+// stopped.
 func noSecretsLogged(t *testing.T, p **proc) {
 	t.Helper()
 	t.Cleanup(func() {
@@ -200,7 +205,7 @@ func noSecretsLogged(t *testing.T, p **proc) {
 			return
 		}
 		out := (*p).out.String()
-		for _, s := range []string{pgAppPassword, pgOwnerPassword, "PRIVATE KEY"} {
+		for _, s := range []string{pgAppPassword, pgOwnerPassword, hitterSecret, "PRIVATE KEY"} {
 			if strings.Contains(out, s) {
 				t.Errorf("%s logged a secret (%q)", (*p).name, s)
 			}
@@ -225,6 +230,7 @@ func startCP(t *testing.T, name, db, grpcAddr string, iss *testIssuer) *hostCP {
 	p = start(t, name, binary(t, "controlplane"), admin, []string{
 		"SPILLWAY_CP_DATABASE_URL=" + pgURL(t, "spillway_app", db),
 		"SPILLWAY_CP_DATABASE_PASSWORD_FILE=" + pw,
+		"SPILLWAY_CP_HEAVY_HITTER_SECRET=" + hitterSecret,
 		"SPILLWAY_CP_HTTP_ADDR=" + httpAddr,
 		"SPILLWAY_CP_ADMIN_ADDR=" + admin,
 		"SPILLWAY_CP_GRPC_ADDR=" + grpcAddr,
@@ -247,26 +253,27 @@ type hostGW struct {
 }
 
 // startManaged runs a managed gateway against the control plane at cp,
-// its snapshot in dir; its client certificate names it name (D7). It does
-// not wait for readiness.
-func startManaged(t *testing.T, name, cp, dir string) *hostGW {
+// its snapshot in dir, with extra settings (NAME=value) if any; its client
+// certificate names it name (D7). It does not wait for readiness.
+func startManaged(t *testing.T, name, cp, dir string, extra ...string) *hostGW {
 	t.Helper()
 	httpAddr, admin := freeAddr(t), freeAddr(t)
 	certs := issueStream(t, testcert.Leaf{DNSNames: []string{name}, Client: true})
 	var p *proc
 	noSecretsLogged(t, &p)
-	p = start(t, name, binary(t, "gateway"), admin, []string{
+	p = start(t, name, binary(t, "gateway"), admin, append([]string{
 		"SPILLWAY_GATEWAY_CONTROL_PLANE=" + cp,
 		"SPILLWAY_GATEWAY_CP_CERT=" + filepath.Join(certs, "cert.pem"),
 		"SPILLWAY_GATEWAY_CP_KEY=" + filepath.Join(certs, "key.pem"),
 		"SPILLWAY_GATEWAY_CP_CA=" + filepath.Join(certs, "ca.pem"),
 		"SPILLWAY_GATEWAY_SNAPSHOT=" + filepath.Join(dir, "snapshot.pb"),
+		"SPILLWAY_GATEWAY_HEAVY_HITTER_SECRET=" + hitterSecret,
 		"SPILLWAY_GATEWAY_HTTP_ADDR=" + httpAddr,
 		"SPILLWAY_GATEWAY_ADMIN_ADDR=" + admin,
 		"SPILLWAY_GATEWAY_ALLOWED_NETWORKS=127.0.0.0/8",
 		"SPILLWAY_GATEWAY_DRAIN=0s",
 		"SPILLWAY_GATEWAY_SHUTDOWN_GRACE=1s",
-	})
+	}, extra...))
 	return &hostGW{proc: p, url: "http://" + httpAddr}
 }
 

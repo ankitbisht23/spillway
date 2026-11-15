@@ -17,6 +17,7 @@ import (
 	"github.com/ankitbisht23/spillway/internal/config"
 	"github.com/ankitbisht23/spillway/internal/gen/configpb"
 	"github.com/ankitbisht23/spillway/internal/heavyhitters"
+	"github.com/ankitbisht23/spillway/internal/secret"
 )
 
 // lockedBuffer is a log buffer the test reads while the client writes.
@@ -335,7 +336,8 @@ func TestHeartbeatErrorsLoggedOncePerMinute(t *testing.T) {
 
 // TestHeartbeatTopKeys checks the heavy hitters in heartbeats (RL-21,
 // ADR-0041): each heartbeat carries the sketch's entries as top_keys with
-// 22-character digests, and interval_start; a successful one resets the
+// 22-character digests keyed by the secret (ADR-0053), never the limiter's
+// unkeyed one, and interval_start; a successful one resets the
 // sketch; a failed one keeps them, and the next carries them with what
 // came since, from the earlier interval_start.
 func TestHeartbeatTopKeys(t *testing.T) {
@@ -346,13 +348,13 @@ func TestHeartbeatTopKeys(t *testing.T) {
 		c := New(cp, Options{
 			ReplicaID: "gateway-1", SnapshotPath: filepath.Join(t.TempDir(), "snapshot.pb"),
 			Compile:      func(c *configpb.Config) (*config.Snapshot, error) { return config.Prepare(c, discard(), nil) },
-			HeavyHitters: hitters, Log: discard(),
+			HeavyHitters: hitters, HeavyHitterSecret: secret.New("dev-only-not-secret"), Log: discard(),
 		})
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		go c.Run(ctx)
 		<-cp.streams
-		key := string(make([]byte, 16)) // ratelimit.Key of something: 16 zero bytes
+		key := string(make([]byte, 16)) // ratelimit.Key of something: 16 zero bytes, unkeyed AAAAAAAAAAAAAAAAAAAAAA
 		hitters.Add(11, key, false, 3, 30)
 		hitters.Add(11, key, true, 3, 30)
 		time.Sleep(heartbeatEvery)
@@ -361,7 +363,8 @@ func TestHeartbeatTopKeys(t *testing.T) {
 		if len(r.GetTopKeys()) != 1 || !r.GetIntervalStart().AsTime().Equal(start) {
 			t.Fatalf("top_keys %v from %v", r.GetTopKeys(), r.GetIntervalStart().AsTime())
 		}
-		if k := r.GetTopKeys()[0]; k.GetPolicyId() != 11 || k.GetKeyDigest() != "AAAAAAAAAAAAAAAAAAAAAA" || k.GetDenied() != 1 ||
+		// The digest is HMAC-SHA256 under the secret, by openssl, cut to 16 bytes.
+		if k := r.GetTopKeys()[0]; k.GetPolicyId() != 11 || k.GetKeyDigest() != "utSnEe78R9hGstgKoBY-FQ" || k.GetDenied() != 1 ||
 			k.GetShadowDenied() != 1 || k.GetConsumerId() != 3 || k.GetApiKeyId() != 30 {
 			t.Errorf("top key %v", k)
 		}
@@ -389,4 +392,15 @@ func TestHeartbeatTopKeys(t *testing.T) {
 		cancel()
 		synctest.Wait()
 	})
+}
+
+// TestHeavyHittersNeedASecret: a client with a sketch and no secret would
+// report unkeyed digests, so New refuses it (ADR-0053).
+func TestHeavyHittersNeedASecret(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Error("New took a sketch without a secret")
+		}
+	}()
+	New(newFakeCP(false), Options{ReplicaID: "gateway-1", SnapshotPath: filepath.Join(t.TempDir(), "snapshot.pb"), HeavyHitters: heavyhitters.New(), Log: discard()})
 }

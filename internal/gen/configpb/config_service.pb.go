@@ -471,13 +471,17 @@ func (x *HeartbeatRequest) GetTopKeys() []*TopKey {
 
 // TopKey is one heavy hitter of a heartbeat's interval (RL-21, ADR-0041).
 type TopKey struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	PolicyId      int64                  `protobuf:"varint,1,opt,name=policy_id,json=policyId,proto3" json:"policy_id,omitempty"`
-	KeyDigest     string                 `protobuf:"bytes,2,opt,name=key_digest,json=keyDigest,proto3" json:"key_digest,omitempty"`
-	ConsumerId    int64                  `protobuf:"varint,3,opt,name=consumer_id,json=consumerId,proto3" json:"consumer_id,omitempty"`
-	ApiKeyId      int64                  `protobuf:"varint,4,opt,name=api_key_id,json=apiKeyId,proto3" json:"api_key_id,omitempty"`
-	Denied        int64                  `protobuf:"varint,5,opt,name=denied,proto3" json:"denied,omitempty"`
-	ShadowDenied  int64                  `protobuf:"varint,6,opt,name=shadow_denied,json=shadowDenied,proto3" json:"shadow_denied,omitempty"`
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	PolicyId int64                  `protobuf:"varint,1,opt,name=policy_id,json=policyId,proto3" json:"policy_id,omitempty"`
+	// base64url, 22 characters, of the first 16 bytes of HMAC-SHA256 under
+	// the deployment's heavy-hitter secret of the filled key template's
+	// 16-byte digest: never the raw key, nor the digest in its Redis key
+	// (ADR-0053).
+	KeyDigest     string `protobuf:"bytes,2,opt,name=key_digest,json=keyDigest,proto3" json:"key_digest,omitempty"`
+	ConsumerId    int64  `protobuf:"varint,3,opt,name=consumer_id,json=consumerId,proto3" json:"consumer_id,omitempty"`
+	ApiKeyId      int64  `protobuf:"varint,4,opt,name=api_key_id,json=apiKeyId,proto3" json:"api_key_id,omitempty"`
+	Denied        int64  `protobuf:"varint,5,opt,name=denied,proto3" json:"denied,omitempty"`
+	ShadowDenied  int64  `protobuf:"varint,6,opt,name=shadow_denied,json=shadowDenied,proto3" json:"shadow_denied,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }

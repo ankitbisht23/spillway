@@ -33,6 +33,9 @@ type settings struct {
 	// DNS name (D7).
 	streamTLS    mtls.Files // SPILLWAY_GATEWAY_CP_CERT, SPILLWAY_GATEWAY_CP_KEY: the client certificate and key; SPILLWAY_GATEWAY_CP_CA: the stream CA the control plane's certificate must chain to
 	cpServerName string     // SPILLWAY_GATEWAY_CP_SERVER_NAME: the name the control plane's certificate must carry, default the host part of SPILLWAY_GATEWAY_CONTROL_PLANE
+	// heavyHitterSecret keys the heavy-hitter digests heartbeats report
+	// (RL-21, SEC-09, ADR-0053); the control plane's lookup needs the same.
+	heavyHitterSecret secret.Value // SPILLWAY_GATEWAY_HEAVY_HITTER_SECRET or _FILE: required in managed mode
 
 	httpAddr   string          // SPILLWAY_GATEWAY_HTTP_ADDR: plain-HTTP listener, dev and benchmarks only, off when empty (SEC-01)
 	tlsAddr    string          // SPILLWAY_GATEWAY_TLS_ADDR: TLS listener (GW-04, SEC-01), default :8443
@@ -109,13 +112,18 @@ func loadSettings(getenv func(string) string) (settings, error) {
 	if err := s.mode(); err != nil {
 		return s, err
 	}
+	var err error
+	if s.controlPlane != "" {
+		if s.heavyHitterSecret, err = secret.Required(getenv, "SPILLWAY_GATEWAY_HEAVY_HITTER_SECRET"); err != nil {
+			return s, err
+		}
+	}
 	if (s.tlsCert == "") != (s.tlsKey == "") {
 		return s, errors.New("SPILLWAY_GATEWAY_TLS_CERT and SPILLWAY_GATEWAY_TLS_KEY: set both or neither")
 	}
 	if s.tlsCert == "" && s.httpAddr == "" {
 		return s, errors.New("no listener: set SPILLWAY_GATEWAY_TLS_CERT and SPILLWAY_GATEWAY_TLS_KEY, or SPILLWAY_GATEWAY_HTTP_ADDR for plain HTTP (dev and benchmarks only)")
 	}
-	var err error
 	if s.allow, err = proxy.ParseAllowlist(getenv("SPILLWAY_GATEWAY_ALLOWED_NETWORKS")); err != nil {
 		return s, fmt.Errorf("SPILLWAY_GATEWAY_ALLOWED_NETWORKS: %w", err)
 	}
@@ -225,8 +233,9 @@ func adminAddr(getenv func(string) string) string {
 // mode checks the settings of static or managed mode (ADR-0038): static
 // needs the config file; managed needs the control plane and its mTLS files
 // (ADR-0040) and takes config and identity only from it, so the files are
-// refused. The mTLS settings are ignored in static mode, so compose can set
-// them on every gateway.
+// refused. The mTLS settings, and the heavy-hitter secret that loadSettings
+// requires in managed mode (ADR-0053), are ignored in static mode, so
+// compose can set them on every gateway.
 func (s *settings) mode() error {
 	if s.controlPlane == "" {
 		if s.configPath == "" {

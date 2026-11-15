@@ -67,6 +67,7 @@ var matrix = map[string][]string{
 	"exportIdentity": {"admin"},
 	"listAudit":      {"admin"},
 	"listReplicas":   all, "listHeavyHitters": all, // ADR-0040, ADR-0041
+	"lookupHeavyHitters": {"admin"}, // it de-pseudonymises digests (ADR-0053)
 }
 
 // specOp is one operation of the spec as a request.

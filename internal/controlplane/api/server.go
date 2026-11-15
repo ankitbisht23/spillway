@@ -28,6 +28,7 @@ import (
 	"github.com/ankitbisht23/spillway/internal/apikey"
 	"github.com/ankitbisht23/spillway/internal/controlplane/store"
 	"github.com/ankitbisht23/spillway/internal/gen/apiv1"
+	"github.com/ankitbisht23/spillway/internal/secret"
 	"github.com/ankitbisht23/spillway/internal/telemetry"
 )
 
@@ -49,7 +50,10 @@ type Server struct {
 	resolver Resolver
 	auth     Authenticator
 	newKey   store.KeyGen // makes API keys (ADR-0039)
-	log      *slog.Logger
+	// hitterSecret keys heavy-hitter digests, as the gateways' does
+	// (ADR-0053).
+	hitterSecret secret.Value
+	log          *slog.Logger
 }
 
 // Allowlist is the upstream allow-list of SEC-06, the same networks as the
@@ -61,9 +65,10 @@ type Allowlist interface {
 var _ apiv1.StrictServerInterface = (*Server)(nil)
 
 // New returns a server over st; upstream endpoints must be in allowed
-// (SEC-06), and callers are authenticated by authn (CP-11).
-func New(st *store.Store, allowed Allowlist, resolver Resolver, authn Authenticator, log *slog.Logger) *Server {
-	return &Server{store: st, allowed: allowed, resolver: resolver, auth: authn, newKey: apikey.Generate, log: log}
+// (SEC-06), callers are authenticated by authn (CP-11), and heavy-hitter
+// lookups compute digests under hitterSecret (ADR-0053).
+func New(st *store.Store, allowed Allowlist, resolver Resolver, authn Authenticator, hitterSecret secret.Value, log *slog.Logger) *Server {
+	return &Server{store: st, allowed: allowed, resolver: resolver, auth: authn, newKey: apikey.Generate, hitterSecret: hitterSecret, log: log}
 }
 
 // Handler returns the API's HTTP handler; it serves BasePath and answers 404
