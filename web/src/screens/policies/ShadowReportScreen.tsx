@@ -69,9 +69,9 @@ function Report({ id }: { id: number }) {
       ) : (
         <QueryState query={report}>
           {(r) => (
-          <>
-            <Counts r={r} />
-            <Promote id={id} published={r.mode} />
+            <>
+              <Counts r={r} />
+              <Promote id={id} published={r.mode} />
               <Keys r={r} />
             </>
           )}
@@ -127,7 +127,7 @@ function Promote({ id, published }: { id: number; published: string }) {
     <div className="actions">
       <ActionButton disabledReason={can.reason} disabled={promote.isPending} onClick={() => promote.mutate(policy.data)}>Promote to enforce</ActionButton>
       <span className="muted">Sets mode to enforce in the working set; nothing changes on gateways until you review and publish.</span>
-      {promote.isError && <PromoteError error={promote.error} />}
+      {promote.isError && <PromoteError error={promote.error} reload={() => { promote.reset(); void policy.refetch(); }} />}
     </div>
   );
 }

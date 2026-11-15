@@ -179,6 +179,23 @@ describe("an existing policy (UI-01, CP-14)", () => {
     expect(screen.queryByRole("button", { name: "Promote to enforce" })).toBeNull();
   });
 
+  it("on a promote 412 offers Reload, which loads the current version without a page reload", async () => {
+    let fail = true;
+    const m = mockPolicy(policy(), () =>
+      fail ? HttpResponse.json({ error: "If-Match does not match", code: "precondition_failed", request_id: "r" }, { status: 412 }) : HttpResponse.json({}),
+    );
+    renderApp("/policies/9", ["editor"]);
+    await userEvent.click(await screen.findByRole("button", { name: "Promote to enforce" }));
+    expect(await screen.findByText(/This policy changed since you opened it\./)).toBeInTheDocument();
+    fail = false;
+    m.change(policy({ key_template: "{ip}", version: 5 }));
+    await userEvent.click(screen.getByRole("button", { name: "Reload" }));
+    await waitFor(() => expect(field("Key template")).toHaveValue("{ip}"));
+    expect(screen.queryByText(/This policy changed/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Promote to enforce" })).toBeEnabled();
+    expect(m.sent).toEqual([expect.objectContaining({ method: "PUT", ifMatch: '"4"' })]);
+  });
+
   it("does not promote over unsaved edits", async () => {
     mockPolicy(policy());
     renderApp("/policies/9", ["editor"]);

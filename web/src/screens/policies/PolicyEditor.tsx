@@ -110,7 +110,7 @@ function PolicyFormView({ initial, loaded, id, notice = null, onNotice = () => {
         {!isNew && <Link to="/policies" className="button-link">All policies</Link>}
       </div>
       {notice && !dirty && <Unpublished>{notice === "promoted" ? "Promoted to enforce in the working set." : undefined}</Unpublished>}
-      {loaded && id !== undefined && <PolicyActions id={id} loaded={loaded} dirty={dirty} onPromoted={() => onNotice("promoted")} />}
+      {loaded && id !== undefined && <PolicyActions id={id} loaded={loaded} dirty={dirty} onPromoted={() => onNotice("promoted")} reload={reload} />}
       <form className="policy-form" onSubmit={submit} noValidate aria-label="Policy">
         <fieldset disabled={!allowed.allowed || save.isPending}>
           <TextField label="Name" field="name" value={form.name} errors={errors} onChange={(v) => set({ name: v })} />
@@ -148,7 +148,7 @@ function PolicyFormView({ initial, loaded, id, notice = null, onNotice = () => {
 }
 
 /** Shadow report, promote and delete, for a saved policy. */
-function PolicyActions({ id, loaded, dirty, onPromoted }: { id: number; loaded: Loaded; dirty: boolean; onPromoted: () => void }) {
+function PolicyActions({ id, loaded, dirty, onPromoted, reload }: { id: number; loaded: Loaded; dirty: boolean; onPromoted: () => void; reload?: () => void }) {
   const latest = useLatestConfig();
   const published = latest.data?.policies.find((p) => p.id === id);
   const promote = usePromote(id, onPromoted);
@@ -179,15 +179,21 @@ function PolicyActions({ id, loaded, dirty, onPromoted }: { id: number; loaded: 
         <ActionButton className="danger" disabledReason={canDelete.reason} onClick={() => setConfirm(true)}>Delete</ActionButton>
       </div>
       {shadow && <p className="muted">Promote sets mode to enforce in the working set; gateways keep the shadow policy until you review and publish.</p>}
-      {promote.isError && <PromoteError error={promote.error} />}
+      {promote.isError && <PromoteError error={promote.error} reload={reload} />}
       {confirm && <DeleteDialog id={id} loaded={loaded} onClose={() => setConfirm(false)} />}
     </div>
   );
 }
 
-export function PromoteError({ error }: { error: unknown }) {
+/** A failed promote; on a 412, Reload loads the current version (ADR-0060), never a page reload, which would sign in again. */
+export function PromoteError({ error, reload }: { error: unknown; reload?: () => void }) {
   if (error instanceof ApiError && error.status === 412) {
-    return <p className="form-error" role="alert">This policy changed since you opened it: reload the page to see it, then promote again.</p>;
+    return (
+      <div className="banner banner-warn" role="alert">
+        This policy changed since you opened it. <button type="button" className="secondary" onClick={reload}>Reload</button>{" "}
+        loads the current version; then promote again if it still applies.
+      </div>
+    );
   }
   return <ErrorLine error={error} needs={["editor", "admin"]} />;
 }
