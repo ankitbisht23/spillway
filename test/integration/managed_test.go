@@ -195,8 +195,9 @@ func issueStream(t *testing.T, l testcert.Leaf) string {
 const hitterSecret = "hh-dev-only-not-secret" //nolint:gosec // G101: a fake secret the tests look for in logs
 
 // noSecretsLogged fails the test if the process logged a password, the
-// heavy-hitter secret or PEM key material (SEC-09, ADR-0040, ADR-0053). Registered before the process starts,
-// it runs after the process has stopped.
+// heavy-hitter secret or PEM key material (SEC-09, ADR-0040, ADR-0053).
+// Registered before the process starts, it runs after the process has
+// stopped.
 func noSecretsLogged(t *testing.T, p **proc) {
 	t.Helper()
 	t.Cleanup(func() {

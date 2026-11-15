@@ -363,7 +363,8 @@ func TestHeartbeatTopKeys(t *testing.T) {
 		if len(r.GetTopKeys()) != 1 || !r.GetIntervalStart().AsTime().Equal(start) {
 			t.Fatalf("top_keys %v from %v", r.GetTopKeys(), r.GetIntervalStart().AsTime())
 		}
-		if k := r.GetTopKeys()[0]; k.GetPolicyId() != 11 || k.GetKeyDigest() != "utSnEe78R9hGstgKoBY-FQ" || // HMAC-SHA256 by openssl, cut to 16 bytes k.GetDenied() != 1 ||
+		// The digest is HMAC-SHA256 under the secret, by openssl, cut to 16 bytes.
+		if k := r.GetTopKeys()[0]; k.GetPolicyId() != 11 || k.GetKeyDigest() != "utSnEe78R9hGstgKoBY-FQ" || k.GetDenied() != 1 ||
 			k.GetShadowDenied() != 1 || k.GetConsumerId() != 3 || k.GetApiKeyId() != 30 {
 			t.Errorf("top key %v", k)
 		}
