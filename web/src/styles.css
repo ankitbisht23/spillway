@@ -80,3 +80,11 @@ button:disabled { background: var(--panel); color: var(--muted); border-color: v
 
 /* Pagination (UI-06) */
 .pager { display: flex; gap: 0.5rem; margin-top: var(--space); }
+
+/* Session (UI-08) */
+.splash { margin: 4rem auto; text-align: center; color: var(--muted); }
+.topbar .user { margin-left: auto; display: flex; align-items: center; gap: 0.75rem; }
+.topbar .roles { opacity: 0.85; font-size: 0.85rem; }
+.topbar button { background: transparent; border-color: var(--accent-text); }
+.modal-backdrop { position: fixed; inset: 0; display: grid; place-items: center; background: rgb(28 36 48 / 45%); }
+.modal { max-width: 28rem; padding: calc(var(--space) * 1.5); border-radius: var(--radius); background: var(--panel); }
