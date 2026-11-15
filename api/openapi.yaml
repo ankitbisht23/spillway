@@ -752,7 +752,9 @@ paths:
       summary: >-
         Rotate an API key (CP-16): issue a new key for its consumer and keep
         the old one working for a grace period (default 24h, at most 168h),
-        in one identity change (CP-20). The new key is in this answer only
+        in one identity change (CP-20). The new key gets a copy of the old
+        key's own access-list entries, allow and deny (RL-09). The new key is
+        in this answer only
       x-spillway-roles: [key-admin, admin]
       requestBody:
         required: false

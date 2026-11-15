@@ -75,8 +75,11 @@ func insertKey(ctx context.Context, q *db.Queries, gen KeyGen, p db.InsertAPIKey
 
 // RotateKey issues a new key for the consumer of key id, which keeps
 // working for grace: its expiry becomes the earlier of its own and now plus
-// grace (CP-16, D2). One identity change, one audit record. A revoked or
-// expired key is a ConflictError.
+// grace (CP-16, D2). The new key gets a copy of the old key's own
+// access-list entries, allow and deny (RL-09, ADR-0054); the old key keeps
+// its own. One identity change, one audit record, whose diff lists the
+// copies under "new_access_lists" when there are any. A revoked or expired
+// key is a ConflictError.
 func (s *Store) RotateKey(ctx context.Context, a Audit, gen KeyGen, id int64, grace time.Duration, note *string) (old, rotated Key, key apikey.Key, err error) {
 	if grace < 0 || grace > MaxGrace {
 		return Key{}, Key{}, apikey.Key{}, &InvalidError{Path: "grace", Msg: "grace: want 0s to 168h"}
@@ -103,6 +106,19 @@ func (s *Store) RotateKey(ctx context.Context, a Audit, gen KeyGen, id int64, gr
 		}
 		if diff["new_key"], err = a.Show(rotated); err != nil {
 			return err
+		}
+		copies, err := q.CopyKeyAccessLists(ctx, db.CopyKeyAccessListsParams{NewKeyID: rotated.ID, Version: v, OldKeyID: id})
+		if err != nil {
+			return err
+		}
+		if len(copies) > 0 {
+			shown := make([]any, len(copies))
+			for i, e := range copies {
+				if shown[i], err = a.Show(e); err != nil {
+					return err
+				}
+			}
+			diff["new_access_lists"] = shown
 		}
 		return a.write(ctx, q, change{action: "key.rotate", entity: "key", id: id, note: note, identity: v, diff: diff})
 	})

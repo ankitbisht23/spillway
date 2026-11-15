@@ -173,6 +173,53 @@ func (q *Queries) ConsumerDependents(ctx context.Context, consumerID int64) ([]C
 	return items, nil
 }
 
+const copyKeyAccessLists = `-- name: CopyKeyAccessLists :many
+INSERT INTO access_lists (action, subject_type, api_key_id, note, version)
+SELECT action, subject_type, $1::bigint, note, $2::bigint
+FROM access_lists WHERE api_key_id = $3::bigint
+ORDER BY id
+RETURNING id, action, subject_type, api_key_id, consumer_id, cidr, note, version, created_at, updated_at
+`
+
+type CopyKeyAccessListsParams struct {
+	NewKeyID int64
+	Version  int64
+	OldKeyID int64
+}
+
+// A rotation gives the new key the old key's own entries, allow and deny
+// (ADR-0054). access_lists_key (a skip scan past its leading action column).
+func (q *Queries) CopyKeyAccessLists(ctx context.Context, arg CopyKeyAccessListsParams) ([]AccessList, error) {
+	rows, err := q.db.Query(ctx, copyKeyAccessLists, arg.NewKeyID, arg.Version, arg.OldKeyID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AccessList
+	for rows.Next() {
+		var i AccessList
+		if err := rows.Scan(
+			&i.ID,
+			&i.Action,
+			&i.SubjectType,
+			&i.ApiKeyID,
+			&i.ConsumerID,
+			&i.Cidr,
+			&i.Note,
+			&i.Version,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const createAccessList = `-- name: CreateAccessList :one
 INSERT INTO access_lists (action, subject_type, api_key_id, consumer_id, cidr, note, version)
 VALUES ($1, $2, $3, $4, $5, $6, $7)

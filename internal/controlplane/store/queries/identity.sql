@@ -123,6 +123,15 @@ WHERE id = @id RETURNING *;
 -- access_lists_pkey.
 DELETE FROM access_lists WHERE id = @id;
 
+-- name: CopyKeyAccessLists :many
+-- A rotation gives the new key the old key's own entries, allow and deny
+-- (ADR-0054). access_lists_key (a skip scan past its leading action column).
+INSERT INTO access_lists (action, subject_type, api_key_id, note, version)
+SELECT action, subject_type, @new_key_id::bigint, note, @version::bigint
+FROM access_lists WHERE api_key_id = @old_key_id::bigint
+ORDER BY id
+RETURNING *;
+
 -- name: ListOverrides :many
 -- overrides_pkey keyset scan.
 SELECT * FROM overrides
