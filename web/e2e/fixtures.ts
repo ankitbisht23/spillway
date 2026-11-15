@@ -61,6 +61,9 @@ export const test = base.extend<{ leakGuard: LeakGuard }>({
       page.on("response", (r) => {
         const url = r.url();
         if (url !== TOKEN_ENDPOINT && !(onApp(url) && new URL(url).pathname.startsWith("/api/v1/"))) return;
+        // The live stream's body never ends while the page is open, and it
+        // carries no token or key (ADR-0059): its URL is still watched.
+        if ((r.headers()["content-type"] ?? "").startsWith("text/event-stream")) return;
         reading.push(r.text().then((body) => {
           for (const m of body.matchAll(/"(access_token|refresh_token|id_token|key)"\s*:\s*"([^"]+)"/g)) {
             if (m[1] !== "key" || API_KEY.test(m[2] ?? "")) secrets.add(m[2] ?? "");
@@ -115,12 +118,12 @@ export const test = base.extend<{ leakGuard: LeakGuard }>({
 
 export { expect };
 
-/** Logs user in through Keycloak's form, starting at path. */
+/** Logs user in through Keycloak's form, starting at path (with its query, if any). */
 export async function login(page: Page, user: string, path = "/overview") {
   await page.goto(path);
   await page.locator("#username").fill(user);
   await page.locator("#password").fill(DEV_PASSWORD);
   await page.locator("#kc-login").click();
-  await page.waitForURL((u) => onApp(u.href) && u.pathname === path);
+  await page.waitForURL((u) => onApp(u.href) && u.pathname + u.search === path);
   await expect(page.getByRole("navigation", { name: "Screens" })).toBeVisible();
 }

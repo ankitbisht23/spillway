@@ -3,6 +3,7 @@
 // task: its actions, disabled with their reasons.
 import { APP, DEV_PASSWORD, TOKEN_ENDPOINT } from "./env";
 import { expect, login, test } from "./fixtures";
+import { seeded } from "./seed";
 
 const everyone = ["Overview", "Throttling", "Policies", "Publish", "Routes & upstreams", "Consumers & keys", "Replicas", "History"];
 const all = ["Overview", "Throttling", "Policies", "Publish", "Routes & upstreams", "Consumers & keys", "Tenants", "Replicas", "History", "Audit"];
@@ -21,16 +22,37 @@ for (const role of ["viewer", "editor", "publisher", "key-admin", "admin"]) {
         await expect(page.getByText("Needs the admin role.")).toBeVisible();
       }
     }
+
+    // Throttling's actions on the seeded throttled key (UI-04, ADR-0060).
+    const s = seeded();
+    await page.goto("/throttling?range=1h");
+    await page.getByRole("button", { name: `Actions for ${s.digest}` }).click();
+    const actions = page.getByRole("complementary", { name: "Selected key" });
+    await expect(actions.getByRole("link", { name: "Open policy" })).toHaveAttribute("href", `/policies/${s.policyId}`);
+    const keyAdmin = role === "key-admin" || role === "admin";
+    for (const [name, allowed, reason] of [
+      ["Add override", keyAdmin, "Needs the key-admin or admin role"],
+      ["Block key", keyAdmin, "Needs the key-admin or admin role"],
+      ["Who is this?", role === "admin", "Needs the admin role"],
+    ] as const) {
+      const button = actions.getByRole("button", { name });
+      if (allowed) {
+        await expect(button, name).toBeEnabled();
+      } else {
+        await expect(button, name).toBeDisabled();
+        await expect(button, name).toHaveAccessibleDescription(reason);
+      }
+    }
   });
 }
 
-test("the server refuses a viewer's publish, drain, key issue and rollback", async ({ page, request }) => {
+test("the server refuses a viewer's publish, drain, key issue, rollback, override and block", async ({ page, request }) => {
   await login(page, "test-viewer"); // the leak guard wants a session to watch
   const form = { grant_type: "password", client_id: "rbac-tests", client_secret: DEV_PASSWORD, username: "test-viewer", password: DEV_PASSWORD };
   const tok = await request.post(TOKEN_ENDPOINT, { form });
   expect(tok.status()).toBe(200);
   const { access_token: token } = await tok.json() as { access_token: string };
-  for (const path of ["/api/v1/config/publish", "/api/v1/upstreams/1/endpoints/1/drain", "/api/v1/consumers/1/keys", "/api/v1/config/versions/1/rollback"]) {
+  for (const path of ["/api/v1/config/publish", "/api/v1/upstreams/1/endpoints/1/drain", "/api/v1/consumers/1/keys", "/api/v1/config/versions/1/rollback", "/api/v1/overrides", "/api/v1/access-lists"]) {
     const r = await request.post(APP + path, { headers: { Authorization: `Bearer ${token}`, "If-Match": '"1"' }, data: {} });
     expect(r.status(), path).toBe(403);
     expect((await r.json() as { code: string }).code, path).toBe("forbidden");
