@@ -1,0 +1,130 @@
+# 0061. Admin UI tests and make verify-m6
+
+- **Status:** Accepted
+- **Date:** 2026-11-15
+- **Requirement IDs:** UI-01 – UI-06, UI-08, UI-09, NFR-08, CP-02, CP-04, CP-09, RL-26, SEC-08, SEC-10
+
+## Context
+
+The M6 checklist asks for "Vitest and Playwright tests for the main flows, run in CI from M6", and the exit reads: "a new policy goes shadow → reviewed → enforced → rolled back entirely from the UI". The user set D10 (Vitest and Testing Library for components and hooks with the network mocked by MSW only at the fetch boundary; Playwright, Chromium only in CI, against the real compose stack with a real Keycloak login, for login, publish with diff, shadow → promote → rollback, issue/rotate/revoke a key, drain an endpoint) and D11 (`make verify-m6` measures the time from the UI publish click to all 5 gateways applying it, < 5 s p99 over the run's publishes (NFR-08), and the gateways' behaviour at each exit stage; zero browser console errors and zero tokens in storage or URLs are PASS conditions). The run's standing rules: no token, key or secret in browser storage, cookies, URLs, history, console or the query cache; no Playwright retries and no re-run on FAIL; every new check run at least three times with its pass rate reported.
+
+This laptop stalls: every process for 4–9 ms about every 15 s under load, and in bursts up to 788 ms; 820 ms is the planning figure (ADR-0026, ADR-0027, ADR-0034, ADR-0042). Every timeout and rule below is set so that such a stall cannot fail it by itself, and the reasons are written before any run.
+
+Facts: CI's `integration` job already boots `make dev` on `ubuntu-latest`; `make dev` builds the control-plane image with the embedded UI (ADR-0057); in `make dev` gateway-1 runs static, so the control plane's published config reaches no gateway, which only `make verify-m5`'s managed mode does (ADR-0042, ADR-0052). Compose's Postgres and the `chaos` service are containers in one VM (Docker Desktop) or on one host (CI), so they read the same clock; the browser and Playwright run on the host.
+
+## Decision
+
+### Unit and component tests: Vitest (D10)
+
+- **Vitest 5.0.5**, configured in `vite.config.ts`. **jsdom 30.1.3** is the DOM environment for components and hooks; pure logic (`src/auth`, `src/stream`, `src/api/errors.ts`, the SSE parser) runs in the `node` environment (`// @vitest-environment node`), which has Node 26's `fetch`, streams and `TextDecoderStream`. jsdom over happy-dom: jsdom is the reference implementation Testing Library targets; happy-dom has had remote-code-execution advisories in recent majors, and `pnpm audit` gates CI.
+- **Testing Library**: `@testing-library/react` 16.3.3, `@testing-library/dom` 10.4.2, `@testing-library/user-event` 14.6.8, `@testing-library/jest-dom` 7.0.1 (its Vitest matchers).
+- **MSW 3.0.3**, `setupServer` from `msw/node`, is the only mock of the network: the control plane's REST and stream (a `ReadableStream` body), `/api/ui-config`, Keycloak's discovery and token endpoints. `onUnhandledRequest: "error"`, so an unmocked call fails the test. Nothing else is mocked but the browser's navigation (an injected `navigate` function for `location.assign`, which jsdom cannot perform) and time (`vi.useFakeTimers` for refresh and reconnect schedules).
+- **What is tested**:
+  - **Session** (ADR-0058): the authorization request's parameters (S256 challenge, state, nonce, exact redirect URI); the pending record written before navigation and nothing else written to any storage (`Storage.prototype.setItem` spied); at the callback, `history.replaceState` called before the token exchange; state mismatch, missing or expired record, wrong `iss`, `error` parameter; every return-path case (`//evil`, `/\evil`, `https://evil`, `/oidc/callback`, a normal path); refresh at 240 s for `expires_in` 300; the rotated refresh token replacing the old one; single-flight refresh; `invalid_grant` ending the session; network errors retried until expiry; 401 → one refresh and one retry with the same body; a second 401 ending the session; 403 never retried; the sign-out broadcast received; the logout form POSTing `id_token_hint` with no token in its action URL.
+  - **Stream** (ADR-0059): the SSE parser; reconnect schedule and jitter bounds; reconnect at once after a refresh and after `end`; 401, 403, 400 and 503 handling; the 45 s dead-stream timer; abort on unmount without an error.
+  - **Client** (ADR-0057): `ApiError` from every error body and from non-JSON 502s; ETag read from `GET` and sent as `If-Match`; the generated role table (`can()` for each role on sample operations).
+  - **Screens**: each screen's loading, empty and error states (one test per row of ADR-0060's error mapping that the screen can meet), its role states (a viewer sees disabled actions with their reason; hidden screens absent from the navigation and "Not allowed" at their URL), and its main interactions against MSW: policy form validation and 422 mapping, the publish page's preview, note, `If-Match` and the 412 refresh, promote as a `PUT` with `mode: enforce`, drain with the upstream's ETag, key issue/rotate/revoke, rollback's dialog, the shadow report's coverage notes.
+  - **Leaks**: after an issue and a rotate, `JSON.stringify` of the query cache and of the mutation cache contains no `spw_`; the key dialog clears the key on close; no test sees `console.error` or `console.warn` (a setup hook fails the test on either).
+- **Coverage** (`@vitest/coverage-v8` 5.0.5): enforced thresholds of **80 % of lines and branches for `src/auth`, `src/stream` and `src/api`** (the logic a bug in which leaks tokens or corrupts data); screens have no numeric threshold, their state tests above are the bar. `make test-web` fails below the thresholds.
+
+### End-to-end tests: Playwright (D10)
+
+- **@playwright/test 1.64.1**, **Chromium only** (`projects: [{ name: "chromium", use: devices["Desktop Chrome"] }]`) locally and in CI, against the compose stack's control plane at `http://localhost:8080` (the embedded production build, so the CSP and headers are tested) with the real Keycloak at `http://localhost:8180`.
+- **Config** (`web/playwright.config.ts`): `retries: 0`, `workers: 1` and `fullyParallel: false` (flows share one working set and run in order), `forbidOnly` in CI; timeouts: test 120 s (the verify-m6 exit spec 15 min), `expect` **10 s**, action **15 s**, navigation **30 s**; `trace: "retain-on-failure"`, `screenshot: "only-on-failure"`, `video: "off"`; `outputDir: "test-results"`, reporters `list` and `html` (`outputFolder: "playwright-report"`, `open: "never"`). Both directories are gitignored (any depth) and dockerignored; artifacts exist only for failed tests. `make test-e2e` removes both after a passing run and leaves them after a failing one, for diagnosis; `git status` stays clean either way.
+- **Login** is the real Keycloak form: a helper fills username and password (the realm's `test-*` users, password `dev-only-not-secret`) and submits. No stored auth state is reused between tests (that would put tokens in a file); each test logs in, which is a form once per browser context and an SSO redirect after.
+- **Setup and teardown** (global): a token for `spillway-ci` (client credentials; secret from `SPILLWAY_CI_CLIENT_SECRET` in the environment, else the dev value; never printed), then through the REST API: import `web/e2e/fixtures/e2e.yaml` with `If-Match` and publish it (so every run starts from the same working set and version), create tenant and consumer `e2e-<run id>`. Teardown deletes them (and their keys) as `make verify-m5` does (ADR-0052). Entities a flow creates are named `e2e-<run id>-…`.
+- **The leak guard**, a fixture every test uses automatically:
+  - it **collects the secrets**: every `access_token`, `refresh_token` and `id_token` in Keycloak token-endpoint responses the page receives, and every `key` in issue and rotate responses;
+  - it **watches**: every request URL (any origin), every main-frame navigation, every `history.pushState`/`replaceState` URL (an init script wraps both), console messages and page errors;
+  - at the end of the test it **asserts** that none of the collected secrets, no JWT-shaped string (`eyJ[\w-]+\.[\w-]+\.[\w-]+`) and no `spw_` key appears in: localStorage and sessionStorage of the app's origin (read in the page), any cookie of the browser context (and every cookie belongs to Keycloak, path `/auth/…`: the app sets none), any URL above; that sessionStorage is empty once the app has loaded (the pending record is gone); that no URL still carries `code=` after the callback;
+  - **console**: zero `error`-level messages and zero page errors from pages on the control plane's origin. Chromium also logs a failed fetch as "Failed to load resource: the server responded with a status of N"; a test that provokes one on purpose (the 412 flow) declares the exact (status, path) pairs it expects, and only those are excused. Messages from Keycloak's own pages are printed, not judged: they are not our code. A CSP violation is a console error, so it fails the test.
+- **Flows** (one spec each; each task adds its own):
+
+  | Spec | Flow | Task |
+  | --- | --- | --- |
+  | `login.spec.ts` | log in; reload returns through SSO to the same path; a forced refresh (`page.clock` fast-forward past 240 s) keeps the session and the storage clean; sign out (POST) lands on `/signed-out`; a second tab is signed out by the broadcast | shell |
+  | `roles.spec.ts` | each of the five users: navigation shows exactly its screens, actions are disabled with their reasons; `test-viewer`'s token from the `rbac-tests` client gets 403 from `publishConfig`, `drainEndpoint`, `issueKey`, `rollbackConfig` | shell (grows per task) |
+  | `live.spec.ts` | Overview and Throttling render live data within 10 s and keep updating; a filter change reconnects | live-screens |
+  | `publish.spec.ts` | edit a route header → the publish page's diff shows it → note → publish → History lists the version and note; the 412 flow (a publish through the API between preview and click) shows the banner and the new diff, then publishes | policies |
+  | `policy.spec.ts` | create a policy in shadow → publish → the shadow report opens with its states → promote (an edit) → publish with diff and note → roll back from History → the policy is gone from the working set | policies, finished in replicas-history |
+  | `drain.spec.ts` | drain an endpoint → banner → publish → the version's diff shows `draining: true` → undrain | routes |
+  | `keys.spec.ts` | create a consumer → issue a key (shown once, copied, gone from the page on close) → rotate with a grace period → revoke after confirming → the list shows both states; the leak guard covers the key | consumers-keys |
+
+  In CI the gateways are static, so these flows check the UI and the control plane, not gateway behaviour; the shadow report shows its empty state there. Gateway behaviour is `make verify-m6`'s.
+- **CI job `e2e`** in `.github/workflows/ci.yml`, on every PR and push, in `ci-ok`'s `needs`: checkout; setup-go (for `make certs`' mkcert); `pnpm/action-setup` and `setup-node` (`.node-version`, pnpm cache) as the `web` job; `pnpm install --frozen-lockfile`; `make dev`; cache `~/.cache/ms-playwright` keyed by the Playwright version in `pnpm-lock.yaml`; `pnpm -C web exec playwright install --with-deps chromium` (the version is the pinned package's; with a cache hit it only installs OS packages); `make test-e2e`; on failure, compose state and logs as the `integration` job prints them, and the two artifact directories uploaded with `actions/upload-artifact` pinned to a commit SHA (Dependabot keeps it current). Expected duration about 10–12 minutes (about 5 for `make dev` with image builds, 1 for browsers, 3–5 for the specs), in parallel with `integration`.
+- **Go tests** (shell and stream tasks): the serving table of ADR-0057 over an `fstest.MapFS` (every row, `HEAD`, 405, ETag and 304, the exact CSP with the issuer's origin, every security header, `Cache-Control` per class, `/api/ui-config`'s values and `no-store`, `/api/…` 404 JSON, `nosniff` and `no-store` on API answers), the placeholder served by an untagged build; `getMe` (roles, display name, no token in the answer or logs) and the RBAC table test extended to every new operation; the stream tests in ADR-0059.
+- Each new Playwright spec is run **at least three times** against the stack in its task, and its pass rate goes in the PR description.
+
+### make verify-m6 (D11)
+
+`test/verify/m6.sh`, in the style of `m5.sh`: each check once, every measured number printed with PASS or FAIL, exit 1 on any FAIL, clean-up on every exit.
+
+**Setup**
+
+1. `make dev`; then, as `make verify-m5` does (ADR-0042, ADR-0052), the compose service `chaos` (`chaos m6 setup`, spillway-ci token) imports `test/verify/m6.yaml` with `If-Match` and publishes it as version **B** (the base), and gateway-1 … gateway-5 are recreated in managed mode under `--profile replicas` and waited for (up to 60 s) live at B. `m6.yaml`: upstream `m6` (`upstream-1` … `upstream-3`, no health check), route `m6-probe` (`/status/200`, `auth_mode: none`, default timeouts: connect 5 s, total 15 s), route `m6-propagation` (`/anything/m6`, `auth_mode: none`), no retries, **no rate-limit policy**, so no Redis is on the path.
+2. **The probe** starts: `chaos m6 probe` in the `chaos` service (in the compose network, so it reaches gateway-2 … 5, which publish no host port), open model as loadgen (ADR-0014): `GET /status/200` on `m6-probe`, round robin over the five gateways' plain-HTTP port, with header `X-Spillway-Probe-Client: heavy` at **200 rps** in all (40 per gateway) and `X-Spillway-Probe-Client: light` at **10 rps** in all (2 per gateway); HTTP/1.1 keep-alive, one transport per gateway, client timeout 20 s, a request due while 2,000 are in flight counted as dropped. It records every request: due time, gateway, client, status, and for a 429 whether its `RateLimit` header has the item `"m6-limit"` with `r=0` and whether `Retry-After` is ≥ 1.
+3. **The UI run**: Playwright runs `web/e2e/m6-exit.spec.ts` once, logged in as `test-admin`, with the leak guard. Everything below is done by clicking in the UI; only time-keeping and read-only checks use the API (the spillway-ci token, through Playwright's `request` context, never the page).
+
+**The exit flow** (the spec)
+
+1. **NFR-08 publishes, 20 of them.** Each: open route `m6-propagation`, set its response header `X-Spillway-Verify` to `<run id>-<i>`, save; open Publish, wait for the preview to show the change, type the note `make verify-m6 <run id> <i>`, record `t_click` (`Date.now()` in the Playwright process) just before clicking Publish, record `t_response` when the publish response arrives (`page.waitForResponse`); then poll `GET /config/versions/<v>` every 100 ms (up to 30 s) until its `applied` list holds all five replicas; wait 1 s.
+2. **Shadow.** Create policy `m6-limit` in the Policy editor: level `route`, match route `m6-probe`, key template `{header:X-Spillway-Probe-Client}`, `local: true`, GCRA, one limit `rate: 50, period: 1s, burst: 50`, `mode: shadow`, `failure_mode: fail_open`; save, then publish through the publish page (timed as in 1) as version **S**. With five live replicas each gateway enforces 10/s with a burst of 10 (ADR-0017's per-replica values). Wait until all five applied S, then hold the stage for **25 s**.
+3. **Reviewed.** Open the policy's shadow report (window 15 m) and wait (up to 60 s, refreshing) until it shows would-denies > 0 and at least one key row. Then record, through the API: the report's `would_deny`, `evaluated` and `keys`, and the digests of the two probe clients from the admin lookup (`POST /heavy-hitters/lookup` with `{"headers": {"X-Spillway-Probe-Client": "heavy"}}` and `"light"`; the subjects are the probe's fixed labels, not personal data).
+4. **Enforced.** Promote from the report (an edit setting `mode: enforce`), then publish through the publish page with the diff and a note (timed) as version **E**. Wait until all five applied E; hold 25 s.
+5. **Rolled back.** In History, roll back to **B** with a note (timed; the rollback answer has `version` and `published_at` like a publish) as version **R**. Wait until all five applied R; hold 25 s. The working set is B again: `m6-limit` exists nowhere.
+6. The spec writes `test-results/m6-exit.json`: each of the 23 timed actions' version, `t_click`, `t_response` and kind; S, E, R, B; the step 3 numbers; the leak guard's findings and console error count. No token, key or digest of a person is in it.
+
+The script then hands the probe the version numbers (one stdin line each, as ADR-0052's sender is told), and the probe reads `published_at` and the five `applied` times of each from `GET /config/versions/{v}`, judges, and prints the lines below.
+
+**Pass rules**
+
+Window of stage X ∈ {S, E, R}: from 1 s after the **last** of the five replicas' `applied` time for X to 20 s later, on Postgres's clock; requests belong to it by their due time on the probe's clock, which is the same clock (both containers read the VM's, or the CI host's, clock). A window never reaches the next stage: the next click comes at least 25 s after that apply, after the hold.
+
+| Check | Rule (PASS when) | Printed |
+| --- | --- | --- |
+| **(a) NFR-08** | every one of the N = 23 samples < 5 s, where sample = (`t_response` − `t_click`) + (max over the five replicas of `applied` − `published_at`); p99 by nearest rank is the ⌈0.99 × 23⌉ = 23rd smallest, the maximum | p50, p99, max, N, and the largest UI part and propagation part |
+| **(b) shadow** | in S's window: every heavy and light request answered 200 (zero 429s); each client answered by all five gateways | counts per client and status |
+| **(b2) reviewed** | step 3: `would_deny` ≥ 1; the heavy digest is in `keys` with `shadow_denied` ≥ 1; the light digest is absent or has `shadow_denied` 0; and the UI showed would-denies (the spec's assertion) | would_deny, share, the two digests' counts |
+| **(c) enforced** | in E's window: ≥ 50 % of heavy requests answered 429, every 429 has `"m6-limit"` with `r=0` in `RateLimit` and `Retry-After` ≥ 1, every other heavy answer is 200; light: all 200; each client answered by all five gateways | heavy 429 share, counts |
+| **(d) rolled back** | in R's window: every heavy and light request answered 200 | counts |
+| **(e) whole run** | every request of the probe answered 200 or 429: no transport error, timeout or drop; no light request ever 429; every heavy 429 due at or after E's `published_at` and before R's last `applied` + 1 s | totals and the times of the first and last 429 |
+| **(f1) console** | zero console errors and page errors on the control plane's pages in the exit flow (no excused statuses: the flow expects none) | count |
+| **(f2) no tokens** | the leak guard found nothing in localStorage, sessionStorage, cookies, request URLs, navigations or history entries | places checked, findings |
+| **(g) UI flow** | the exit spec passed: every step above was done in the UI and every UI assertion held | spec result |
+
+- **Why 23 publishes.** The exit itself has three (shadow, enforce, rollback); 20 more UI publishes make NFR-08's p99 a statement over a run instead of over three samples. At N ≤ 100, nearest-rank p99 is the maximum, so in practice every UI publish must reach all five gateways within 5 s: the strictest reading, as ADR-0042's was. Each extra publish costs about 6 s; 20 is about two minutes.
+- **Why the sample is a sum.** The click happens on the host's clock, the apply heartbeats on Postgres's. Instead of subtracting across clocks, each term is measured on one clock: click → response on the host, and `published_at` → last apply on Postgres (ADR-0042's own measure). `published_at` is taken inside the publish transaction before its commit (ADR-0037), so it falls between the click and the response, and the two intervals overlap by `published_at` → response: the sum can only overstate the click → last apply time, never understate it. Clock skew between host and VM does not enter.
+- **Why the probe's numbers.** Per gateway the limit is 10/s, burst 10. Heavy at 40/s per gateway is denied about 74 % in a 20 s window (allowed about 10 × 20 + 10 = 210 of 800); light at 2/s per gateway never reaches the limit. Local limits keep Redis off the path.
+
+**Stall tolerance (written before any run)**
+
+Planning figure: a stall of the whole machine lasts 4–9 ms typically and at most 820 ms (ADR-0034 measured 788 ms). There is **no re-run rule**, Playwright has **no retries**, and no rule has a count allowance: each holds because a stall cannot produce what it counts.
+
+- **(a)** The UI part (a click handler and one POST on localhost) and the propagation part (commit, `NOTIFY`, one snapshot per stream, compile, swap, heartbeat insert) take tens to a few hundred milliseconds; a stall adds at most 0.82 s to a 5 s budget, leaving more than 3 s. The immediate heartbeat has a 4 s deadline, so a stall cannot push the first report to the next 5 s heartbeat. The applied poll waits up to 30 s.
+- **(b), (d)** count 429s and failed answers. A shadow policy never rejects (M2 exit), and after the rollback no policy exists; a stall only delays answers. Nothing on the path times out under 5 s: the route's connect timeout is 5 s and its total 15 s against dials and answers of milliseconds in compose, the probe's client timeout 20 s; there is no Redis policy, no retry and no health check to eject an endpoint.
+- **(c)** A stall of s seconds lets each gateway's bucket refill by at most its burst (10) and lets nothing else through: even ten stalls in one 20 s window raise the allowed heavy requests from about 210 to at most 310 of 800 per gateway, a 61 % share, above the 50 % line. Light requests bunched by a stall are at most two (2/s × 0.82 s) against a burst of 10, so a stall cannot make one 429. A stall cannot drop a replica from `live_replicas` (15 s window, RL-24), so the per-replica limit cannot change mid-window.
+- **(e)** As (b) and (d); the 2,000 in-flight cap is far above the about 170 requests (210 rps × 0.82 s) a stall releases at once.
+- **Windows** start 1 s after the last apply heartbeat, which is sent after the swap, so every request due in a window meets the stage's config even if it was delayed; the next stage's click comes after a 25 s hold, so a window (20 s) cannot overlap it, whatever a stall delays.
+- **Playwright**: `expect` 10 s, action 15 s and navigation 30 s are at least 12× the worst stall for actions that take well under a second; the shadow report's data arrives within about 10 s (a 5 s heartbeat and a 5 s scrape) against a 60 s wait; the stream's dead-stream timer is 45 s.
+- **(f1), (f2)**: a stall creates no console error (the UI has no request timeout below 30 s) and moves no token anywhere.
+
+**Clean-up and run time.** On every exit the script recreates gateway-1 in static mode and removes gateway-2 … 5, stops the probe, and deletes `test-results/` and `playwright-report/` after a PASS (they stay, gitignored, after a FAIL). Published versions stay; the working set is B (the rollback restored it). A run killed before its trap is cleaned by the next run's setup, as in ADR-0052. About 3 minutes of setup (images cached, five gateways, the import), 2–3 minutes for the 20 publishes, about 3 minutes for the three stages with their holds and the report review, and 1 minute to judge and clean: **about 10 minutes**. The verify task runs it at least three times and records every run's numbers and the pass rate in its PR description. `make verify-m3`'s accepted laptop failure rate is not part of this check.
+
+## Consequences
+
+- Every PR runs the UI's unit tests and its main flows against a real Keycloak and the embedded build, with the CSP live and every token watched.
+- The exit check drives the whole M6 promise from the browser while an independent probe watches all five gateways, and times NFR-08 from the click.
+- CI gains a job of about 10–12 minutes in parallel with `integration`.
+- `cmd/chaos` grows `m6 setup` and `m6 probe`; `make` grows `test-e2e` and `verify-m6`.
+
+## Alternatives considered
+
+- **happy-dom** — faster, but with a history of severe advisories, and not what Testing Library targets.
+- **Mocking modules (`vi.mock`) for the API** — D10 says MSW at the fetch boundary only, which also tests the real client and session code.
+- **Saved Playwright auth state** — a file holding tokens.
+- **Playwright retries or a re-run on FAIL** — ruled out by the user.
+- **NFR-08 from the browser's clock to Postgres's clock directly** — subtracting across clocks; the sum of two single-clock intervals needs no offset.
+- **Only the three exit publishes for NFR-08** — p99 of three samples says little; ADR-0042 used 60 API publishes, and 20 UI publishes keep the run near 10 minutes.
+- **A Redis policy for the probe** — puts Redis's 5 ms budget and its stall history (ADR-0027, ADR-0034) into a UI exit check.
+- **Gateway behaviour checked by the Playwright run** — gateway-2 … 5 publish no host port; the probe belongs in the compose network, as `chaos controlplane` does.
+- **Running `make verify-m6` in CI** — about 10 minutes more with five gateways; the e2e job covers the UI flows on every PR, and the exit check runs on the laptop like M3–M5's.
