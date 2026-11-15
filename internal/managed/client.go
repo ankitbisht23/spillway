@@ -75,6 +75,9 @@ type Client struct {
 	appliedAt   time.Time     // the last apply, gateway clock
 	rejected    int64         // the last config version refused since the last apply; 0 for none
 	reason      string        // why, or why the on-disk snapshot could not be used
+	// The stream epoch each section came from; "" for none, or from an
+	// older control plane (ADR-0055).
+	configEpoch, identityEpoch string
 
 	syncMu   sync.Mutex
 	lastSync time.Time // gw_config_sync_age_seconds counts from it
@@ -138,6 +141,15 @@ func (c *Client) versions() (configVersion, identityVersion int64) {
 	return configVersion, identityVersion
 }
 
+// epoch is the stream epoch both sections came from, "" when they came
+// from different ones or none; c.mu is held (ADR-0055).
+func (c *Client) epoch() string {
+	if c.configEpoch != c.identityEpoch {
+		return ""
+	}
+	return c.configEpoch
+}
+
 // The Watch stream's reconnects (ADR-0038): full jitter from 100 ms
 // doubling to 5 s, reset once a stream has stayed up 30 s.
 const (
@@ -189,17 +201,21 @@ func (c *Client) Run(ctx context.Context) {
 	}
 }
 
-// watch opens one Watch stream with the versions in use and applies what it
-// sends until it fails.
+// watch opens one Watch stream with the versions and stream epoch in use
+// and applies what it sends until it fails.
 func (c *Client) watch(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	c.mu.Lock()
 	cv, iv := c.versions()
+	epoch := c.epoch()
+	c.mu.Unlock()
 	s, err := c.cs.Watch(ctx, &configpb.WatchRequest{
 		ReplicaId:       c.opts.ReplicaID,
 		ConfigVersion:   cv,
 		IdentityVersion: iv,
 		SchemaVersion:   &configpb.SchemaVersion{Major: config.SchemaMajor, Minor: config.SchemaMinor},
+		Epoch:           epoch,
 	})
 	if err != nil {
 		return err
@@ -217,7 +233,7 @@ func (c *Client) watch(ctx context.Context) error {
 	}
 	c.watching.Store(true)
 	defer c.watching.Store(false)
-	c.opts.Log.Info("Watch stream to the control plane established", "config_version", cv, "identity_version", iv)
+	c.opts.Log.Info("Watch stream to the control plane established", "config_version", cv, "identity_version", iv, "epoch", epoch)
 	for {
 		m, err := s.Recv()
 		if err != nil {
@@ -225,20 +241,27 @@ func (c *Client) watch(ctx context.Context) error {
 		}
 		switch u := m.GetUpdate().(type) {
 		case *configpb.WatchResponse_Config:
-			c.applyConfig(u.Config.GetSchemaVersion(), u.Config.GetConfig(), sourceStream)
+			c.applyConfig(u.Config.GetSchemaVersion(), u.Config.GetConfig(), u.Config.GetEpoch(), sourceStream)
 		case *configpb.WatchResponse_Identity:
-			c.applyIdentity(u.Identity.GetSchemaVersion(), u.Identity.GetIdentity(), sourceStream)
+			c.applyIdentity(u.Identity.GetSchemaVersion(), u.Identity.GetIdentity(), u.Identity.GetEpoch(), sourceStream)
 		}
 	}
 }
 
-// applyConfig compiles and applies a config of schema v from source, or
-// rejects it and keeps the last good one (CP-18, GW-21, GW-29).
-func (c *Client) applyConfig(v *configpb.SchemaVersion, cfg *configpb.Config, source string) bool {
+// applyConfig compiles and applies a config of schema v and stream epoch
+// from source, or rejects it and keeps the last good one (CP-18, GW-21,
+// GW-29). A lower version than the one in use is applied only from another
+// epoch (ADR-0055).
+func (c *Client) applyConfig(v *configpb.SchemaVersion, cfg *configpb.Config, epoch, source string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if source == sourceFile && c.rawConfig != nil {
 		return false // the stream delivered first; the file must not replace it
+	}
+	if c.rawConfig != nil && older(epoch, c.configEpoch, cfg.GetVersion(), c.rawConfig.GetVersion()) {
+		c.opts.Log.Warn("config of an older version under the same stream epoch ignored; keeping the newer one", "source", source,
+			"version", cfg.GetVersion(), "current_version", c.rawConfig.GetVersion(), "epoch", epoch)
+		return false
 	}
 	var err error
 	var snap *config.Snapshot
@@ -259,20 +282,27 @@ func (c *Client) applyConfig(v *configpb.SchemaVersion, cfg *configpb.Config, so
 		return false
 	}
 	c.config.Store(snap)
-	c.rawConfig = cfg
+	c.rawConfig, c.configEpoch = cfg, epoch
 	c.rejected, c.reason = 0, ""
 	c.applied(source)
-	c.opts.Log.Info("config applied", "source", source, "version", snap.Version, "routes", len(snap.Routes), "policies", len(snap.Policies))
+	c.opts.Log.Info("config applied", "source", source, "version", snap.Version, "epoch", epoch, "routes", len(snap.Routes), "policies", len(snap.Policies))
 	return true
 }
 
-// applyIdentity compiles and applies an identity of schema v from source,
-// or rejects it and keeps the last good one (CP-20, ADR-0037).
-func (c *Client) applyIdentity(v *configpb.SchemaVersion, id *configpb.Identity, source string) bool {
+// applyIdentity compiles and applies an identity of schema v and stream
+// epoch from source, or rejects it and keeps the last good one (CP-20,
+// ADR-0037). A lower version than the one in use is applied only from
+// another epoch (ADR-0055).
+func (c *Client) applyIdentity(v *configpb.SchemaVersion, id *configpb.Identity, epoch, source string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if source == sourceFile && c.rawIdentity != nil {
 		return false // the stream delivered first; the file must not replace it
+	}
+	if c.rawIdentity != nil && older(epoch, c.identityEpoch, id.GetVersion(), c.rawIdentity.GetVersion()) {
+		c.opts.Log.Warn("identity of an older version under the same stream epoch ignored; keeping the newer one", "source", source,
+			"version", id.GetVersion(), "current_version", c.rawIdentity.GetVersion(), "epoch", epoch)
+		return false
 	}
 	var err error
 	var compiled *config.Identity
@@ -290,10 +320,20 @@ func (c *Client) applyIdentity(v *configpb.SchemaVersion, id *configpb.Identity,
 		return false
 	}
 	c.identity.Store(compiled)
-	c.rawIdentity = id
+	c.rawIdentity, c.identityEpoch = id, epoch
 	c.applied(source)
-	c.opts.Log.Info("identity applied", "source", source, "version", compiled.Version)
+	c.opts.Log.Info("identity applied", "source", source, "version", compiled.Version, "epoch", epoch)
 	return true
+}
+
+// older reports whether an update of version v and stream epoch is older
+// than the version held of the same epoch: within one epoch versions only
+// grow, so a lower one comes from a sender that lags (a replica losing the
+// lock). From another epoch, or from a control plane without epochs, any
+// version is applied: after a database restore gateways follow it down
+// (ADR-0038, ADR-0055).
+func older(epoch, heldEpoch string, v, held int64) bool {
+	return epoch != "" && epoch == heldEpoch && v < held
 }
 
 // applied notes an apply from source; c.mu is held. A heartbeat goes at
@@ -345,6 +385,7 @@ func (c *Client) snapshotFile() *configpb.SnapshotFile {
 		Identity:      c.rawIdentity,
 		SyncedAt:      timestamppb.Now(),
 		LiveReplicas:  c.live.Load(),
+		Epoch:         c.epoch(),
 	}
 }
 
@@ -389,12 +430,12 @@ func (c *Client) Boot(ctx context.Context) {
 	// Only what the stream has not delivered yet: the applies skip a
 	// section it has, checked under their lock, so a stream update that
 	// lands meanwhile is never replaced by the older file.
-	cfgOK := c.applyConfig(f.GetSchemaVersion(), f.GetConfig(), sourceFile)
-	idOK := c.applyIdentity(f.GetSchemaVersion(), f.GetIdentity(), sourceFile)
+	cfgOK := c.applyConfig(f.GetSchemaVersion(), f.GetConfig(), f.GetEpoch(), sourceFile)
+	idOK := c.applyIdentity(f.GetSchemaVersion(), f.GetIdentity(), f.GetEpoch(), sourceFile)
 	if cfgOK || idOK {
 		c.bootSynced(f.GetSyncedAt().AsTime())
 		c.opts.Log.Warn("no control plane within 5s: serving the on-disk snapshot until it answers",
 			"config_version", f.GetConfig().GetVersion(), "config_from_file", cfgOK,
-			"identity_version", f.GetIdentity().GetVersion(), "identity_from_file", idOK, "synced_at", f.GetSyncedAt().AsTime())
+			"identity_version", f.GetIdentity().GetVersion(), "identity_from_file", idOK, "epoch", f.GetEpoch(), "synced_at", f.GetSyncedAt().AsTime())
 	}
 }

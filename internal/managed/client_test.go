@@ -164,6 +164,17 @@ func identityMsg(major int32, v int64) *configpb.WatchResponse {
 	}}}
 }
 
+// epochMsg is m from stream epoch epoch.
+func epochMsg(epoch string, m *configpb.WatchResponse) *configpb.WatchResponse {
+	if u := m.GetConfig(); u != nil {
+		u.Epoch = epoch
+	}
+	if u := m.GetIdentity(); u != nil {
+		u.Epoch = epoch
+	}
+	return m
+}
+
 // client runs a managed client against cp until the test ends, with its
 // snapshot in dir.
 func client(t *testing.T, cp *fakeCP, dir string) *Client {
@@ -330,11 +341,11 @@ func TestBootFileNeverReplacesStream(t *testing.T) {
 		s := <-cp.streams
 		s.msgs <- configMsg(config.SchemaMajor, cfg(9))
 		synctest.Wait()
-		if c.applyConfig(schema(config.SchemaMajor), cfg(7), sourceFile) || !c.applyIdentity(schema(config.SchemaMajor),
-			&configpb.Identity{Version: 4, KeyFormat: config.KeyFormatManaged}, sourceFile) {
+		if c.applyConfig(schema(config.SchemaMajor), cfg(7), "", sourceFile) || !c.applyIdentity(schema(config.SchemaMajor),
+			&configpb.Identity{Version: 4, KeyFormat: config.KeyFormatManaged}, "", sourceFile) {
 			t.Error("the file's config was applied over the stream's, or its identity was not")
 		}
-		if c.applyIdentity(schema(config.SchemaMajor), &configpb.Identity{Version: 3, KeyFormat: config.KeyFormatManaged}, sourceFile) {
+		if c.applyIdentity(schema(config.SchemaMajor), &configpb.Identity{Version: 3, KeyFormat: config.KeyFormatManaged}, "", sourceFile) {
 			t.Error("a second file identity was applied over the first")
 		}
 		if versionsOf(c) != [2]int64{9, 4} {
@@ -343,18 +354,83 @@ func TestBootFileNeverReplacesStream(t *testing.T) {
 	})
 }
 
+// fileEpoch is the stream epoch of the snapshot files writeFile writes.
+const fileEpoch = "0123456789abcdef0123456789abcdef"
+
 // writeFile writes a snapshot file of schema major, config cv and
-// identity iv, synced at at.
+// identity iv, synced at at, from stream epoch fileEpoch.
 func writeFile(t *testing.T, dir string, major int32, cv, iv int64, at time.Time) string {
 	t.Helper()
 	path := filepath.Join(dir, "snapshot.pb")
 	if err := WriteSnapshot(path, &configpb.SnapshotFile{
 		SchemaVersion: schema(major), Config: cfg(cv), Identity: &configpb.Identity{Version: iv, KeyFormat: config.KeyFormatManaged},
-		SyncedAt: timestamppb.New(at),
+		SyncedAt: timestamppb.New(at), Epoch: fileEpoch,
 	}); err != nil {
 		t.Fatal(err)
 	}
 	return path
+}
+
+// TestStreamEpoch checks what a gateway does with stream epochs (ADR-0055):
+// within one epoch a lower version is ignored and the newer one kept; from
+// another epoch, or from a control plane without epochs, any version is
+// applied, lower ones included (follow it down, ADR-0038). Each Watch and
+// the on-disk snapshot carry the epoch both sections came from, or none
+// when they came from different ones.
+func TestStreamEpoch(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		cp, dir := newFakeCP(false), t.TempDir()
+		c := client(t, cp, dir)
+		path := filepath.Join(dir, "snapshot.pb")
+		s := <-cp.streams
+		step := func(want [2]int64, msgs ...*configpb.WatchResponse) {
+			t.Helper()
+			for _, m := range msgs {
+				s.msgs <- m
+			}
+			synctest.Wait()
+			if versionsOf(c) != want {
+				t.Fatalf("versions %v, want %v", versionsOf(c), want)
+			}
+		}
+		// Reconnects and reports what the next Watch asks with.
+		reconnect := func() *configpb.WatchRequest {
+			t.Helper()
+			s.end <- io.EOF
+			s = <-cp.streams
+			reqs, _ := cp.requests()
+			return reqs[len(reqs)-1]
+		}
+		const e1, e2 = "11111111111111111111111111111111", "22222222222222222222222222222222"
+		step([2]int64{5, 3}, epochMsg(e1, configMsg(config.SchemaMajor, cfg(5))), epochMsg(e1, identityMsg(config.SchemaMajor, 3)))
+		if f, err := ReadSnapshot(path); err != nil || f.GetEpoch() != e1 {
+			t.Fatalf("on-disk snapshot epoch %q, %v; want %q", f.GetEpoch(), err, e1)
+		}
+		// Lower versions of the same epoch: a lagging sender, ignored.
+		step([2]int64{5, 3}, epochMsg(e1, configMsg(config.SchemaMajor, cfg(4))), epochMsg(e1, identityMsg(config.SchemaMajor, 2)))
+		if r := reconnect(); r.GetEpoch() != e1 || r.GetConfigVersion() != 5 || r.GetIdentityVersion() != 3 {
+			t.Fatalf("Watch after ignored updates: %v", r)
+		}
+		// Another epoch: lower versions applied. Between the two sections
+		// the gateway holds two epochs and asks with none.
+		step([2]int64{4, 3}, epochMsg(e2, configMsg(config.SchemaMajor, cfg(4))))
+		if r := reconnect(); r.GetEpoch() != "" {
+			t.Fatalf("Watch with sections of two epochs asked with epoch %q", r.GetEpoch())
+		}
+		step([2]int64{4, 2}, epochMsg(e2, identityMsg(config.SchemaMajor, 2)))
+		if f, err := ReadSnapshot(path); err != nil || f.GetEpoch() != e2 || f.GetConfig().GetVersion() != 4 || f.GetIdentity().GetVersion() != 2 {
+			t.Fatalf("on-disk snapshot %v, %v; want epoch %q at 4 and 2", f, err, e2)
+		}
+		if r := reconnect(); r.GetEpoch() != e2 || r.GetConfigVersion() != 4 || r.GetIdentityVersion() != 2 {
+			t.Fatalf("Watch after the new epoch: %v", r)
+		}
+		// A control plane without epochs is followed down, as before them.
+		step([2]int64{3, 1}, configMsg(config.SchemaMajor, cfg(3)), identityMsg(config.SchemaMajor, 1))
+		step([2]int64{2, 1}, configMsg(config.SchemaMajor, cfg(2)))
+		if f, _ := ReadSnapshot(path); f.GetEpoch() != "" {
+			t.Errorf("on-disk snapshot epoch %q after updates without one", f.GetEpoch())
+		}
+	})
 }
 
 // TestBoot checks a start without the control plane (D9, ADR-0038): the
@@ -381,8 +457,8 @@ func TestBoot(t *testing.T) {
 		cp.setDown(false)
 		s := <-cp.streams
 		reqs, _ := cp.requests()
-		if r := reqs[len(reqs)-1]; r.GetConfigVersion() != 7 || r.GetIdentityVersion() != 4 {
-			t.Errorf("the Watch after the boot asked from %d and %d", r.GetConfigVersion(), r.GetIdentityVersion())
+		if r := reqs[len(reqs)-1]; r.GetConfigVersion() != 7 || r.GetIdentityVersion() != 4 || r.GetEpoch() != fileEpoch {
+			t.Errorf("the Watch after the boot asked from %d and %d, epoch %q", r.GetConfigVersion(), r.GetIdentityVersion(), r.GetEpoch())
 		}
 		s.msgs <- configMsg(config.SchemaMajor, cfg(8))
 		synctest.Wait()
@@ -443,14 +519,15 @@ func TestBootWithoutSnapshot(t *testing.T) {
 	}
 }
 
-// TestWriteSnapshot checks the file write (D9): it reads back, replaces the
-// old file whole, and leaves no temporary file.
+// TestWriteSnapshot checks the file write (D9): it reads back, stream epoch
+// included (ADR-0055), replaces the old file whole, and leaves no
+// temporary file.
 func TestWriteSnapshot(t *testing.T) {
 	dir := t.TempDir()
 	path := writeFile(t, dir, config.SchemaMajor, 1, 1, time.Unix(1, 0))
 	writeFile(t, dir, config.SchemaMajor, 2, 3, time.Unix(2, 0))
 	f, err := ReadSnapshot(path)
-	if err != nil || f.GetConfig().GetVersion() != 2 || f.GetIdentity().GetVersion() != 3 || !proto.Equal(f.GetConfig(), cfg(2)) {
+	if err != nil || f.GetConfig().GetVersion() != 2 || f.GetIdentity().GetVersion() != 3 || !proto.Equal(f.GetConfig(), cfg(2)) || f.GetEpoch() != fileEpoch {
 		t.Fatalf("read back %v, %v", f, err)
 	}
 	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
