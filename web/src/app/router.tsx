@@ -10,6 +10,11 @@ import { Overview } from "../screens/live/Overview";
 import { overviewSearch, throttlingSearch } from "../screens/live/search";
 import { Throttling } from "../screens/live/Throttling";
 import { Placeholder } from "../screens/Placeholder";
+import { NewPolicy, PolicyScreen } from "../screens/policies/PolicyEditor";
+import { PolicyList } from "../screens/policies/PolicyList";
+import { WINDOWS, type Window } from "../screens/policies/queries";
+import { ShadowReportScreen } from "../screens/policies/ShadowReportScreen";
+import { Publish } from "../screens/publish/Publish";
 import { Layout } from "./Layout";
 import { navigation, screenOp } from "./screens";
 
@@ -46,6 +51,31 @@ function Hidden({ op, children }: { op: OperationId; children: ReactNode }) {
 const overviewRoute = createRoute({ getParentRoute: () => rootRoute, path: "/overview", validateSearch: overviewSearch, component: Overview });
 const throttlingRoute = createRoute({ getParentRoute: () => rootRoute, path: "/throttling", validateSearch: throttlingSearch, component: Throttling });
 
+/** Policies (m6-policies): the list's page is its cursor (D9). */
+const policiesRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/policies",
+  validateSearch: (s: Record<string, unknown>): { cursor?: string } => ({ cursor: typeof s.cursor === "string" && s.cursor ? s.cursor : undefined }),
+  component: PolicyList,
+});
+const newPolicyRoute = createRoute({ getParentRoute: () => rootRoute, path: "/policies/new", component: NewPolicy });
+/** A policy; saved marks one the editor just created, for its banner. */
+const policyRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/policies/$id",
+  validateSearch: (s: Record<string, unknown>): { saved?: true } => ({ saved: s.saved === true ? true : undefined }),
+  component: PolicyScreen,
+});
+const shadowRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/policies/$id/shadow",
+  validateSearch: (s: Record<string, unknown>): { window?: Window } => ({
+    window: WINDOWS.some((w) => w.value === s.window) ? (s.window as Window) : undefined,
+  }),
+  component: ShadowReportScreen,
+});
+const publishRoute = createRoute({ getParentRoute: () => rootRoute, path: "/publish", component: Publish });
+
 /**
  * A consumer's screen (m6-consumers-keys). Throttling's Add override opens
  * it with override_policy, the policy to prefill an override for.
@@ -64,11 +94,11 @@ export const routeTree = rootRoute.addChildren([
   indexRoute,
   overviewRoute,
   throttlingRoute,
-  placeholder("/policies", "Policies", "policies"),
-  placeholder("/policies/new", "New policy", "policies"),
-  placeholder("/policies/$id", "Policy", "policies"),
-  placeholder("/policies/$id/shadow", "Shadow report", "policies"),
-  placeholder("/publish", "Publish", "policies"),
+  policiesRoute,
+  newPolicyRoute,
+  policyRoute,
+  shadowRoute,
+  publishRoute,
   placeholder("/routes", "Routes", "routes"),
   placeholder("/routes/$id", "Route", "routes"),
   placeholder("/upstreams", "Upstreams", "routes"),
