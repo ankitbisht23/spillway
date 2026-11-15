@@ -37,6 +37,8 @@ tags:
     description: Gateway replicas, as their heartbeats report them (CP-08)
   - name: heavy-hitters
     description: The top throttled keys, as heartbeats report them (RL-21)
+  - name: session
+    description: The caller, as its token says (UI-04)
 paths:
   /upstreams:
     get:
@@ -1441,6 +1443,23 @@ paths:
               schema: { $ref: '#/components/schemas/AuditList' }
         '400': { $ref: '#/components/responses/BadRequest' }
         default: { $ref: '#/components/responses/Error' }
+  /me:
+    get:
+      operationId: getMe
+      tags: [session]
+      summary: >-
+        The caller as its token says (UI-04, ADR-0058): its subject, display
+        name and Spillway roles, for the admin UI to show and to disable the
+        actions those roles cannot take. The server still checks every
+        operation's roles; a token without a Spillway role is 403 here too
+      x-spillway-roles: [viewer, editor, publisher, key-admin, admin]
+      responses:
+        '200':
+          description: The caller
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Me' }
+        default: { $ref: '#/components/responses/Error' }
 components:
   securitySchemes:
     bearer:
@@ -2270,3 +2289,16 @@ components:
           type: array
           items: { $ref: '#/components/schemas/AccessListEntry' }
         next_cursor: { type: string, nullable: true }
+    Me:
+      type: object
+      additionalProperties: false
+      required: [subject, name, roles]
+      properties:
+        subject: { type: string, description: "The token's sub." }
+        name: { type: string, description: "The token's preferred_username, or its sub when it has none." }
+        roles:
+          type: array
+          description: "The caller's Spillway roles, in the order viewer, editor, publisher, key-admin, admin."
+          items:
+            type: string
+            enum: [viewer, editor, publisher, key-admin, admin]
