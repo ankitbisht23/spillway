@@ -59,5 +59,6 @@ Decisions that shape Spillway and are not obvious from the code or from docs/des
 | [0048](0048-managed-api-keys-and-the-identity-path-details.md) | Managed API keys and the identity path: details | Accepted; policy names in managed keys ended by 0050 | 2026-11-14 |
 | [0049](0049-gateway-jwt-and-auth-modes-details.md) | Gateway JWT and auth modes: details | Accepted | 2026-11-14 |
 | [0050](0050-plans-overrides-and-access-lists-details.md) | Plans, overrides and access lists: details | Accepted | 2026-11-14 |
-| [0051](0051-heavy-hitters-details.md) | Heavy hitters: details | Accepted | 2026-11-14 |
+| [0051](0051-heavy-hitters-details.md) | Heavy hitters: details | Accepted; the reported key digest refined by 0053 | 2026-11-14 |
 | [0052](0052-make-verify-m5-details.md) | make verify-m5: details | Accepted | 2026-11-14 |
+| [0053](0053-keyed-heavy-hitter-digests.md) | Keyed heavy-hitter digests and the admin lookup | Accepted | 2026-11-15 |
