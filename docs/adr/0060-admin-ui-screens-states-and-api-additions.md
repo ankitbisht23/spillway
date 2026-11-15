@@ -33,8 +33,8 @@ What M5 provides (ADR-0036, ADR-0037, ADR-0051, ADR-0053): every list except hea
   2. A required change note (1–2,000 characters, counted as the user types).
   3. **Publish** (`publishConfig`: publisher, admin; disabled with its reason otherwise; also disabled while `valid` is false, with "Fix the errors above first") sends `POST /config/publish` with `If-Match: "<working_set_revision>"` **from the preview on screen**, never from a newer read, and the note.
   4. On success: the new version, a link to it in History, and "applied on n of m live replicas", polled from `GET /config/versions/{v}` every second for up to 30 s.
-- **412 on publish** (the revision moved since the preview): "The working set changed since your preview: someone edited or published. Review the new diff." The page validates again, shows the new diff and changes, keeps the typed note, and requires another click. It never re-sends by itself.
-- **409 `conflict`** with `nothing_to_publish` in the message: "Nothing to publish: the working set is already version N" (someone published the same edits); the preview refreshes.
+- **412 on publish** (the revision moved since the preview): "The working set changed since your preview: someone edited, imported or rolled back. Review the new diff." (A publish alone does not move the revision, ADR-0037; it makes the next publish of the same preview a 409.) The page validates again, shows the new diff and changes, keeps the typed note, and requires another click. It never re-sends by itself.
+- **409 `conflict`** on publish, whose only 409 is nothing to publish (ADR-0037; the server's message starts "nothing to publish"): "Nothing to publish: the working set is already version N" (someone published the same edits); the preview refreshes.
 - **422**: the validation errors, as in step 1.
 - **Rollback** (History, `rollbackConfig`: publisher, admin): a dialog shows `GET /config/versions/{v}/diff?against=<latest>`, warns when the working set has unpublished changes ("rolling back discards N unpublished changes", from a validate call whose revision becomes the `If-Match`), requires a note, and handles 412 and 422 as above (a 422 names the identity rows that block it, ADR-0037).
 - **Entity edits** (`PUT`, `DELETE`, drain) send the entity's ETag as `If-Match`. A 412 shows "This <entity> changed since you opened it" with a Reload button that loads the current version into the form; the user re-applies the change. Nothing is overwritten silently.
@@ -72,7 +72,7 @@ One shared set in `src/components`:
 | 401 | handled by the session (one refresh, one retry, then "Your session ended", ADR-0058) | once, by `authFetch` |
 | 403 | "Not allowed: this needs the <roles> role" (from the generated table) | never |
 | 404 | "Not found: it may have been deleted" | never |
-| 409 | the server's message; `nothing_to_publish` as above | never |
+| 409 | the server's message; on publish, nothing to publish as above | never |
 | 412 | "Changed since you opened it" with Reload; publish and rollback as above | never by itself |
 | 422 | `details` mapped to form fields by `path`, plus a list | never |
 | 400, 413, 415, 428 | "The request was rejected: <message>" with the request ID (a 428 is a UI bug) | never |

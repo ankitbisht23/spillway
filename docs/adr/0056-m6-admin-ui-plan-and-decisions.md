@@ -125,7 +125,7 @@ docs/design.md is not edited in this PR. Each item names the task that would app
 - Replica staleness computed on Postgres's clock, not the browser's (ADR-0059).
 - `GET /metrics/query` not built unless the user keeps it (P15) (ADR-0059).
 - The shadow report as REST over the latest published policy, from Prometheus (counts, share, also enforce counts after a promotion) and the heavy-hitter windows (top keys), with coverage fields and a partial answer when Prometheus is down (ADR-0060).
-- The publish page always sends the previewed revision; 412 re-validates and keeps the note; 409 `nothing_to_publish` refreshes; rollback warns about discarded edits (ADR-0060).
+- The publish page always sends the previewed revision; 412 re-validates and keeps the note; 409 (nothing to publish) refreshes; rollback warns about discarded edits (ADR-0060).
 - One shared state component set; queries retried only for network errors and 502–504, at most twice; mutations never (ADR-0060).
 - M6 adds no mutation, so no new audit record; every addition is a read with RBAC (ADR-0060).
 - Coverage thresholds of 80 % lines and branches for `src/auth`, `src/stream`, `src/api` only (ADR-0061).
