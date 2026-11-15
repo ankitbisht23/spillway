@@ -1,6 +1,8 @@
 // Role-aware navigation (UI-04, ADR-0058) for each of the dev realm's five
 // users, and the server refusing a viewer directly. Grows with each screen
 // task: its actions, disabled with their reasons.
+import type { Locator } from "@playwright/test";
+
 import { APP, DEV_PASSWORD, TOKEN_ENDPOINT } from "./env";
 import { expect, login, test } from "./fixtures";
 import { seeded } from "./seed";
@@ -43,7 +45,36 @@ for (const role of ["viewer", "editor", "publisher", "key-admin", "admin"]) {
         await expect(button, name).toHaveAccessibleDescription(reason);
       }
     }
+
+    // Policies and Publish (UI-01, UI-02): an editor edits but does not
+    // publish; a publisher publishes but does not edit.
+    const editor = role === "editor" || role === "admin";
+    const publisher = role === "publisher" || role === "admin";
+    await page.goto("/policies");
+    await expectAllowed(page.getByRole("button", { name: "New policy" }), editor, "Needs the editor or admin role");
+    await page.goto(`/policies/${s.policyId}`);
+    await expectAllowed(page.getByRole("button", { name: "Save" }), editor, "Needs the editor or admin role");
+    await expectAllowed(page.getByRole("button", { name: "Delete" }), editor, "Needs the editor or admin role");
+    await page.goto("/publish");
+    const publish = page.getByRole("button", { name: /^Publish revision \d+$/ });
+    if (publisher) {
+      // Allowed, though it may still be disabled for another reason (nothing to publish).
+      await expect(publish).not.toHaveAccessibleDescription("Needs the publisher or admin role");
+    } else {
+      await expect(publish).toBeDisabled();
+      await expect(publish).toHaveAccessibleDescription("Needs the publisher or admin role");
+    }
   });
+}
+
+/** button is enabled when allowed, else disabled with reason. */
+async function expectAllowed(button: Locator, allowed: boolean, reason: string) {
+  if (allowed) {
+    await expect(button).toBeEnabled();
+  } else {
+    await expect(button).toBeDisabled();
+    await expect(button).toHaveAccessibleDescription(reason);
+  }
 }
 
 test("the server refuses a viewer's publish, drain, key issue, rollback, override and block", async ({ page, request }) => {

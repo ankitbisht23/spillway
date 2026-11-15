@@ -127,3 +127,15 @@ export async function login(page: Page, user: string, path = "/overview") {
   await page.waitForURL((u) => onApp(u.href) && u.pathname + u.search === path);
   await expect(page.getByRole("navigation", { name: "Screens" })).toBeVisible();
 }
+
+/**
+ * Clicks Sign out and waits for Keycloak's redirect to load /signed-out:
+ * the tab shows Signed out at once, before its logout POST navigates.
+ */
+export async function signOut(page: Page) {
+  const back = page.waitForResponse((r) => r.url() === `${APP}/signed-out` && r.request().isNavigationRequest());
+  await page.getByRole("button", { name: "Sign out" }).click();
+  expect((await back).status()).toBe(200);
+  await page.waitForLoadState();
+  await expect(page.getByRole("heading", { name: "Signed out" })).toBeVisible();
+}
