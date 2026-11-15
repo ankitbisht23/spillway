@@ -41,6 +41,10 @@ func (s *Server) ListHeavyHitters(ctx context.Context, req apiv1.ListHeavyHitter
 	if err != nil {
 		return nil, err
 	}
+	return apiv1.ListHeavyHitters200JSONResponse(heavyHittersOf(rows)), nil
+}
+
+func heavyHittersOf(rows []store.HeavyHitter) apiv1.HeavyHitterList {
 	items := make([]apiv1.HeavyHitter, len(rows))
 	for i, r := range rows {
 		items[i] = apiv1.HeavyHitter{
@@ -48,7 +52,7 @@ func (s *Server) ListHeavyHitters(ctx context.Context, req apiv1.ListHeavyHitter
 			Denied: r.Denied, ShadowDenied: r.ShadowDenied,
 		}
 	}
-	return apiv1.ListHeavyHitters200JSONResponse{Items: items}, nil
+	return apiv1.HeavyHitterList{Items: items}
 }
 
 // heavyHitterRange checks a range of windows (ADR-0041): since defaults to

@@ -17,6 +17,9 @@ type Actor struct {
 	Sub   string
 	Name  string
 	Roles []string
+	// Expiry is the token's exp, zero when unknown: the live-data stream
+	// ends at it (ADR-0059). Not part of any audit record.
+	Expiry time.Time
 }
 
 // Audit is what a change's audit record needs besides the change itself

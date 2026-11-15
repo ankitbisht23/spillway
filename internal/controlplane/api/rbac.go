@@ -35,8 +35,8 @@ type Authenticator interface {
 
 // OIDC authenticates Keycloak access tokens (CP-11): verified by v, the
 // actor is the token's sub, its preferred_username as the display name
-// (service-account-<client> for a confidential client), and the Spillway
-// roles among realm_access.roles; other roles are ignored.
+// (service-account-<client> for a confidential client), the Spillway
+// roles among realm_access.roles (other roles are ignored) and its exp.
 type OIDC struct{ Verifier *auth.Verifier }
 
 // Authenticate implements Authenticator.
@@ -54,7 +54,7 @@ func (o OIDC) Authenticate(ctx context.Context, token string) (store.Actor, erro
 	if err := c.Decode(&extra); err != nil || c.Subject == "" {
 		return store.Actor{}, auth.ErrInvalid
 	}
-	return store.Actor{Sub: c.Subject, Name: cmp.Or(extra.Username, c.Subject), Roles: spillwayRoles(extra.RealmAccess.Roles)}, nil
+	return store.Actor{Sub: c.Subject, Name: cmp.Or(extra.Username, c.Subject), Roles: spillwayRoles(extra.RealmAccess.Roles), Expiry: c.Expiry}, nil
 }
 
 // spillwayRoles is the Spillway roles among roles, in Roles' order.

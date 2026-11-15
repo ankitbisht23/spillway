@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/ankitbisht23/spillway/internal/controlplane/store/db"
 	"github.com/ankitbisht23/spillway/internal/gen/configpb"
@@ -75,6 +76,47 @@ func truncate(s string, n int) string {
 // them, by name.
 func (s *Store) ListReplicas(ctx context.Context, after string, limit int32) ([]Replica, error) {
 	return db.New(s.pool).ListReplicas(ctx, db.ListReplicasParams{After: after, Lim: limit + 1})
+}
+
+// ReplicaStaleness is a replica's row and its staleness on Postgres's
+// clock: clock_timestamp() minus last_synced_at, nil when it never synced
+// (CP-08, ADR-0059).
+type ReplicaStaleness struct {
+	Replica   Replica
+	Staleness *time.Duration
+}
+
+// replicasPage is AllReplicas's page size.
+const replicasPage = 500
+
+// AllReplicas returns every replica by name with its staleness, reading
+// pages of 500 (the live-data stream, ADR-0059).
+func (s *Store) AllReplicas(ctx context.Context) ([]ReplicaStaleness, error) {
+	q := db.New(s.pool)
+	var out []ReplicaStaleness
+	for after := ""; ; {
+		rows, err := q.ListReplicasClock(ctx, db.ListReplicasClockParams{After: after, Lim: replicasPage})
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range rows {
+			rs := ReplicaStaleness{Replica: Replica{
+				ID: r.ID, ConfigVersion: r.ConfigVersion, IdentityVersion: r.IdentityVersion, SchemaMajor: r.SchemaMajor,
+				SchemaMinor: r.SchemaMinor, WatchConnected: r.WatchConnected, FirstSeenAt: r.FirstSeenAt,
+				LastHeartbeatAt: r.LastHeartbeatAt, LastSyncedAt: r.LastSyncedAt, RejectedConfigVersion: r.RejectedConfigVersion,
+				RejectedReason: r.RejectedReason, Live: r.Live,
+			}}
+			if r.LastSyncedAt != nil {
+				d := r.Now.Sub(*r.LastSyncedAt)
+				rs.Staleness = &d
+			}
+			out = append(out, rs)
+		}
+		if len(rows) < replicasPage {
+			return out, nil
+		}
+		after = rows[len(rows)-1].ID
+	}
 }
 
 // ConfigVersionApplied returns the replicas that reported config version v,

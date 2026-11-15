@@ -125,6 +125,71 @@ func (q *Queries) ListReplicas(ctx context.Context, arg ListReplicasParams) ([]L
 	return items, nil
 }
 
+const listReplicasClock = `-- name: ListReplicasClock :many
+SELECT r.id, r.config_version, r.identity_version, r.schema_major, r.schema_minor, r.watch_connected, r.first_seen_at, r.last_heartbeat_at, r.last_synced_at, r.rejected_config_version, r.rejected_reason, (r.last_heartbeat_at > (SELECT clock_timestamp() - interval '15 seconds'))::boolean AS live,
+       (SELECT clock_timestamp())::timestamptz AS now
+FROM replicas r
+WHERE r.id > $1::text
+ORDER BY r.id LIMIT $2
+`
+
+type ListReplicasClockParams struct {
+	After string
+	Lim   int32
+}
+
+type ListReplicasClockRow struct {
+	ID                    string
+	ConfigVersion         int64
+	IdentityVersion       int64
+	SchemaMajor           int32
+	SchemaMinor           int32
+	WatchConnected        bool
+	FirstSeenAt           time.Time
+	LastHeartbeatAt       time.Time
+	LastSyncedAt          *time.Time
+	RejectedConfigVersion *int64
+	RejectedReason        *string
+	Live                  bool
+	Now                   time.Time
+}
+
+// replicas_pkey keyset scan. As ListReplicas, plus Postgres's clock, read
+// once, so staleness is computed on one clock (CP-08, ADR-0059).
+func (q *Queries) ListReplicasClock(ctx context.Context, arg ListReplicasClockParams) ([]ListReplicasClockRow, error) {
+	rows, err := q.db.Query(ctx, listReplicasClock, arg.After, arg.Lim)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListReplicasClockRow
+	for rows.Next() {
+		var i ListReplicasClockRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ConfigVersion,
+			&i.IdentityVersion,
+			&i.SchemaMajor,
+			&i.SchemaMinor,
+			&i.WatchConnected,
+			&i.FirstSeenAt,
+			&i.LastHeartbeatAt,
+			&i.LastSyncedAt,
+			&i.RejectedConfigVersion,
+			&i.RejectedReason,
+			&i.Live,
+			&i.Now,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const liveReplicas = `-- name: LiveReplicas :one
 SELECT count(*)::int FROM replicas
 WHERE last_heartbeat_at > (SELECT clock_timestamp() - interval '15 seconds')
