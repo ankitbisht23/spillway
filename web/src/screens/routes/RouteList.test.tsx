@@ -112,5 +112,7 @@ describe("Upstreams (UI-06, D9)", () => {
     await waitFor(() => expect(within(row).getAllByText("Unavailable")).toHaveLength(2));
     expect(screen.getByRole("button", { name: "New upstream" })).toBeEnabled();
     expect(screen.getByRole("link", { name: "Upstreams" })).toHaveAttribute("aria-current", "page");
+    // The navigation's Routes & upstreams is current on the upstream pages too.
+    expect(within(screen.getByRole("navigation", { name: "Screens" })).getByRole("link", { name: "Routes & upstreams" })).toHaveAttribute("aria-current", "page");
   });
 });

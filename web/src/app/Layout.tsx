@@ -1,4 +1,4 @@
-import { Link, Outlet } from "@tanstack/react-router";
+import { Link, Outlet, useRouterState } from "@tanstack/react-router";
 
 import { can } from "../auth/permissions";
 import { useSession } from "../auth/SessionContext";
@@ -7,6 +7,7 @@ import { navigation, screenOp } from "./screens";
 /** The app shell: header with the user, the navigation the user's roles allow, and the current screen. */
 export function Layout() {
   const { user, signOut } = useSession();
+  const path = useRouterState({ select: (st) => st.location.pathname });
   const shown = navigation.filter((s) => {
     const op = screenOp(s);
     return op === undefined || can(user.roles, op);
@@ -25,7 +26,9 @@ export function Layout() {
         <ul>
           {shown.map((s) => (
             <li key={s.to}>
-              <Link to={s.to} activeProps={{ "aria-current": "page", className: "active" }}>{s.label}</Link>
+              {"also" in s && path.startsWith(s.also)
+                ? <Link to={s.to} aria-current="page" className="active">{s.label}</Link>
+                : <Link to={s.to} activeProps={{ "aria-current": "page", className: "active" }}>{s.label}</Link>}
             </li>
           ))}
         </ul>
