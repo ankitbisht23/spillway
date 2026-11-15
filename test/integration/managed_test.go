@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/ankitbisht23/spillway/internal/config"
@@ -424,6 +425,231 @@ func TestManagedGatewaySchemaMajor(t *testing.T) {
 	eventually(t, "the gateway refusing the file", func() bool { return strings.Contains(gw.out.String(), "this gateway reads schema major 1 only") })
 	if gw.ready() || gw.metric("gw_config_version") != 0 {
 		t.Errorf("served a snapshot of another major: ready %v, version %v", gw.ready(), gw.metric("gw_config_version"))
+	}
+}
+
+// dbEpoch is the stream epoch of the database owner is connected to
+// (ADR-0055).
+func dbEpoch(t *testing.T, owner *pgx.Conn) string {
+	t.Helper()
+	var e string
+	if err := owner.QueryRow(t.Context(), "SELECT epoch FROM stream_epoch WHERE id = 1").Scan(&e); err != nil {
+		t.Fatal(err)
+	}
+	return e
+}
+
+// netProxy forwards TCP connections to a target: the network between a
+// gateway and the control plane, which the test can cut and restore while
+// both processes run.
+type netProxy struct {
+	addr  string
+	mu    sync.Mutex
+	cut   bool
+	conns []net.Conn
+}
+
+func newNetProxy(t *testing.T, target string) *netProxy {
+	t.Helper()
+	ln, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := &netProxy{addr: ln.Addr().String()}
+	t.Cleanup(func() {
+		_ = ln.Close()
+		p.setCut(true)
+	})
+	go func() {
+		for {
+			down, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go p.forward(down, target)
+		}
+	}()
+	return p
+}
+
+// forward joins down to a new connection to target, unless the network is
+// cut.
+func (p *netProxy) forward(down net.Conn, target string) {
+	up, err := (&net.Dialer{Timeout: 5 * time.Second}).DialContext(context.Background(), "tcp", target)
+	p.mu.Lock()
+	if err != nil || p.cut {
+		p.mu.Unlock()
+		_ = down.Close()
+		if up != nil {
+			_ = up.Close()
+		}
+		return
+	}
+	p.conns = append(p.conns, down, up)
+	p.mu.Unlock()
+	go func() {
+		_, _ = io.Copy(up, down)
+		_ = up.Close()
+	}()
+	_, _ = io.Copy(down, up)
+	_ = down.Close()
+}
+
+// setCut cuts the network, closing every connection through it, or
+// restores it.
+func (p *netProxy) setCut(cut bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.cut = cut
+	if cut {
+		for _, c := range p.conns {
+			_ = c.Close()
+		}
+		p.conns = nil
+	}
+}
+
+// TestManagedGatewayEpoch checks the stream epoch end to end (CP-06,
+// CP-07, CP-20, ADR-0055), each time with a gateway that reconnects at
+// the control plane's own version numbers but holds other content:
+//   - cut off while the database is restored from an older copy of itself
+//     and reaches the gateway's versions again: the active replica sees a
+//     version it holds made at another time and sets a new epoch, so the
+//     gateway resyncs when the network returns;
+//   - connected while the control plane restarts: the new active term sets
+//     a new epoch, and the gateway resyncs to it;
+//   - cut off across a restart, then the database restored from a copy
+//     taken in the gateway's term, which brings that term's epoch back and
+//     reaches the gateway's versions again: the epoch was set before the
+//     one the active replica holds, so it sets a new one;
+//   - booted, with the control plane down, from an on-disk snapshot of
+//     another epoch: it serves the file, then the control plane's content
+//     once it answers.
+func TestManagedGatewayEpoch(t *testing.T) {
+	iss := newTestIssuer(t)
+	db := migratedDatabase(t)
+	owner := pgConnect(t, pgURL(t, "spillway", db), pgOwnerPassword)
+	grpcAddr, dir := freeAddr(t), t.TempDir()
+	snap := filepath.Join(dir, "snapshot.pb")
+	network := newNetProxy(t, grpcAddr)
+	cp := startCP(t, "controlplane", db, grpcAddr, iss)
+	publishRoute(t, cp.rest, upstreamAnswering(t, "one"), "first")
+	cp.rest.must(201, "POST", "/tenants", map[string]any{"name": "acme", "plan_id": planID(t, cp.rest)})
+	gw := startManaged(t, "gateway-1", network.addr, dir)
+	// synced reports whether the gateway's on-disk snapshot holds config
+	// 1 and identity 2 with only tenant name, under the database's epoch.
+	synced := func(name string) func() bool {
+		return func() bool {
+			f, err := managed.ReadSnapshot(snap)
+			ts := f.GetIdentity().GetTenants()
+			return err == nil && f.GetConfig().GetVersion() == 1 && f.GetIdentity().GetVersion() == 2 &&
+				len(ts) == 1 && ts[0].GetName() == name && f.GetEpoch() == dbEpoch(t, owner)
+		}
+	}
+	eventually(t, "the snapshot at 1 and 2 under the database's epoch", synced("acme"))
+
+	// Cut off, the gateway keeps acme at identity 2. The database goes
+	// back to identity 1, as a restore of an older dump of itself would,
+	// and reaches 2 again with tenant beta instead of acme before the
+	// control plane reads it: one transaction stands for both.
+	network.setCut(true)
+	eventually(t, "the gateway's stream down", func() bool { return gw.metric(`gw_config_sync_age_seconds`) > 6 })
+	before := dbEpoch(t, owner)
+	tx, err := owner.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range []string{
+		"UPDATE tenants SET name = 'beta' WHERE name = 'acme'",
+		"UPDATE identity_state SET changed_at = clock_timestamp() WHERE id = 1",
+		"SELECT pg_notify('spillway_identity', '2')",
+	} {
+		if _, err := tx.Exec(t.Context(), stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tx.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "a new epoch after the identity was made again", func() bool { return dbEpoch(t, owner) != before })
+	if !strings.Contains(cp.out.String(), "the database was restored; new stream epoch") {
+		t.Error("the control plane did not log the restore")
+	}
+	network.setCut(false)
+	eventually(t, "the returning gateway resynced to the restored database", synced("beta"))
+
+	// A control-plane restart: a new epoch, and the gateway follows.
+	before = dbEpoch(t, owner)
+	cp.stop(syscall.SIGTERM)
+	cp = startCP(t, "controlplane-2", db, grpcAddr, iss)
+	eventually(t, "a new epoch after the restart", func() bool { return dbEpoch(t, owner) != before })
+	eventually(t, "the gateway under the restarted control plane's epoch", synced("beta"))
+
+	// Cut off, the gateway keeps beta under this term's epoch across a
+	// restart. The database is then restored from a copy taken in that
+	// term, so its epoch comes back, and reaches identity 2 again with
+	// gamma instead of beta: one transaction stands for both.
+	var termEpoch string
+	var termAt time.Time
+	if err := owner.QueryRow(t.Context(), "SELECT epoch, changed_at FROM stream_epoch WHERE id = 1").Scan(&termEpoch, &termAt); err != nil {
+		t.Fatal(err)
+	}
+	network.setCut(true)
+	eventually(t, "the gateway's stream down", func() bool { return gw.metric(`gw_config_sync_age_seconds`) > 6 })
+	cp.stop(syscall.SIGTERM)
+	cp = startCP(t, "controlplane-3", db, grpcAddr, iss)
+	eventually(t, "a new epoch after the restart", func() bool { return dbEpoch(t, owner) != termEpoch })
+	restartEpoch := dbEpoch(t, owner)
+	tx, err = owner.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range []struct {
+		sql  string
+		args []any
+	}{
+		{"UPDATE stream_epoch SET epoch = $1, changed_at = $2 WHERE id = 1", []any{termEpoch, termAt}},
+		{"UPDATE tenants SET name = 'gamma' WHERE name = 'beta'", nil},
+		{"UPDATE identity_state SET changed_at = clock_timestamp() WHERE id = 1", nil},
+		{"SELECT pg_notify('spillway_identity', '2')", nil},
+	} {
+		if _, err := tx.Exec(t.Context(), stmt.sql, stmt.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tx.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "a new epoch after an earlier term's epoch came back", func() bool {
+		e := dbEpoch(t, owner)
+		return e != termEpoch && e != restartEpoch
+	})
+	network.setCut(false)
+	eventually(t, "the returning gateway resynced to the restored database", synced("gamma"))
+
+	// A snapshot of another epoch at the same versions, with other
+	// content, served while the control plane is down.
+	gw.stop(syscall.SIGTERM)
+	cp.stop(syscall.SIGTERM)
+	f, err := managed.ReadSnapshot(snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Config.Upstreams[0].Endpoints[0].Address = upstreamAnswering(t, "stale")
+	f.Identity.Tenants[0].Name = "stale"
+	f.Epoch = "0123456789abcdef0123456789abcdef"
+	if err := managed.WriteSnapshot(snap, f); err != nil {
+		t.Fatal(err)
+	}
+	gw = startManaged(t, "gateway-1", network.addr, dir)
+	eventually(t, "ready from the snapshot", gw.ready)
+	if _, body := get(t, gw.url+"/r"); body != "stale" {
+		t.Fatalf("from the snapshot: /r %q", body)
+	}
+	startCP(t, "controlplane-4", db, grpcAddr, iss)
+	eventually(t, "the gateway resynced from another epoch", synced("gamma"))
+	if _, body := get(t, gw.url+"/r"); body != "one" {
+		t.Errorf("after the resync: /r %q, want the control plane's upstream", body)
 	}
 }
 

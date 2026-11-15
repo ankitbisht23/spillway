@@ -35,8 +35,9 @@ const (
 // ConfigService is served by the active control-plane replica only
 // (CP-22, ADR-0038).
 type ConfigServiceClient interface {
-	// Watch sends the current config and identity, each when its version
-	// differs from the request's, then every new version (CP-06).
+	// Watch sends the current config and identity, each when its version or
+	// the stream epoch differs from the request's, then every new version
+	// (CP-06, ADR-0055).
 	Watch(ctx context.Context, in *WatchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WatchResponse], error)
 	// Heartbeat records what the gateway runs and answers the live replica
 	// count (CP-08, RL-24).
@@ -87,8 +88,9 @@ func (c *configServiceClient) Heartbeat(ctx context.Context, in *HeartbeatReques
 // ConfigService is served by the active control-plane replica only
 // (CP-22, ADR-0038).
 type ConfigServiceServer interface {
-	// Watch sends the current config and identity, each when its version
-	// differs from the request's, then every new version (CP-06).
+	// Watch sends the current config and identity, each when its version or
+	// the stream epoch differs from the request's, then every new version
+	// (CP-06, ADR-0055).
 	Watch(*WatchRequest, grpc.ServerStreamingServer[WatchResponse]) error
 	// Heartbeat records what the gateway runs and answers the live replica
 	// count (CP-08, RL-24).

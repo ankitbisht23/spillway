@@ -45,8 +45,8 @@ Decisions that shape Spillway and are not obvious from the code or from docs/des
 | [0034](0034-user-decisions-after-the-m4-review.md) | User decisions after the M4 review | Accepted | 2026-11-13 |
 | [0035](0035-m5-control-plane-and-auth-plan-and-decisions.md) | M5 control plane and auth: plan and decisions | Accepted; the auth_mode interim ended by 0049; the from_plan and default_limits interim ended by 0050 | 2026-11-13 |
 | [0036](0036-control-plane-data-model-migrations-and-rest-api.md) | Control-plane data model, migrations and REST API | Accepted | 2026-11-13 |
-| [0037](0037-config-publish-rollback-and-the-identity-path.md) | Config publish, versions and rollback; the identity path | Accepted | 2026-11-13 |
-| [0038](0038-config-distribution-watch-heartbeat-snapshots-and-the-active-replica.md) | Config distribution: Watch, Heartbeat, snapshots and the active replica | Accepted | 2026-11-13 |
+| [0037](0037-config-publish-rollback-and-the-identity-path.md) | Config publish, versions and rollback; the identity path | Accepted; versions on the stream are named with a stream epoch by 0055 | 2026-11-13 |
+| [0038](0038-config-distribution-watch-heartbeat-snapshots-and-the-active-replica.md) | Config distribution: Watch, Heartbeat, snapshots and the active replica | Accepted; what Watch sends, which lower versions a gateway applies and the snapshot file refined by 0055 | 2026-11-13 |
 | [0039](0039-gateway-authentication-managed-api-keys-jwt-and-auth-modes.md) | Gateway authentication: managed API keys, JWT and auth modes | Accepted; authn span outcome names settled by 0049 | 2026-11-13 |
 | [0040](0040-control-plane-security-mtls-oidc-rbac-audit-and-secrets.md) | Control-plane security: mTLS, OIDC, RBAC, audit and secrets | Accepted; where RBAC is enforced superseded by 0043; the stream certificates' paths superseded by 0047 | 2026-11-13 |
 | [0041](0041-limit-precedence-plans-overrides-access-lists-and-heavy-hitters.md) | Limit precedence: plans, overrides, access lists and heavy hitters | Accepted | 2026-11-13 |
@@ -63,3 +63,4 @@ Decisions that shape Spillway and are not obvious from the code or from docs/des
 | [0052](0052-make-verify-m5-details.md) | make verify-m5: details | Accepted | 2026-11-14 |
 | [0053](0053-keyed-heavy-hitter-digests.md) | Keyed heavy-hitter digests and the admin lookup | Accepted | 2026-11-15 |
 | [0054](0054-key-rotation-carries-key-level-access-list-entries.md) | Key rotation carries key-level access-list entries | Accepted | 2026-11-15 |
+| [0055](0055-stream-epoch-and-resync-after-a-database-restore.md) | Stream epoch: gateways resync after a database restore | Accepted | 2026-11-15 |

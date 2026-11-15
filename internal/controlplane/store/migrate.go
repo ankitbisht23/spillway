@@ -38,7 +38,8 @@ func SchemaVersion() int64 {
 
 // Migrate applies the pending migrations to the database at dsn as its
 // owner, under Postgres's session advisory lock so that two runs never
-// interleave, then lets the app role log in with appPassword (CP-19,
+// interleave, gives the database a random stream epoch if it has none
+// (ADR-0055), then lets the app role log in with appPassword (CP-19,
 // ADR-0036, ADR-0040). It returns the versions it applied, none when the
 // schema is current.
 func Migrate(ctx context.Context, dsn, ownerPassword, appPassword string) ([]int64, error) {
@@ -54,6 +55,14 @@ func Migrate(ctx context.Context, dsn, ownerPassword, appPassword string) ([]int
 	applied, err := up(ctx, sqlDB)
 	if err != nil {
 		return nil, err
+	}
+	epoch, err := NewEpoch()
+	if err != nil {
+		return nil, err
+	}
+	// Never replaced here: a later run on the same database keeps it.
+	if _, err := sqlDB.ExecContext(ctx, "INSERT INTO stream_epoch (id, epoch) VALUES (1, $1) ON CONFLICT (id) DO NOTHING", epoch); err != nil {
+		return nil, fmt.Errorf("stream epoch: %w", err)
 	}
 	verifier, err := scramVerifier(appPassword)
 	if err != nil {

@@ -1,6 +1,6 @@
 # 0038. Config distribution: Watch, Heartbeat, snapshots and the active replica
 
-- **Status:** Accepted
+- **Status:** Accepted; what Watch sends, which lower versions a gateway applies and the snapshot file refined by 0055
 - **Date:** 2026-11-13
 - **Requirement IDs:** CP-06 – CP-09, CP-18, CP-21, CP-22, RL-02, RL-21, RL-23, RL-24, RL-31, GW-17, GW-21, GW-24, GW-29, OB-05, SEC-10, NFR-08, NFR-12
 

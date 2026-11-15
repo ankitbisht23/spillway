@@ -319,21 +319,35 @@ func (q *Queries) InsertConfigVersion(ctx context.Context, arg InsertConfigVersi
 
 const latestVersions = `-- name: LatestVersions :one
 SELECT (SELECT coalesce(max(version), 0) FROM config_versions)::bigint AS config_version,
-       (SELECT version FROM identity_state WHERE id = 1)::bigint AS identity_version
+       coalesce((SELECT published_at FROM config_versions ORDER BY version DESC LIMIT 1), to_timestamp(0))::timestamptz AS config_at,
+       (SELECT version FROM identity_state WHERE id = 1)::bigint AS identity_version,
+       (SELECT changed_at FROM identity_state WHERE id = 1)::timestamptz AS identity_at,
+       coalesce((SELECT epoch FROM stream_epoch WHERE id = 1), '')::text AS epoch
 `
 
 type LatestVersionsRow struct {
 	ConfigVersion   int64
+	ConfigAt        time.Time
 	IdentityVersion int64
+	IdentityAt      time.Time
+	Epoch           string
 }
 
-// config_versions_pkey backward scan and identity_state_pkey: the newest
-// config and identity versions, which the broadcaster compares with what it
-// holds every 10 s (ADR-0038).
+// config_versions_pkey backward scans, identity_state_pkey and
+// stream_epoch_pkey: the newest config and identity versions, when each was
+// made (to_timestamp(0) before the first publish), and the stream epoch,
+// which the broadcaster compares with what it holds every 10 s (ADR-0038,
+// ADR-0055).
 func (q *Queries) LatestVersions(ctx context.Context) (LatestVersionsRow, error) {
 	row := q.db.QueryRow(ctx, latestVersions)
 	var i LatestVersionsRow
-	err := row.Scan(&i.ConfigVersion, &i.IdentityVersion)
+	err := row.Scan(
+		&i.ConfigVersion,
+		&i.ConfigAt,
+		&i.IdentityVersion,
+		&i.IdentityAt,
+		&i.Epoch,
+	)
 	return i, err
 }
 
@@ -571,6 +585,51 @@ func (q *Queries) RestoreUpstream(ctx context.Context, arg RestoreUpstreamParams
 		arg.CreatedAt,
 	)
 	return err
+}
+
+const rotateStreamEpoch = `-- name: RotateStreamEpoch :one
+INSERT INTO stream_epoch (id, epoch) VALUES (1, $1::text)
+ON CONFLICT (id) DO UPDATE SET epoch = excluded.epoch, changed_at = clock_timestamp()
+WHERE $2::text = '' OR stream_epoch.epoch = $2::text
+RETURNING epoch, changed_at
+`
+
+type RotateStreamEpochParams struct {
+	Next string
+	Old  string
+}
+
+type RotateStreamEpochRow struct {
+	Epoch     string
+	ChangedAt time.Time
+}
+
+// stream_epoch_pkey. Sets epoch next when old is empty or is the epoch held
+// (ADR-0055); no row when another value replaced old first.
+func (q *Queries) RotateStreamEpoch(ctx context.Context, arg RotateStreamEpochParams) (RotateStreamEpochRow, error) {
+	row := q.db.QueryRow(ctx, rotateStreamEpoch, arg.Next, arg.Old)
+	var i RotateStreamEpochRow
+	err := row.Scan(&i.Epoch, &i.ChangedAt)
+	return i, err
+}
+
+const streamEpoch = `-- name: StreamEpoch :one
+SELECT coalesce((SELECT epoch FROM stream_epoch WHERE id = 1), '')::text AS epoch,
+       coalesce((SELECT changed_at FROM stream_epoch WHERE id = 1), to_timestamp(0))::timestamptz AS changed_at
+`
+
+type StreamEpochRow struct {
+	Epoch     string
+	ChangedAt time.Time
+}
+
+// stream_epoch_pkey. The epoch and when it was set; empty and
+// to_timestamp(0) when the row is missing.
+func (q *Queries) StreamEpoch(ctx context.Context) (StreamEpochRow, error) {
+	row := q.db.QueryRow(ctx, streamEpoch)
+	var i StreamEpochRow
+	err := row.Scan(&i.Epoch, &i.ChangedAt)
+	return i, err
 }
 
 const tenantsOnPlans = `-- name: TenantsOnPlans :many

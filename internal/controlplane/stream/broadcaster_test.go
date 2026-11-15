@@ -3,6 +3,7 @@ package stream
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"sync"
@@ -13,6 +14,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/ankitbisht23/spillway/internal/controlplane/store"
 	"github.com/ankitbisht23/spillway/internal/gen/configpb"
@@ -23,11 +25,16 @@ import (
 // can break. Every wait is on a channel, so it runs in a synctest bubble,
 // whose fake clock moves when every goroutine is blocked.
 type fakeSource struct {
-	mu       sync.Mutex
-	config   int64 // 0: nothing published
-	identity int64
-	reads    [sections]int // section reads
-	fail     error         // what LatestConfig returns, if not nil
+	mu        sync.Mutex
+	config    int64 // 0: nothing published
+	identity  int64
+	epoch     string
+	epochAt   time.Time     // when epoch was set: each rotation a second later
+	history   int64         // bumped by a restore: the versions made after it are made at other times
+	rotations int           // epochs set by RotateEpoch
+	rotateErr []error       // what the next RotateEpoch calls fail with
+	reads     [sections]int // section reads
+	fail      error         // what StreamConfig returns, if not nil
 
 	notify  chan string // a notification on the LISTEN connection
 	breakLn chan error  // ends the LISTEN connection with the error
@@ -45,35 +52,89 @@ func (f *fakeSource) set(config, identity int64) {
 	f.config, f.identity = config, identity
 }
 
+// restore sets the versions as a restore that then reaches them again
+// does: under the same epoch, made at other times.
+func (f *fakeSource) restore(config, identity int64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.config, f.identity = config, identity
+	f.history++
+}
+
+// madeAt is when version v of the current history was made; zero for no
+// config.
+func (f *fakeSource) madeAt(v int64) time.Time {
+	if v == 0 {
+		return time.Time{}
+	}
+	return time.Unix(v, f.history)
+}
+
+// setEpoch replaces the epoch and when it was set, as a restore does.
+func (f *fakeSource) setEpoch(epoch string, at time.Time) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.epoch, f.epochAt = epoch, at
+}
+
+// epochSetAt is when the current epoch was set.
+func (f *fakeSource) epochSetAt() time.Time {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.epochAt
+}
+
+func (f *fakeSource) currentEpoch() (string, int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.epoch, f.rotations
+}
+
+func (f *fakeSource) RotateEpoch(_ context.Context, old string) (string, time.Time, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.rotateErr) > 0 {
+		err := f.rotateErr[0]
+		f.rotateErr = f.rotateErr[1:]
+		return "", time.Time{}, false, err
+	}
+	if old != "" && old != f.epoch {
+		return f.epoch, f.epochAt, false, nil
+	}
+	f.rotations++
+	f.epoch, f.epochAt = fmt.Sprintf("%032x", f.rotations), f.epochAt.Add(time.Second)
+	return f.epoch, f.epochAt, true, nil
+}
+
 func (f *fakeSource) readCount(s section) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.reads[s]
 }
 
-func (f *fakeSource) LatestVersions(context.Context) (int64, int64, error) {
+func (f *fakeSource) LatestVersions(context.Context) (store.Versions, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.config, f.identity, nil
+	return store.Versions{Config: f.config, Identity: f.identity, ConfigAt: f.madeAt(f.config), IdentityAt: f.madeAt(f.identity), Epoch: f.epoch}, nil
 }
 
-// LatestConfig reads the version current when it starts, as a
+// StreamConfig reads the version and epoch current when it starts, as a
 // transaction's snapshot would, then waits on block, if set.
-func (f *fakeSource) LatestConfig(context.Context) (*configpb.ConfigUpdate, error) {
+func (f *fakeSource) StreamConfig(context.Context) (*configpb.ConfigUpdate, time.Time, error) {
 	f.mu.Lock()
-	block, v, fail := f.block, f.config, f.fail
+	block, v, at, epoch, epochAt, fail := f.block, f.config, f.madeAt(f.config), f.epoch, f.epochAt, f.fail
 	f.reads[sectionConfig]++
 	f.mu.Unlock()
 	if block != nil {
 		<-block
 	}
 	if fail != nil {
-		return nil, fail
+		return nil, time.Time{}, fail
 	}
 	if v == 0 {
-		return nil, nil
+		return &configpb.ConfigUpdate{Epoch: epoch}, epochAt, nil
 	}
-	return &configpb.ConfigUpdate{SchemaVersion: currentSchema(), Config: &configpb.Config{Version: v}}, nil
+	return &configpb.ConfigUpdate{SchemaVersion: currentSchema(), Config: &configpb.Config{Version: v}, PublishedAt: timestamppb.New(at), Epoch: epoch}, epochAt, nil
 }
 
 func (f *fakeSource) listenCount() int {
@@ -82,11 +143,12 @@ func (f *fakeSource) listenCount() int {
 	return f.listens
 }
 
-func (f *fakeSource) Identity(context.Context) (*configpb.Identity, error) {
+func (f *fakeSource) StreamIdentity(context.Context) (*configpb.IdentityUpdate, time.Time, time.Time, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.reads[sectionIdentity]++
-	return &configpb.Identity{Version: f.identity, KeyFormat: "spw1"}, nil
+	return &configpb.IdentityUpdate{SchemaVersion: currentSchema(), Identity: &configpb.Identity{Version: f.identity, KeyFormat: "spw1"}, Epoch: f.epoch},
+		f.madeAt(f.identity), f.epochAt, nil
 }
 
 func (f *fakeSource) Listen(ctx context.Context, ready func(), notify func(string)) error {
@@ -138,7 +200,23 @@ func version(t *testing.T, u *update) int64 {
 	if v := m.GetConfig().GetConfig().GetVersion() + m.GetIdentity().GetIdentity().GetVersion(); v != u.version {
 		t.Fatalf("update of version %d holds version %d", u.version, v)
 	}
+	if u.msg != nil {
+		if e := m.GetConfig().GetEpoch() + m.GetIdentity().GetEpoch(); e != u.epoch {
+			t.Fatalf("update of epoch %q holds epoch %q", u.epoch, e)
+		}
+	}
 	return u.version
+}
+
+// epochs returns the epochs both sections are held under.
+func epochs(b *Broadcaster) [sections]string {
+	var e [sections]string
+	for s := range sections {
+		if u := b.current(s); u != nil {
+			e[s] = u.epoch
+		}
+	}
+	return e
 }
 
 func woken(sub *Subscriber) bool {
@@ -157,7 +235,7 @@ func TestBroadcasterNotifications(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		src := newFakeSource(0, 1)
 		b := started(t, src)
-		if c, id := b.current(sectionConfig), b.current(sectionIdentity); c != nil || version(t, id) != 1 {
+		if c, id := b.current(sectionConfig), b.current(sectionIdentity); c.msg != nil || version(t, id) != 1 {
 			t.Fatalf("loaded config %v, identity %v; want none and 1", c, id)
 		}
 		a, _, _ := b.subscribe("gateway-1")
@@ -182,12 +260,101 @@ func TestBroadcasterNotifications(t *testing.T) {
 		if src.readCount(sectionConfig) != reads || woken(a) {
 			t.Errorf("an unchanged version was read again or woke a stream")
 		}
-		// A lower version (a restored database) is the one to send.
+		// A lower version (a restored database) is the one to send, under
+		// a new epoch: TestBroadcasterRestore.
 		src.set(2, 2)
 		src.notify <- store.ChannelConfig
 		synctest.Wait()
 		if v := version(t, b.current(sectionConfig)); v != 2 {
 			t.Errorf("after the database went back: version %d, want 2", v)
+		}
+	})
+}
+
+// TestBroadcasterEpochPerTerm checks that each active term starts a new
+// stream epoch before it reads anything, so both sections are held under
+// it, and that a failing database is retried with backoff (ADR-0055).
+func TestBroadcasterEpochPerTerm(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		src := newFakeSource(3, 4)
+		src.setEpoch("restored-epoch", time.Unix(1, 0))
+		src.rotateErr = []error{errors.New("conn refused"), errors.New("conn refused")}
+		start := time.Now()
+		b := started(t, src)
+		first, n := src.currentEpoch()
+		if n != 1 || epochs(b) != [sections]string{first, first} || first == "restored-epoch" {
+			t.Fatalf("after the first term began: %d epochs set, held %v, current %q", n, epochs(b), first)
+		}
+		if took := time.Since(start); took != listenBackoffMin+2*listenBackoffMin {
+			t.Errorf("two failed tries took %v, want 100 ms and 200 ms of backoff", took)
+		}
+		b2 := started(t, src) // the next active term, on the same database
+		second, n := src.currentEpoch()
+		if n != 2 || second == first || epochs(b2) != [sections]string{second, second} {
+			t.Errorf("after the second term began: %d epochs set, held %v", n, epochs(b2))
+		}
+	})
+}
+
+// TestBroadcasterRestore checks a database restored from an older copy of
+// itself while the replica is active (ADR-0055): a section's version goes
+// back under the epoch held, or comes back to the version held but made at
+// another time (it reached it again before the broadcaster read it), so
+// the broadcaster sets a new epoch and sends both sections under it, the
+// one whose version did not change too. So does a copy taken in an earlier
+// term, whose epoch was set before the one held, at any versions: a
+// gateway offline since then may hold that epoch. An epoch set after the
+// one held (another replica's term, another database) is sent under it
+// without setting a new one.
+func TestBroadcasterRestore(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		src := newFakeSource(5, 9)
+		b := started(t, src)
+		sub, _, _ := b.subscribe("gateway-1")
+		before, _ := src.currentEpoch()
+
+		src.set(5, 7) // identity back from 9 to 7; config unchanged
+		src.notify <- store.ChannelIdentity
+		synctest.Wait()
+		after, n := src.currentEpoch()
+		if n != 2 || after == before || epochs(b) != [sections]string{after, after} || !woken(sub) {
+			t.Fatalf("after the restore: %d epochs set, held %v, current %q", n, epochs(b), after)
+		}
+		if c, id := version(t, b.current(sectionConfig)), version(t, b.current(sectionIdentity)); c != 5 || id != 7 {
+			t.Errorf("after the restore: config %d, identity %d; want 5 and 7", c, id)
+		}
+
+		// Back to 4 and up to 5 again before the broadcaster read: the
+		// same version, made at another time.
+		src.restore(5, 7)
+		src.notify <- store.ChannelConfig
+		synctest.Wait()
+		third, m := src.currentEpoch()
+		if m != 3 || epochs(b) != [sections]string{third, third} {
+			t.Fatalf("after the same version made again: %d epochs set, held %v, current %q", m, epochs(b), third)
+		}
+		if c := b.current(sectionConfig); version(t, c) != 5 || !c.at.Equal(time.Unix(5, 1)) {
+			t.Errorf("after the same version made again: config %d made at %v", c.version, c.at)
+		}
+
+		// The first term's epoch comes back at the same versions: a copy
+		// taken in it.
+		src.setEpoch(before, time.Time{}.Add(time.Second))
+		src.notify <- store.ChannelIdentity
+		synctest.Wait()
+		fourth, k := src.currentEpoch()
+		if k != 4 || fourth == before || epochs(b) != [sections]string{fourth, fourth} {
+			t.Fatalf("after an earlier term's epoch came back: %d epochs set, held %v, current %q", k, epochs(b), fourth)
+		}
+
+		// An epoch set after the one held at the same versions: no new
+		// epoch.
+		other := fmt.Sprintf("%032x", 99)
+		src.setEpoch(other, src.epochSetAt().Add(time.Hour))
+		src.notify <- store.ChannelConfig
+		synctest.Wait()
+		if _, k := src.currentEpoch(); k != 4 || epochs(b) != [sections]string{other, other} {
+			t.Errorf("after an epoch set later: %d epochs set, held %v; want %q for both", k, epochs(b), other)
 		}
 	})
 }

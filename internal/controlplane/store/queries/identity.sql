@@ -182,6 +182,10 @@ SELECT pg_notify('spillway_identity', @version::text);
 -- identity_state_pkey.
 SELECT version FROM identity_state WHERE id = 1;
 
+-- name: IdentityChangedAt :one
+-- identity_state_pkey. When the identity version was made (ADR-0055).
+SELECT changed_at FROM identity_state WHERE id = 1;
+
 -- The identity snapshot (CP-20, ADR-0037): every row that can reach a
 -- gateway, read in one REPEATABLE READ transaction with the version.
 

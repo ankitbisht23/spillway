@@ -142,8 +142,21 @@ func TestControlPlaneMigrate(t *testing.T) {
 	if want := store.SchemaVersion(); len(applied) != int(want) || applied[len(applied)-1] != want {
 		t.Errorf("first run applied %v, want 1 … %d", applied, want)
 	}
+	epoch := func() string {
+		var e string
+		if err := pgConnect(t, pgURL(t, "spillway", db), pgOwnerPassword).QueryRow(ctx, "SELECT epoch FROM stream_epoch WHERE id = 1").Scan(&e); err != nil {
+			t.Fatal(err)
+		}
+		return e
+	}
+	first := epoch()
 	if again, err := store.Migrate(ctx, pgURL(t, "spillway", db), pgOwnerPassword, pgAppPassword); err != nil || len(again) != 0 {
 		t.Errorf("second run applied %v, %v; want none", again, err)
+	}
+	// The stream epoch is made once, never replaced by a later run
+	// (ADR-0055).
+	if again := epoch(); len(first) != 32 || again != first {
+		t.Errorf("stream epoch %q after the first run, %q after the second", first, again)
 	}
 
 	// Two runs at once: the session lock makes one wait for the other.

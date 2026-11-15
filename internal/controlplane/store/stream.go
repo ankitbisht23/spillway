@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -51,11 +52,117 @@ func (s *Store) LatestConfig(ctx context.Context) (*configpb.ConfigUpdate, error
 	}, nil
 }
 
-// LatestVersions returns the latest config version (0 before the first
-// publish) and the identity version.
-func (s *Store) LatestVersions(ctx context.Context) (configVersion, identityVersion int64, err error) {
+// Versions are the newest config and identity versions, when each was
+// made, and the stream epoch (ADR-0055).
+type Versions struct {
+	Config, Identity int64 // Config is 0 before the first publish
+	// The config's published_at (zero before the first publish) and the
+	// identity's changed_at: within one epoch a version is made once, so
+	// another time at the same version means another history.
+	ConfigAt, IdentityAt time.Time
+	Epoch                string // "" when there is none yet
+}
+
+// LatestVersions returns the newest versions.
+func (s *Store) LatestVersions(ctx context.Context) (Versions, error) {
 	r, err := db.New(s.pool).LatestVersions(ctx)
-	return r.ConfigVersion, r.IdentityVersion, err
+	if err != nil {
+		return Versions{}, err
+	}
+	v := Versions{Config: r.ConfigVersion, Identity: r.IdentityVersion, ConfigAt: r.ConfigAt, IdentityAt: r.IdentityAt, Epoch: r.Epoch}
+	if v.Config == 0 {
+		v.ConfigAt = time.Time{}
+	}
+	return v, nil
+}
+
+// StreamConfig returns the latest published config version as the stream
+// sends it, with the stream epoch and when it was set, read in the same
+// REPEATABLE READ transaction, so they always match (ADR-0055); its Config
+// is nil before the first publish. A version of another schema major is an
+// error (CP-18).
+func (s *Store) StreamConfig(ctx context.Context) (u *configpb.ConfigUpdate, epochAt time.Time, err error) {
+	u = &configpb.ConfigUpdate{}
+	err = pgx.BeginTxFunc(ctx, s.pool, readSnapshot, func(tx pgx.Tx) error {
+		q := db.New(tx)
+		e, err := q.StreamEpoch(ctx)
+		if err != nil {
+			return err
+		}
+		u.Epoch, epochAt = e.Epoch, e.ChangedAt
+		v, err := q.LatestConfigVersion(ctx)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if u.Config, err = parseSnapshot(v); err != nil {
+			return err
+		}
+		u.SchemaVersion = &configpb.SchemaVersion{Major: v.SchemaMajor, Minor: v.SchemaMinor}
+		u.PublishedAt = timestamppb.New(v.PublishedAt)
+		return nil
+	})
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	return u, epochAt, nil
+}
+
+// StreamIdentity returns the identity snapshot as the stream sends it,
+// with the stream epoch, when it was set and when the identity version was
+// made (changed_at), read in the same transaction (ADR-0055).
+func (s *Store) StreamIdentity(ctx context.Context) (u *configpb.IdentityUpdate, madeAt, epochAt time.Time, err error) {
+	u = &configpb.IdentityUpdate{SchemaVersion: &configpb.SchemaVersion{Major: config.SchemaMajor, Minor: config.SchemaMinor}}
+	err = pgx.BeginTxFunc(ctx, s.pool, readSnapshot, func(tx pgx.Tx) error {
+		q := db.New(tx)
+		e, err := q.StreamEpoch(ctx)
+		if err != nil {
+			return err
+		}
+		u.Epoch, epochAt = e.Epoch, e.ChangedAt
+		if madeAt, err = q.IdentityChangedAt(ctx); err != nil {
+			return err
+		}
+		u.Identity, err = readIdentity(ctx, q)
+		return err
+	})
+	if err != nil {
+		return nil, time.Time{}, time.Time{}, err
+	}
+	return u, madeAt, epochAt, nil
+}
+
+// readSnapshot is a transaction whose reads all see one snapshot.
+var readSnapshot = pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly}
+
+// RotateEpoch sets a new random stream epoch and returns it with the time
+// it was set (ADR-0055). With old set, it does so only while the epoch is
+// still old, and otherwise returns the epoch that replaced it and rotated
+// false.
+func (s *Store) RotateEpoch(ctx context.Context, old string) (epoch string, at time.Time, rotated bool, err error) {
+	next, err := NewEpoch()
+	if err != nil {
+		return "", time.Time{}, false, err
+	}
+	q := db.New(s.pool)
+	r, err := q.RotateStreamEpoch(ctx, db.RotateStreamEpochParams{Next: next, Old: old})
+	if errors.Is(err, pgx.ErrNoRows) {
+		e, err := q.StreamEpoch(ctx)
+		return e.Epoch, e.ChangedAt, false, err
+	}
+	return r.Epoch, r.ChangedAt, err == nil, err
+}
+
+// NewEpoch returns a random stream epoch: 16 bytes from crypto/rand, in
+// lowercase hex (ADR-0055).
+func NewEpoch() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }
 
 // Identity returns the identity snapshot (ADR-0037): the identity version
@@ -64,64 +171,72 @@ func (s *Store) LatestVersions(ctx context.Context) (configVersion, identityVers
 // ended — read in one REPEATABLE READ transaction, so the rows and the
 // version always match. Keys are their prefix and SHA-256, never more.
 func (s *Store) Identity(ctx context.Context) (*configpb.Identity, error) {
-	id := &configpb.Identity{KeyFormat: config.KeyFormatManaged}
-	err := pgx.BeginTxFunc(ctx, s.pool, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly}, func(tx pgx.Tx) error {
-		q := db.New(tx)
+	var id *configpb.Identity
+	err := pgx.BeginTxFunc(ctx, s.pool, readSnapshot, func(tx pgx.Tx) error {
 		var err error
-		if id.Version, err = q.IdentityVersion(ctx); err != nil {
-			return err
-		}
-		tenants, err := q.AllTenants(ctx)
-		if err != nil {
-			return err
-		}
-		for _, t := range tenants {
-			id.Tenants = append(id.Tenants, &configpb.Tenant{Id: t.ID, Name: t.Name, PlanId: t.PlanID, Status: t.Status})
-		}
-		consumers, err := q.AllConsumers(ctx)
-		if err != nil {
-			return err
-		}
-		for _, c := range consumers {
-			id.Consumers = append(id.Consumers, &configpb.Consumer{
-				Id: c.ID, TenantId: c.TenantID, Name: c.Name, PlanId: deref(c.PlanID), Status: c.Status, JwtSubject: deref(c.JwtSubject),
-			})
-		}
-		keys, err := q.LiveAPIKeys(ctx)
-		if err != nil {
-			return err
-		}
-		for _, k := range keys {
-			id.ApiKeys = append(id.ApiKeys, &configpb.ApiKey{
-				Id: k.ID, ConsumerId: k.ConsumerID, Prefix: k.Prefix, Hash: hex.EncodeToString(k.Hash), ExpiresAt: timestamp(k.ExpiresAt),
-			})
-		}
-		lists, err := q.AllAccessLists(ctx)
-		if err != nil {
-			return err
-		}
-		for _, a := range lists {
-			e := &configpb.AccessListEntry{Id: a.ID, Action: a.Action, SubjectType: a.SubjectType, ApiKeyId: deref(a.ApiKeyID), ConsumerId: deref(a.ConsumerID)}
-			if a.Cidr != nil {
-				e.Cidr = a.Cidr.String()
-			}
-			id.AccessLists = append(id.AccessLists, e)
-		}
-		overrides, err := q.LiveOverrides(ctx)
-		if err != nil {
-			return err
-		}
-		for _, o := range overrides {
-			ov := &configpb.Override{Id: o.ID, ConsumerId: o.ConsumerID, PolicyId: deref(o.PolicyID), StartsAt: timestamp(o.StartsAt), EndsAt: timestamp(o.EndsAt)}
-			if ov.Limits, err = parseLimits(o.Limits); err != nil {
-				return fmt.Errorf("override %d: stored limits: %w", o.ID, err)
-			}
-			id.Overrides = append(id.Overrides, ov)
-		}
-		return nil
+		id, err = readIdentity(ctx, db.New(tx))
+		return err
 	})
 	if err != nil {
 		return nil, err
+	}
+	return id, nil
+}
+
+// readIdentity reads the identity snapshot with q, which must be a
+// REPEATABLE READ transaction's.
+func readIdentity(ctx context.Context, q *db.Queries) (*configpb.Identity, error) {
+	id := &configpb.Identity{KeyFormat: config.KeyFormatManaged}
+	var err error
+	if id.Version, err = q.IdentityVersion(ctx); err != nil {
+		return nil, err
+	}
+	tenants, err := q.AllTenants(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, t := range tenants {
+		id.Tenants = append(id.Tenants, &configpb.Tenant{Id: t.ID, Name: t.Name, PlanId: t.PlanID, Status: t.Status})
+	}
+	consumers, err := q.AllConsumers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range consumers {
+		id.Consumers = append(id.Consumers, &configpb.Consumer{
+			Id: c.ID, TenantId: c.TenantID, Name: c.Name, PlanId: deref(c.PlanID), Status: c.Status, JwtSubject: deref(c.JwtSubject),
+		})
+	}
+	keys, err := q.LiveAPIKeys(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, k := range keys {
+		id.ApiKeys = append(id.ApiKeys, &configpb.ApiKey{
+			Id: k.ID, ConsumerId: k.ConsumerID, Prefix: k.Prefix, Hash: hex.EncodeToString(k.Hash), ExpiresAt: timestamp(k.ExpiresAt),
+		})
+	}
+	lists, err := q.AllAccessLists(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, a := range lists {
+		e := &configpb.AccessListEntry{Id: a.ID, Action: a.Action, SubjectType: a.SubjectType, ApiKeyId: deref(a.ApiKeyID), ConsumerId: deref(a.ConsumerID)}
+		if a.Cidr != nil {
+			e.Cidr = a.Cidr.String()
+		}
+		id.AccessLists = append(id.AccessLists, e)
+	}
+	overrides, err := q.LiveOverrides(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, o := range overrides {
+		ov := &configpb.Override{Id: o.ID, ConsumerId: o.ConsumerID, PolicyId: deref(o.PolicyID), StartsAt: timestamp(o.StartsAt), EndsAt: timestamp(o.EndsAt)}
+		if ov.Limits, err = parseLimits(o.Limits); err != nil {
+			return nil, fmt.Errorf("override %d: stored limits: %w", o.ID, err)
+		}
+		id.Overrides = append(id.Overrides, ov)
 	}
 	return id, nil
 }

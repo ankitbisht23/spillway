@@ -65,10 +65,11 @@ func NewService(b *Broadcaster, rec Recorder, log *slog.Logger) *Service {
 }
 
 // Watch registers the stream under its replica name, sends the current
-// config and then the current identity when their versions differ from the
-// request's, then each new version, until the stream ends, another stream
+// config and then the current identity when their versions or the stream
+// epoch differ from the request's (an empty epoch always differs), then
+// each new version, until the stream ends, another stream
 // with the same name replaces it (ABORTED), or the replica steps down
-// (UNAVAILABLE) (CP-06, ADR-0038).
+// (UNAVAILABLE) (CP-06, ADR-0038, ADR-0055).
 func (s *Service) Watch(req *configpb.WatchRequest, stream grpc.ServerStreamingServer[configpb.WatchResponse]) error {
 	name, err := s.replica(stream.Context(), "Watch", req.GetReplicaId())
 	if err != nil {
@@ -99,15 +100,20 @@ func (s *Service) Watch(req *configpb.WatchRequest, stream grpc.ServerStreamingS
 	if replaced {
 		log.Warn("Watch stream replaced an open stream with the same replica name")
 	}
-	log.Info("Watch stream opened", "config_version", req.GetConfigVersion(), "identity_version", req.GetIdentityVersion())
-	sent := [sections]int64{req.GetConfigVersion(), req.GetIdentityVersion()}
+	log.Info("Watch stream opened", "config_version", req.GetConfigVersion(), "identity_version", req.GetIdentityVersion(), "epoch", req.GetEpoch())
+	// What the gateway has of each section: its version and epoch.
+	type held struct {
+		version int64
+		epoch   string
+	}
+	sent := [sections]held{{req.GetConfigVersion(), req.GetEpoch()}, {req.GetIdentityVersion(), req.GetEpoch()}}
 	for {
 		for sec := range sections {
-			if u := s.b.current(sec); u != nil && u.version != sent[sec] {
+			if u := s.b.current(sec); u != nil && u.msg != nil && (u.version != sent[sec].version || u.epoch != sent[sec].epoch) {
 				if err := stream.SendMsg(u.msg); err != nil {
 					return err
 				}
-				sent[sec] = u.version
+				sent[sec] = held{u.version, u.epoch}
 			}
 		}
 		select {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"path/filepath"
@@ -94,8 +95,8 @@ func configServer(t *testing.T, src *fakeSource, rec Recorder, log *slog.Logger)
 	return &clients{t: t, ln: ln, ca: ca, conns: map[string]configpb.ConfigServiceClient{}}, b
 }
 
-func watchReq(name string, config, identity int64) *configpb.WatchRequest {
-	return &configpb.WatchRequest{ReplicaId: name, ConfigVersion: config, IdentityVersion: identity, SchemaVersion: currentSchema()}
+func watchReq(name, epoch string, config, identity int64) *configpb.WatchRequest {
+	return &configpb.WatchRequest{ReplicaId: name, ConfigVersion: config, IdentityVersion: identity, SchemaVersion: currentSchema(), Epoch: epoch}
 }
 
 // recv returns the stream's next message as "config N" or "identity N",
@@ -131,7 +132,7 @@ func TestWatch(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 
-	s, err := c.as("gateway-1").Watch(ctx, watchReq("gateway-1", 0, 0))
+	s, err := c.as("gateway-1").Watch(ctx, watchReq("gateway-1", "", 0, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,26 +142,68 @@ func TestWatch(t *testing.T) {
 		}
 	}
 	// A gateway with the current config gets only the identity.
-	s2, _ := c.as("gateway-2").Watch(ctx, watchReq("", 4, 6)) // replica_id is optional
+	epoch, _ := src.currentEpoch()
+	s2, _ := c.as("gateway-2").Watch(ctx, watchReq("", epoch, 4, 6)) // replica_id is optional
 	if got, err := recv(t, s2); got != "identity 7" {
 		t.Fatalf("gateway-2: %q, %v", got, err)
 	}
 	for _, step := range []struct {
 		config, identity int64
 		channel          string
-		want             string
+		want             []string
 	}{
-		{5, 7, store.ChannelConfig, "config 5"},
-		{5, 8, store.ChannelIdentity, "identity 8"},
-		{3, 8, store.ChannelConfig, "config 3"}, // a restored database
+		{5, 7, store.ChannelConfig, []string{"config 5"}},
+		{5, 8, store.ChannelIdentity, []string{"identity 8"}},
+		// A restored database: a new epoch, both sections (ADR-0055).
+		{3, 8, store.ChannelConfig, []string{"config 3", "identity 8"}},
 	} {
 		src.set(step.config, step.identity)
 		src.notify <- step.channel
 		for _, st := range []grpc.ServerStreamingClient[configpb.WatchResponse]{s, s2} {
-			if got, err := recv(t, st); got != step.want {
-				t.Fatalf("got %q, %v; want %q", got, err, step.want)
+			for _, want := range step.want {
+				if got, err := recv(t, st); got != want {
+					t.Fatalf("got %q, %v; want %q", got, err, want)
+				}
 			}
 		}
+	}
+}
+
+// TestWatchEpoch checks the stream epoch on Watch (CP-06, ADR-0055): a
+// gateway whose epoch differs from the control plane's, or that has none,
+// gets both sections at equal version numbers, each under the control
+// plane's epoch; one with the same epoch and versions gets nothing until
+// the next version.
+func TestWatchEpoch(t *testing.T) {
+	src := newFakeSource(4, 7)
+	c, _ := watchServer(t, src)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	epoch, _ := src.currentEpoch()
+	for name, gatewayEpoch := range map[string]string{"gateway-1": "0123456789abcdef0123456789abcdef", "gateway-2": ""} {
+		s, err := c.as(name).Watch(ctx, watchReq(name, gatewayEpoch, 4, 7))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{"config 4", "identity 7"} {
+			m, err := s.Recv()
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := fmt.Sprint(m.GetConfig().GetConfig().GetVersion() + m.GetIdentity().GetIdentity().GetVersion())
+			if e := m.GetConfig().GetEpoch() + m.GetIdentity().GetEpoch(); !strings.HasSuffix(want, " "+got) || e != epoch {
+				t.Fatalf("%s with epoch %q: version %s, epoch %q; want %q under %q", name, gatewayEpoch, got, e, want, epoch)
+			}
+		}
+	}
+	same, err := c.as("gateway-3").Watch(ctx, watchReq("gateway-3", epoch, 4, 7))
+	if err != nil {
+		t.Fatal(err)
+	}
+	src.set(4, 8)
+	src.notify <- store.ChannelIdentity
+	if got, err := recv(t, same); got != "identity 8" {
+		t.Fatalf("same epoch and versions: first message %q, %v; want nothing before identity 8", got, err)
 	}
 }
 
@@ -200,13 +243,15 @@ func TestWatchRefuses(t *testing.T) {
 // stream with a replica's name ends the first with ABORTED; a replica that
 // steps down ends every stream with UNAVAILABLE.
 func TestWatchReplacedAndStepDown(t *testing.T) {
-	c, b := watchServer(t, newFakeSource(1, 1))
+	src := newFakeSource(1, 1)
+	c, b := watchServer(t, src)
 	ctx := t.Context()
-	first, _ := c.as("gateway-1").Watch(ctx, watchReq("gateway-1", 1, 1))
+	epoch, _ := src.currentEpoch()
+	first, _ := c.as("gateway-1").Watch(ctx, watchReq("gateway-1", epoch, 1, 1))
 	if _, err := first.Header(); err != nil { // registered
 		t.Fatal(err)
 	}
-	second, _ := c.as("gateway-1").Watch(ctx, watchReq("gateway-1", 1, 0))
+	second, _ := c.as("gateway-1").Watch(ctx, watchReq("gateway-1", epoch, 1, 0))
 	if got, err := recv(t, second); got != "identity 1" {
 		t.Fatalf("second stream: %q %v", got, err)
 	}

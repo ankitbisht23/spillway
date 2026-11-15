@@ -1,6 +1,6 @@
 # 0037. Config publish, versions and rollback; the identity path
 
-- **Status:** Accepted
+- **Status:** Accepted; versions on the stream are named with a stream epoch by 0055
 - **Date:** 2026-11-13
 - **Requirement IDs:** CP-01 – CP-05, CP-13, CP-17, CP-20, RL-08, RL-09, SEC-06, UI-02, NFR-09
 
