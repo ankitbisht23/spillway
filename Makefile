@@ -173,8 +173,14 @@ sqlc: tool-sqlc
 
 lint: lint-go lint-web lint-proto lint-api lint-sql
 
+# Then the webui build tag's files (ADR-0057) against the real build, or an
+# empty stand-in when there is none, removed after.
+WEBUI_DIST := internal/controlplane/webui/dist
 lint-go: tool-golangci-lint
 	$(BIN)/golangci-lint run ./...
+	@if [ -d $(WEBUI_DIST) ]; then $(BIN)/golangci-lint run --build-tags webui ./internal/controlplane/webui/; else \
+		trap 'rm -rf $(WEBUI_DIST)' EXIT && mkdir $(WEBUI_DIST) && touch $(WEBUI_DIST)/index.html && \
+		$(BIN)/golangci-lint run --build-tags webui ./internal/controlplane/webui/; fi
 	go mod tidy -diff
 
 # ESLint and both typechecks, then web/src/api matches what
