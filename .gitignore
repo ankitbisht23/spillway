@@ -20,6 +20,8 @@ coverage.html
 # Web
 node_modules/
 web/dist/
+internal/controlplane/webui/dist/
+coverage/
 .vite/
 playwright-report/
 test-results/

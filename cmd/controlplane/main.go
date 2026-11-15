@@ -1,5 +1,6 @@
 // Command controlplane is Spillway's control plane (CP-01, CP-10, ADR-0036):
-// a REST admin API over Postgres and, on the one active replica, the config
+// a REST admin API over Postgres, the admin UI beside it at / (UI-09,
+// ADR-0057) and, on the one active replica, the config
 // stream to gateways (CP-06, CP-22, ADR-0038). `controlplane serve` (the
 // default) runs it; `controlplane migrate` applies the schema migrations and exits (CP-19);
 // `controlplane healthcheck` exits 0 only if the running control plane is
@@ -25,6 +26,7 @@ import (
 	"github.com/ankitbisht23/spillway/internal/controlplane/api"
 	"github.com/ankitbisht23/spillway/internal/controlplane/store"
 	"github.com/ankitbisht23/spillway/internal/controlplane/stream"
+	"github.com/ankitbisht23/spillway/internal/controlplane/webui"
 	"github.com/ankitbisht23/spillway/internal/mtls"
 	"github.com/ankitbisht23/spillway/internal/telemetry"
 )
@@ -82,6 +84,9 @@ func migrate(log *slog.Logger, getenv func(string) string) error {
 	return nil
 }
 
+// uiClientID is the admin UI's public Keycloak client (ADR-0058).
+const uiClientID = "admin-ui"
+
 // shutdownTimeout bounds how long in-flight REST requests get after
 // SIGTERM, once the config stream has stopped (ADR-0038).
 const shutdownTimeout = 5 * time.Second
@@ -128,8 +133,15 @@ func serve(log *slog.Logger, getenv func(string) string) error {
 	streams := prometheus.NewGauge(prometheus.GaugeOpts{Name: "cp_watch_streams", Help: "Open Watch streams."})
 	reg.MustRegister(active, streams)
 	admin := telemetry.NewAdminServer(reg, ready.Load, log)
+	// The REST API and the admin UI share the listener, same origin (UI-09,
+	// ADR-0057).
+	handler, err := webui.New(webui.Files(), webui.Config{Issuer: s.oidcIssuer, ClientID: uiClientID},
+		api.New(st, s.allow, net.DefaultResolver, api.OIDC{Verifier: verifier}, s.hitterSecret, log).Handler())
+	if err != nil {
+		return err
+	}
 	apiSrv := &http.Server{
-		Handler:           api.New(st, s.allow, net.DefaultResolver, api.OIDC{Verifier: verifier}, s.hitterSecret, log).Handler(),
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,
