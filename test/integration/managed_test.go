@@ -518,6 +518,10 @@ func (p *netProxy) setCut(cut bool) {
 //     gateway resyncs when the network returns;
 //   - connected while the control plane restarts: the new active term sets
 //     a new epoch, and the gateway resyncs to it;
+//   - cut off across a restart, then the database restored from a copy
+//     taken in the gateway's term, which brings that term's epoch back and
+//     reaches the gateway's versions again: the epoch was set before the
+//     one the active replica holds, so it sets a new one;
 //   - booted, with the control plane down, from an on-disk snapshot of
 //     another epoch: it serves the file, then the control plane's content
 //     once it answers.
@@ -581,6 +585,48 @@ func TestManagedGatewayEpoch(t *testing.T) {
 	eventually(t, "a new epoch after the restart", func() bool { return dbEpoch(t, owner) != before })
 	eventually(t, "the gateway under the restarted control plane's epoch", synced("beta"))
 
+	// Cut off, the gateway keeps beta under this term's epoch across a
+	// restart. The database is then restored from a copy taken in that
+	// term, so its epoch comes back, and reaches identity 2 again with
+	// gamma instead of beta: one transaction stands for both.
+	var termEpoch string
+	var termAt time.Time
+	if err := owner.QueryRow(t.Context(), "SELECT epoch, changed_at FROM stream_epoch WHERE id = 1").Scan(&termEpoch, &termAt); err != nil {
+		t.Fatal(err)
+	}
+	network.setCut(true)
+	eventually(t, "the gateway's stream down", func() bool { return gw.metric(`gw_config_sync_age_seconds`) > 6 })
+	cp.stop(syscall.SIGTERM)
+	cp = startCP(t, "controlplane-3", db, grpcAddr, iss)
+	eventually(t, "a new epoch after the restart", func() bool { return dbEpoch(t, owner) != termEpoch })
+	restartEpoch := dbEpoch(t, owner)
+	tx, err = owner.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range []struct {
+		sql  string
+		args []any
+	}{
+		{"UPDATE stream_epoch SET epoch = $1, changed_at = $2 WHERE id = 1", []any{termEpoch, termAt}},
+		{"UPDATE tenants SET name = 'gamma' WHERE name = 'beta'", nil},
+		{"UPDATE identity_state SET changed_at = clock_timestamp() WHERE id = 1", nil},
+		{"SELECT pg_notify('spillway_identity', '2')", nil},
+	} {
+		if _, err := tx.Exec(t.Context(), stmt.sql, stmt.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tx.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "a new epoch after an earlier term's epoch came back", func() bool {
+		e := dbEpoch(t, owner)
+		return e != termEpoch && e != restartEpoch
+	})
+	network.setCut(false)
+	eventually(t, "the returning gateway resynced to the restored database", synced("gamma"))
+
 	// A snapshot of another epoch at the same versions, with other
 	// content, served while the control plane is down.
 	gw.stop(syscall.SIGTERM)
@@ -600,8 +646,8 @@ func TestManagedGatewayEpoch(t *testing.T) {
 	if _, body := get(t, gw.url+"/r"); body != "stale" {
 		t.Fatalf("from the snapshot: /r %q", body)
 	}
-	startCP(t, "controlplane-3", db, grpcAddr, iss)
-	eventually(t, "the gateway resynced from another epoch", synced("beta"))
+	startCP(t, "controlplane-4", db, grpcAddr, iss)
+	eventually(t, "the gateway resynced from another epoch", synced("gamma"))
 	if _, body := get(t, gw.url+"/r"); body != "one" {
 		t.Errorf("after the resync: /r %q, want the control plane's upstream", body)
 	}

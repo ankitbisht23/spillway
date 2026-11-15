@@ -77,18 +77,19 @@ func (s *Store) LatestVersions(ctx context.Context) (Versions, error) {
 }
 
 // StreamConfig returns the latest published config version as the stream
-// sends it, with the stream epoch read in the same REPEATABLE READ
-// transaction, so the two always match (ADR-0055); its Config is nil
-// before the first publish. A version of another schema major is an error
-// (CP-18).
-func (s *Store) StreamConfig(ctx context.Context) (*configpb.ConfigUpdate, error) {
-	u := &configpb.ConfigUpdate{}
-	err := pgx.BeginTxFunc(ctx, s.pool, readSnapshot, func(tx pgx.Tx) error {
+// sends it, with the stream epoch and when it was set, read in the same
+// REPEATABLE READ transaction, so they always match (ADR-0055); its Config
+// is nil before the first publish. A version of another schema major is an
+// error (CP-18).
+func (s *Store) StreamConfig(ctx context.Context) (u *configpb.ConfigUpdate, epochAt time.Time, err error) {
+	u = &configpb.ConfigUpdate{}
+	err = pgx.BeginTxFunc(ctx, s.pool, readSnapshot, func(tx pgx.Tx) error {
 		q := db.New(tx)
-		var err error
-		if u.Epoch, err = q.StreamEpoch(ctx); err != nil {
+		e, err := q.StreamEpoch(ctx)
+		if err != nil {
 			return err
 		}
+		u.Epoch, epochAt = e.Epoch, e.ChangedAt
 		v, err := q.LatestConfigVersion(ctx)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil
@@ -104,53 +105,54 @@ func (s *Store) StreamConfig(ctx context.Context) (*configpb.ConfigUpdate, error
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
-	return u, nil
+	return u, epochAt, nil
 }
 
 // StreamIdentity returns the identity snapshot as the stream sends it,
-// with the stream epoch and the time its version was made (changed_at),
-// read in the same transaction (ADR-0055).
-func (s *Store) StreamIdentity(ctx context.Context) (*configpb.IdentityUpdate, time.Time, error) {
-	u := &configpb.IdentityUpdate{SchemaVersion: &configpb.SchemaVersion{Major: config.SchemaMajor, Minor: config.SchemaMinor}}
-	var at time.Time
-	err := pgx.BeginTxFunc(ctx, s.pool, readSnapshot, func(tx pgx.Tx) error {
+// with the stream epoch, when it was set and when the identity version was
+// made (changed_at), read in the same transaction (ADR-0055).
+func (s *Store) StreamIdentity(ctx context.Context) (u *configpb.IdentityUpdate, madeAt, epochAt time.Time, err error) {
+	u = &configpb.IdentityUpdate{SchemaVersion: &configpb.SchemaVersion{Major: config.SchemaMajor, Minor: config.SchemaMinor}}
+	err = pgx.BeginTxFunc(ctx, s.pool, readSnapshot, func(tx pgx.Tx) error {
 		q := db.New(tx)
-		var err error
-		if u.Epoch, err = q.StreamEpoch(ctx); err != nil {
+		e, err := q.StreamEpoch(ctx)
+		if err != nil {
 			return err
 		}
-		if at, err = q.IdentityChangedAt(ctx); err != nil {
+		u.Epoch, epochAt = e.Epoch, e.ChangedAt
+		if madeAt, err = q.IdentityChangedAt(ctx); err != nil {
 			return err
 		}
 		u.Identity, err = readIdentity(ctx, q)
 		return err
 	})
 	if err != nil {
-		return nil, time.Time{}, err
+		return nil, time.Time{}, time.Time{}, err
 	}
-	return u, at, nil
+	return u, madeAt, epochAt, nil
 }
 
 // readSnapshot is a transaction whose reads all see one snapshot.
 var readSnapshot = pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly}
 
-// RotateEpoch sets a new random stream epoch and returns it (ADR-0055).
-// With old set, it does so only while the epoch is still old, and
-// otherwise returns the epoch that replaced it and rotated false.
-func (s *Store) RotateEpoch(ctx context.Context, old string) (epoch string, rotated bool, err error) {
+// RotateEpoch sets a new random stream epoch and returns it with the time
+// it was set (ADR-0055). With old set, it does so only while the epoch is
+// still old, and otherwise returns the epoch that replaced it and rotated
+// false.
+func (s *Store) RotateEpoch(ctx context.Context, old string) (epoch string, at time.Time, rotated bool, err error) {
 	next, err := NewEpoch()
 	if err != nil {
-		return "", false, err
+		return "", time.Time{}, false, err
 	}
 	q := db.New(s.pool)
-	epoch, err = q.RotateStreamEpoch(ctx, db.RotateStreamEpochParams{Next: next, Old: old})
+	r, err := q.RotateStreamEpoch(ctx, db.RotateStreamEpochParams{Next: next, Old: old})
 	if errors.Is(err, pgx.ErrNoRows) {
-		epoch, err = q.StreamEpoch(ctx)
-		return epoch, false, err
+		e, err := q.StreamEpoch(ctx)
+		return e.Epoch, e.ChangedAt, false, err
 	}
-	return epoch, err == nil, err
+	return r.Epoch, r.ChangedAt, err == nil, err
 }
 
 // NewEpoch returns a random stream epoch: 16 bytes from crypto/rand, in

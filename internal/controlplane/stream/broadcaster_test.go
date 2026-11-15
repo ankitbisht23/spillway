@@ -29,6 +29,7 @@ type fakeSource struct {
 	config    int64 // 0: nothing published
 	identity  int64
 	epoch     string
+	epochAt   time.Time     // when epoch was set: each rotation a second later
 	history   int64         // bumped by a restore: the versions made after it are made at other times
 	rotations int           // epochs set by RotateEpoch
 	rotateErr []error       // what the next RotateEpoch calls fail with
@@ -69,11 +70,18 @@ func (f *fakeSource) madeAt(v int64) time.Time {
 	return time.Unix(v, f.history)
 }
 
-// setEpoch replaces the epoch, as a restore of another database does.
-func (f *fakeSource) setEpoch(epoch string) {
+// setEpoch replaces the epoch and when it was set, as a restore does.
+func (f *fakeSource) setEpoch(epoch string, at time.Time) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.epoch = epoch
+	f.epoch, f.epochAt = epoch, at
+}
+
+// epochSetAt is when the current epoch was set.
+func (f *fakeSource) epochSetAt() time.Time {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.epochAt
 }
 
 func (f *fakeSource) currentEpoch() (string, int) {
@@ -82,20 +90,20 @@ func (f *fakeSource) currentEpoch() (string, int) {
 	return f.epoch, f.rotations
 }
 
-func (f *fakeSource) RotateEpoch(_ context.Context, old string) (string, bool, error) {
+func (f *fakeSource) RotateEpoch(_ context.Context, old string) (string, time.Time, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if len(f.rotateErr) > 0 {
 		err := f.rotateErr[0]
 		f.rotateErr = f.rotateErr[1:]
-		return "", false, err
+		return "", time.Time{}, false, err
 	}
 	if old != "" && old != f.epoch {
-		return f.epoch, false, nil
+		return f.epoch, f.epochAt, false, nil
 	}
 	f.rotations++
-	f.epoch = fmt.Sprintf("%032x", f.rotations)
-	return f.epoch, true, nil
+	f.epoch, f.epochAt = fmt.Sprintf("%032x", f.rotations), f.epochAt.Add(time.Second)
+	return f.epoch, f.epochAt, true, nil
 }
 
 func (f *fakeSource) readCount(s section) int {
@@ -112,21 +120,21 @@ func (f *fakeSource) LatestVersions(context.Context) (store.Versions, error) {
 
 // StreamConfig reads the version and epoch current when it starts, as a
 // transaction's snapshot would, then waits on block, if set.
-func (f *fakeSource) StreamConfig(context.Context) (*configpb.ConfigUpdate, error) {
+func (f *fakeSource) StreamConfig(context.Context) (*configpb.ConfigUpdate, time.Time, error) {
 	f.mu.Lock()
-	block, v, at, epoch, fail := f.block, f.config, f.madeAt(f.config), f.epoch, f.fail
+	block, v, at, epoch, epochAt, fail := f.block, f.config, f.madeAt(f.config), f.epoch, f.epochAt, f.fail
 	f.reads[sectionConfig]++
 	f.mu.Unlock()
 	if block != nil {
 		<-block
 	}
 	if fail != nil {
-		return nil, fail
+		return nil, time.Time{}, fail
 	}
 	if v == 0 {
-		return &configpb.ConfigUpdate{Epoch: epoch}, nil
+		return &configpb.ConfigUpdate{Epoch: epoch}, epochAt, nil
 	}
-	return &configpb.ConfigUpdate{SchemaVersion: currentSchema(), Config: &configpb.Config{Version: v}, PublishedAt: timestamppb.New(at), Epoch: epoch}, nil
+	return &configpb.ConfigUpdate{SchemaVersion: currentSchema(), Config: &configpb.Config{Version: v}, PublishedAt: timestamppb.New(at), Epoch: epoch}, epochAt, nil
 }
 
 func (f *fakeSource) listenCount() int {
@@ -135,12 +143,12 @@ func (f *fakeSource) listenCount() int {
 	return f.listens
 }
 
-func (f *fakeSource) StreamIdentity(context.Context) (*configpb.IdentityUpdate, time.Time, error) {
+func (f *fakeSource) StreamIdentity(context.Context) (*configpb.IdentityUpdate, time.Time, time.Time, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.reads[sectionIdentity]++
 	return &configpb.IdentityUpdate{SchemaVersion: currentSchema(), Identity: &configpb.Identity{Version: f.identity, KeyFormat: "spw1"}, Epoch: f.epoch},
-		f.madeAt(f.identity), nil
+		f.madeAt(f.identity), f.epochAt, nil
 }
 
 func (f *fakeSource) Listen(ctx context.Context, ready func(), notify func(string)) error {
@@ -269,7 +277,7 @@ func TestBroadcasterNotifications(t *testing.T) {
 func TestBroadcasterEpochPerTerm(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		src := newFakeSource(3, 4)
-		src.setEpoch("restored-epoch")
+		src.setEpoch("restored-epoch", time.Unix(1, 0))
 		src.rotateErr = []error{errors.New("conn refused"), errors.New("conn refused")}
 		start := time.Now()
 		b := started(t, src)
@@ -293,9 +301,11 @@ func TestBroadcasterEpochPerTerm(t *testing.T) {
 // back under the epoch held, or comes back to the version held but made at
 // another time (it reached it again before the broadcaster read it), so
 // the broadcaster sets a new epoch and sends both sections under it, the
-// one whose version did not change too. A restore of another database
-// (another epoch) at equal versions is sent again under its epoch without
-// setting a new one.
+// one whose version did not change too. So does a copy taken in an earlier
+// term, whose epoch was set before the one held, at any versions: a
+// gateway offline since then may hold that epoch. An epoch set after the
+// one held (another replica's term, another database) is sent under it
+// without setting a new one.
 func TestBroadcasterRestore(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		src := newFakeSource(5, 9)
@@ -327,13 +337,24 @@ func TestBroadcasterRestore(t *testing.T) {
 			t.Errorf("after the same version made again: config %d made at %v", c.version, c.at)
 		}
 
-		// Another database's epoch at the same versions: no new epoch.
+		// The first term's epoch comes back at the same versions: a copy
+		// taken in it.
+		src.setEpoch(before, time.Time{}.Add(time.Second))
+		src.notify <- store.ChannelIdentity
+		synctest.Wait()
+		fourth, k := src.currentEpoch()
+		if k != 4 || fourth == before || epochs(b) != [sections]string{fourth, fourth} {
+			t.Fatalf("after an earlier term's epoch came back: %d epochs set, held %v, current %q", k, epochs(b), fourth)
+		}
+
+		// An epoch set after the one held at the same versions: no new
+		// epoch.
 		other := fmt.Sprintf("%032x", 99)
-		src.setEpoch(other)
+		src.setEpoch(other, src.epochSetAt().Add(time.Hour))
 		src.notify <- store.ChannelConfig
 		synctest.Wait()
-		if _, k := src.currentEpoch(); k != m || epochs(b) != [sections]string{other, other} {
-			t.Errorf("after another database's epoch: %d epochs set, held %v; want %q for both", k, epochs(b), other)
+		if _, k := src.currentEpoch(); k != 4 || epochs(b) != [sections]string{other, other} {
+			t.Errorf("after an epoch set later: %d epochs set, held %v; want %q for both", k, epochs(b), other)
 		}
 	})
 }

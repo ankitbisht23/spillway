@@ -591,7 +591,7 @@ const rotateStreamEpoch = `-- name: RotateStreamEpoch :one
 INSERT INTO stream_epoch (id, epoch) VALUES (1, $1::text)
 ON CONFLICT (id) DO UPDATE SET epoch = excluded.epoch, changed_at = clock_timestamp()
 WHERE $2::text = '' OR stream_epoch.epoch = $2::text
-RETURNING epoch
+RETURNING epoch, changed_at
 `
 
 type RotateStreamEpochParams struct {
@@ -599,25 +599,37 @@ type RotateStreamEpochParams struct {
 	Old  string
 }
 
+type RotateStreamEpochRow struct {
+	Epoch     string
+	ChangedAt time.Time
+}
+
 // stream_epoch_pkey. Sets epoch next when old is empty or is the epoch held
 // (ADR-0055); no row when another value replaced old first.
-func (q *Queries) RotateStreamEpoch(ctx context.Context, arg RotateStreamEpochParams) (string, error) {
+func (q *Queries) RotateStreamEpoch(ctx context.Context, arg RotateStreamEpochParams) (RotateStreamEpochRow, error) {
 	row := q.db.QueryRow(ctx, rotateStreamEpoch, arg.Next, arg.Old)
-	var epoch string
-	err := row.Scan(&epoch)
-	return epoch, err
+	var i RotateStreamEpochRow
+	err := row.Scan(&i.Epoch, &i.ChangedAt)
+	return i, err
 }
 
 const streamEpoch = `-- name: StreamEpoch :one
-SELECT coalesce((SELECT epoch FROM stream_epoch WHERE id = 1), '')::text AS epoch
+SELECT coalesce((SELECT epoch FROM stream_epoch WHERE id = 1), '')::text AS epoch,
+       coalesce((SELECT changed_at FROM stream_epoch WHERE id = 1), to_timestamp(0))::timestamptz AS changed_at
 `
 
-// stream_epoch_pkey. Empty when the row is missing.
-func (q *Queries) StreamEpoch(ctx context.Context) (string, error) {
+type StreamEpochRow struct {
+	Epoch     string
+	ChangedAt time.Time
+}
+
+// stream_epoch_pkey. The epoch and when it was set; empty and
+// to_timestamp(0) when the row is missing.
+func (q *Queries) StreamEpoch(ctx context.Context) (StreamEpochRow, error) {
 	row := q.db.QueryRow(ctx, streamEpoch)
-	var epoch string
-	err := row.Scan(&epoch)
-	return epoch, err
+	var i StreamEpochRow
+	err := row.Scan(&i.Epoch, &i.ChangedAt)
+	return i, err
 }
 
 const tenantsOnPlans = `-- name: TenantsOnPlans :many

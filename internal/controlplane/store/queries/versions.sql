@@ -118,8 +118,10 @@ SELECT (SELECT coalesce(max(version), 0) FROM config_versions)::bigint AS config
        coalesce((SELECT epoch FROM stream_epoch WHERE id = 1), '')::text AS epoch;
 
 -- name: StreamEpoch :one
--- stream_epoch_pkey. Empty when the row is missing.
-SELECT coalesce((SELECT epoch FROM stream_epoch WHERE id = 1), '')::text AS epoch;
+-- stream_epoch_pkey. The epoch and when it was set; empty and
+-- to_timestamp(0) when the row is missing.
+SELECT coalesce((SELECT epoch FROM stream_epoch WHERE id = 1), '')::text AS epoch,
+       coalesce((SELECT changed_at FROM stream_epoch WHERE id = 1), to_timestamp(0))::timestamptz AS changed_at;
 
 -- name: RotateStreamEpoch :one
 -- stream_epoch_pkey. Sets epoch next when old is empty or is the epoch held
@@ -127,4 +129,4 @@ SELECT coalesce((SELECT epoch FROM stream_epoch WHERE id = 1), '')::text AS epoc
 INSERT INTO stream_epoch (id, epoch) VALUES (1, @next::text)
 ON CONFLICT (id) DO UPDATE SET epoch = excluded.epoch, changed_at = clock_timestamp()
 WHERE @old::text = '' OR stream_epoch.epoch = @old::text
-RETURNING epoch;
+RETURNING epoch, changed_at;

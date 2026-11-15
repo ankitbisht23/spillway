@@ -4,8 +4,9 @@
 -- whatever their versions, so equal version numbers from a restored
 -- database can never hide different content. controlplane migrate inserts
 -- the row (crypto/rand) when it is missing; the active replica sets a new
--- value when it takes the lock, and when it sees a version go backwards
--- under the epoch it holds. 32 lowercase hex characters (16 bytes).
+-- value when it takes the lock, when it sees a version go backwards under
+-- the epoch it holds, and when an epoch set before that one comes back
+-- (changed_at). 32 lowercase hex characters (16 bytes).
 -- Release that may contract anything added here: none needed, this
 -- release only adds.
 
