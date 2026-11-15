@@ -1,0 +1,82 @@
+/* The admin UI's one stylesheet (D1, ADR-0057): no inline styles, which the
+   CSP's style-src 'self' would block. */
+
+:root {
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --text: #1c2430;
+  --muted: #5b6676;
+  --border: #d8dde4;
+  --accent: #1f4e79;
+  --accent-text: #ffffff;
+  --danger: #a4262c;
+  --danger-bg: #fdecec;
+  --skeleton: #e5e8ec;
+  --radius: 6px;
+  --space: 1rem;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--bg);
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; }
+h1 { font-size: 1.5rem; margin: 0 0 var(--space); }
+h2 { font-size: 1.15rem; margin: 0 0 0.5rem; }
+a { color: var(--accent); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em; }
+.muted { color: var(--muted); }
+
+button {
+  font: inherit;
+  padding: 0.35rem 0.9rem;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--accent);
+  color: var(--accent-text);
+  cursor: pointer;
+}
+button:disabled { background: var(--panel); color: var(--muted); border-color: var(--border); cursor: not-allowed; }
+
+/* Shell */
+.shell {
+  display: grid;
+  grid-template-columns: 13rem 1fr;
+  grid-template-rows: 3rem 1fr;
+  grid-template-areas: "top top" "nav main";
+  min-height: 100vh;
+}
+.topbar {
+  grid-area: top;
+  display: flex;
+  align-items: center;
+  gap: var(--space);
+  padding: 0 var(--space);
+  background: var(--accent);
+  color: var(--accent-text);
+}
+.topbar .brand { color: var(--accent-text); font-weight: 600; text-decoration: none; }
+.sidebar { grid-area: nav; background: var(--panel); border-right: 1px solid var(--border); }
+.sidebar ul { list-style: none; margin: 0; padding: 0.5rem 0; }
+.sidebar a { display: block; padding: 0.4rem var(--space); color: var(--text); text-decoration: none; }
+.sidebar a:hover { background: var(--bg); }
+.sidebar a.active { font-weight: 600; color: var(--accent); background: var(--bg); }
+.content { grid-area: main; padding: calc(var(--space) * 1.5); min-width: 0; }
+
+/* States (UI-06) */
+.state { padding: var(--space); border-radius: var(--radius); background: var(--panel); border: 1px solid var(--border); }
+.state-loading { min-height: 4rem; }
+.skeleton { height: 0.9rem; margin: 0.5rem 0; border-radius: 3px; background: var(--skeleton); }
+.skeleton.short { width: 40%; }
+.state-empty { color: var(--muted); }
+.state-error { border-color: var(--danger); background: var(--danger-bg); }
+.full-state { max-width: 36rem; margin: 3rem auto; text-align: center; }
+
+/* Actions (UI-04) */
+.action { display: inline-flex; align-items: center; gap: 0.5rem; }
+.reason { color: var(--muted); font-size: 0.85rem; }
+
+/* Pagination (UI-06) */
+.pager { display: flex; gap: 0.5rem; margin-top: var(--space); }
