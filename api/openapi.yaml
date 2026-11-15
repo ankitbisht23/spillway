@@ -39,6 +39,8 @@ tags:
     description: The top throttled keys, as heartbeats report them (RL-21)
   - name: session
     description: The caller, as its token says (UI-04)
+  - name: stream
+    description: Live data for the admin UI over server-sent events (UI-03)
 paths:
   /upstreams:
     get:
@@ -1460,6 +1462,92 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Me' }
         default: { $ref: '#/components/responses/Error' }
+  /stream:
+    get:
+      operationId: openStream
+      tags: [stream]
+      summary: >-
+        Live data for one admin UI screen as server-sent events (UI-03,
+        RL-21, ADR-0059): each sub names a query of the server's fixed
+        catalogue, evaluated once per 5 s per distinct query and parameters
+        however many streams watch it; the browser never sends PromQL. The
+        token goes in Authorization, never in the URL. The answer is
+        text/event-stream: a ready event first (StreamReady), then a result
+        (StreamResult) or an error (StreamError) per subscription at each
+        evaluation, a ": keepalive" comment every 15 s, and an end event
+        (StreamEnd) when the server closes the stream, at the latest at the
+        token's exp. Every parameter is validated before the stream starts
+        (400 invalid_request, naming the parameter, never its value). At
+        most 10 open streams per caller and 200 in all: past either, 503
+        unavailable with Retry-After. A client that does not take an event
+        within 10 s is disconnected
+      x-spillway-roles: [viewer, editor, publisher, key-admin, admin]
+      parameters:
+        - name: sub
+          in: query
+          required: true
+          description: >-
+            The subscriptions, 1 to 8 distinct catalogue names, as repeated
+            parameters.
+            overview.requests: request rate by code_class (matrix; route,
+            tenant, range). overview.ratelimited: the share of requests
+            rate-limited (matrix; route, tenant, range). overview.latency: p50
+            and p99 request duration in seconds, series labelled quantile
+            (matrix; route, tenant, range). overview.routes: the top 10 routes
+            by request rate over the range, each with stat rps, ratelimited_rps
+            and p99_s (vector; tenant, range). overview.tenants: the same by
+            tenant (vector; route, range). throttling.policies: the deny rate by
+            policy name and mode, shadow would-denies as mode shadow (matrix;
+            range). throttling.heavy_hitters: the top 50 throttled keys since
+            the range's start (HeavyHitterList; range, policy_id). replicas: the
+            gateway replicas with their staleness (StreamReplicas).
+          style: form
+          explode: true
+          schema:
+            type: array
+            minItems: 1
+            maxItems: 8
+            items: { $ref: '#/components/schemas/StreamQueryName' }
+        - name: route
+          in: query
+          description: >-
+            For overview.requests, .ratelimited, .latency and .tenants: a route
+            of the latest published config version, or * (the default) for
+            every route.
+          schema: { type: string, pattern: '^(\*|[A-Za-z0-9._-]{1,64})$' }
+        - name: tenant
+          in: query
+          description: >-
+            For overview.requests, .ratelimited, .latency and .routes: a
+            tenant's name, none (requests without a tenant), other (tenants
+            outside the top 50, OB-01), or * (the default) for every tenant.
+          schema: { type: string, pattern: '^(\*|[A-Za-z0-9._-]{1,64})$' }
+        - name: range
+          in: query
+          description: >-
+            The time range of the overview, throttling queries: 15m (the
+            default), 1h, 6h, 24h or 7d. A range query's step is 15 s, 1 m,
+            5 m, 15 m or 1 h.
+          schema: { type: string, enum: [15m, 1h, 6h, 24h, 7d] }
+        - name: policy_id
+          in: query
+          description: For throttling.heavy_hitters, only this policy's keys.
+          schema: { type: integer, format: int64, minimum: 1 }
+      responses:
+        '200':
+          description: >-
+            The event stream. Each event's data is one line of JSON: ready is
+            a StreamReady, result a StreamResult, error a StreamError, end a
+            StreamEnd
+          headers:
+            Cache-Control:
+              description: no-store
+              schema: { type: string }
+          content:
+            text/event-stream:
+              schema: { type: string }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        default: { $ref: '#/components/responses/Error' }
 components:
   securitySchemes:
     bearer:
@@ -2302,3 +2390,123 @@ components:
           items:
             type: string
             enum: [viewer, editor, publisher, key-admin, admin]
+
+    # The live-data stream's events (UI-03, ADR-0059).
+    StreamQueryName:
+      type: string
+      description: A named query of the stream's catalogue (ADR-0059); openStream's sub parameter says what each answers.
+      enum: [overview.requests, overview.ratelimited, overview.latency, overview.routes, overview.tenants, throttling.policies, throttling.heavy_hitters, replicas]
+    StreamReady:
+      type: object
+      additionalProperties: false
+      required: [subscriptions, interval_s]
+      properties:
+        subscriptions:
+          type: array
+          items: { $ref: '#/components/schemas/StreamQueryName' }
+        interval_s: { type: integer, format: int32, description: Seconds between evaluations of a subscription. }
+    StreamResult:
+      type: object
+      additionalProperties: false
+      required: [sub, at, data]
+      properties:
+        sub: { $ref: '#/components/schemas/StreamQueryName' }
+        at: { type: string, format: date-time, description: "When the evaluation started, on the control plane's clock." }
+        data:
+          description: >-
+            The query's data, by sub (StreamQueryName): a StreamMatrix, a
+            StreamVector, a HeavyHitterList or StreamReplicas.
+          anyOf:
+            - $ref: '#/components/schemas/StreamMatrix'
+            - $ref: '#/components/schemas/StreamVector'
+            - $ref: '#/components/schemas/HeavyHitterList'
+            - $ref: '#/components/schemas/StreamReplicas'
+    StreamError:
+      type: object
+      additionalProperties: false
+      required: [sub, at, code, message]
+      properties:
+        sub: { $ref: '#/components/schemas/StreamQueryName' }
+        at: { type: string, format: date-time }
+        code:
+          type: string
+          enum: [prometheus_unavailable, prometheus_not_configured, query_failed, unavailable]
+          description: >-
+            prometheus_unavailable: Prometheus refused, timed out or answered
+            5xx; prometheus_not_configured: the control plane has no
+            SPILLWAY_CP_PROMETHEUS_URL; query_failed: Prometheus refused the
+            query or its answer; unavailable: Postgres is unavailable. The
+            stream stays open and the next evaluation may succeed.
+        message: { type: string, description: A message for people. }
+    StreamEnd:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        reason:
+          type: string
+          enum: [token_expired, shutdown]
+          description: "token_expired: the token's exp passed; reconnect with a fresh token. shutdown: the control plane is stopping."
+    StreamMatrix:
+      type: object
+      additionalProperties: false
+      required: [kind, step_s, series]
+      properties:
+        kind: { type: string, enum: [matrix] }
+        step_s: { type: integer, format: int32, description: Seconds between points. }
+        series:
+          type: array
+          items: { $ref: '#/components/schemas/StreamRangeSeries' }
+    StreamRangeSeries:
+      type: object
+      additionalProperties: false
+      required: [labels, points]
+      properties:
+        labels:
+          type: object
+          additionalProperties: { type: string }
+        points:
+          type: array
+          description: '[unix seconds, value] pairs; a value that is not a finite number (no data, NaN, ±Inf) is null.'
+          items:
+            type: array
+            minItems: 2
+            maxItems: 2
+            items: { type: number, format: double, nullable: true }
+    StreamVector:
+      type: object
+      additionalProperties: false
+      required: [kind, series]
+      properties:
+        kind: { type: string, enum: [vector] }
+        series:
+          type: array
+          items: { $ref: '#/components/schemas/StreamSample' }
+    StreamSample:
+      type: object
+      additionalProperties: false
+      required: [labels, value]
+      properties:
+        labels:
+          type: object
+          additionalProperties: { type: string }
+        value: { type: number, format: double, nullable: true, description: Null when not a finite number. }
+    StreamReplicas:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/StreamReplica' }
+    StreamReplica:
+      type: object
+      additionalProperties: false
+      required: [replica, staleness_s]
+      properties:
+        replica: { $ref: '#/components/schemas/Replica' }
+        staleness_s:
+          type: number
+          format: double
+          nullable: true
+          description: "Seconds since its last_synced_at, on Postgres's clock (CP-08); null when it never synced."

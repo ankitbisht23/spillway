@@ -217,3 +217,14 @@ export function setSession(s: Session | null) {
 export function authFetch(req: Request): Promise<Response> {
   return current ? current.fetch(req) : Promise.resolve(sessionEndedResponse());
 }
+
+/**
+ * Calls listener on each refresh and status change of the current session,
+ * which carries no token: the stream reconnects with the new token (D5,
+ * ADR-0059). Without a session it never calls it.
+ */
+export function onSessionChange(listener: () => void): () => void {
+  if (!current) return () => {};
+  const unsubscribe = current.subscribe(listener);
+  return () => void unsubscribe();
+}

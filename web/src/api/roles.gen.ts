@@ -50,6 +50,7 @@ export const operationRoles = {
   listTenants: ["viewer", "editor", "publisher", "key-admin", "admin"],
   listUpstreams: ["viewer", "editor", "publisher", "key-admin", "admin"],
   lookupHeavyHitters: ["admin"],
+  openStream: ["viewer", "editor", "publisher", "key-admin", "admin"],
   publishConfig: ["publisher", "admin"],
   revokeKey: ["key-admin", "admin"],
   rollbackConfig: ["publisher", "admin"],

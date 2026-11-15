@@ -80,6 +80,7 @@ type Config struct {
 // Claims are a verified token's claims.
 type Claims struct {
 	Subject string
+	Expiry  time.Time // exp
 	payload []byte
 }
 
@@ -299,7 +300,7 @@ func (v *Verifier) claims(payload []byte) (*Claims, error) {
 			return nil, ErrInvalid
 		}
 	}
-	return &Claims{Subject: c.Subject, payload: payload}, nil
+	return &Claims{Subject: c.Subject, Expiry: exp, payload: payload}, nil
 }
 
 // hasAudience reports whether aud, a string or an array of strings,

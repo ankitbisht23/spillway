@@ -47,6 +47,15 @@ FROM replicas r
 WHERE r.id > @after::text
 ORDER BY r.id LIMIT @lim;
 
+-- name: ListReplicasClock :many
+-- replicas_pkey keyset scan. As ListReplicas, plus Postgres's clock, read
+-- once, so staleness is computed on one clock (CP-08, ADR-0059).
+SELECT r.*, (r.last_heartbeat_at > (SELECT clock_timestamp() - interval '15 seconds'))::boolean AS live,
+       (SELECT clock_timestamp())::timestamptz AS now
+FROM replicas r
+WHERE r.id > @after::text
+ORDER BY r.id LIMIT @lim;
+
 -- name: ConfigVersionApplied :many
 -- replica_versions_stream_version. The replicas that reported config
 -- version @version, with their first report.

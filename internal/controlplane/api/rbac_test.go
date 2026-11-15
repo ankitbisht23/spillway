@@ -69,6 +69,7 @@ var matrix = map[string][]string{
 	"listReplicas":   all, "listHeavyHitters": all, // ADR-0040, ADR-0041
 	"lookupHeavyHitters": {"admin"}, // it de-pseudonymises digests (ADR-0053)
 	"getMe":              all,       // the caller's own roles (ADR-0058)
+	"openStream":         all,       // live data, every role (ADR-0059)
 }
 
 // specOp is one operation of the spec as a request.

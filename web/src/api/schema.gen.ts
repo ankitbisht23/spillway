@@ -672,6 +672,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Live data for one admin UI screen as server-sent events (UI-03, RL-21, ADR-0059): each sub names a query of the server's fixed catalogue, evaluated once per 5 s per distinct query and parameters however many streams watch it; the browser never sends PromQL. The token goes in Authorization, never in the URL. The answer is text/event-stream: a ready event first (StreamReady), then a result (StreamResult) or an error (StreamError) per subscription at each evaluation, a ": keepalive" comment every 15 s, and an end event (StreamEnd) when the server closes the stream, at the latest at the token's exp. Every parameter is validated before the stream starts (400 invalid_request, naming the parameter, never its value). At most 10 open streams per caller and 200 in all: past either, 503 unavailable with Retry-After. A client that does not take an event within 10 s is disconnected */
+        get: operations["openStream"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1388,6 +1405,91 @@ export interface components {
             name: string;
             /** @description The caller's Spillway roles, in the order viewer, editor, publisher, key-admin, admin. */
             roles: ("viewer" | "editor" | "publisher" | "key-admin" | "admin")[];
+        };
+        /**
+         * @description A named query of the stream's catalogue (ADR-0059); openStream's sub parameter says what each answers.
+         * @enum {string}
+         */
+        StreamQueryName: "overview.requests" | "overview.ratelimited" | "overview.latency" | "overview.routes" | "overview.tenants" | "throttling.policies" | "throttling.heavy_hitters" | "replicas";
+        StreamReady: {
+            subscriptions: components["schemas"]["StreamQueryName"][];
+            /**
+             * Format: int32
+             * @description Seconds between evaluations of a subscription.
+             */
+            interval_s: number;
+        };
+        StreamResult: {
+            sub: components["schemas"]["StreamQueryName"];
+            /**
+             * Format: date-time
+             * @description When the evaluation started, on the control plane's clock.
+             */
+            at: string;
+            /** @description The query's data, by sub (StreamQueryName): a StreamMatrix, a StreamVector, a HeavyHitterList or StreamReplicas. */
+            data: components["schemas"]["StreamMatrix"] | components["schemas"]["StreamVector"] | components["schemas"]["HeavyHitterList"] | components["schemas"]["StreamReplicas"];
+        };
+        StreamError: {
+            sub: components["schemas"]["StreamQueryName"];
+            /** Format: date-time */
+            at: string;
+            /**
+             * @description prometheus_unavailable: Prometheus refused, timed out or answered 5xx; prometheus_not_configured: the control plane has no SPILLWAY_CP_PROMETHEUS_URL; query_failed: Prometheus refused the query or its answer; unavailable: Postgres is unavailable. The stream stays open and the next evaluation may succeed.
+             * @enum {string}
+             */
+            code: "prometheus_unavailable" | "prometheus_not_configured" | "query_failed" | "unavailable";
+            /** @description A message for people. */
+            message: string;
+        };
+        StreamEnd: {
+            /**
+             * @description token_expired: the token's exp passed; reconnect with a fresh token. shutdown: the control plane is stopping.
+             * @enum {string}
+             */
+            reason: "token_expired" | "shutdown";
+        };
+        StreamMatrix: {
+            /** @enum {string} */
+            kind: "matrix";
+            /**
+             * Format: int32
+             * @description Seconds between points.
+             */
+            step_s: number;
+            series: components["schemas"]["StreamRangeSeries"][];
+        };
+        StreamRangeSeries: {
+            labels: {
+                [key: string]: string;
+            };
+            /** @description [unix seconds, value] pairs; a value that is not a finite number (no data, NaN, ±Inf) is null. */
+            points: (number | null)[][];
+        };
+        StreamVector: {
+            /** @enum {string} */
+            kind: "vector";
+            series: components["schemas"]["StreamSample"][];
+        };
+        StreamSample: {
+            labels: {
+                [key: string]: string;
+            };
+            /**
+             * Format: double
+             * @description Null when not a finite number.
+             */
+            value: number | null;
+        };
+        StreamReplicas: {
+            items: components["schemas"]["StreamReplica"][];
+        };
+        StreamReplica: {
+            replica: components["schemas"]["Replica"];
+            /**
+             * Format: double
+             * @description Seconds since its last_synced_at, on Postgres's clock (CP-08); null when it never synced.
+             */
+            staleness_s: number | null;
         };
     };
     responses: {
@@ -3462,6 +3564,41 @@ export interface operations {
                     "application/json": components["schemas"]["Me"];
                 };
             };
+            default: components["responses"]["Error"];
+        };
+    };
+    openStream: {
+        parameters: {
+            query: {
+                /** @description The subscriptions, 1 to 8 distinct catalogue names, as repeated parameters. overview.requests: request rate by code_class (matrix; route, tenant, range). overview.ratelimited: the share of requests rate-limited (matrix; route, tenant, range). overview.latency: p50 and p99 request duration in seconds, series labelled quantile (matrix; route, tenant, range). overview.routes: the top 10 routes by request rate over the range, each with stat rps, ratelimited_rps and p99_s (vector; tenant, range). overview.tenants: the same by tenant (vector; route, range). throttling.policies: the deny rate by policy name and mode, shadow would-denies as mode shadow (matrix; range). throttling.heavy_hitters: the top 50 throttled keys since the range's start (HeavyHitterList; range, policy_id). replicas: the gateway replicas with their staleness (StreamReplicas). */
+                sub: components["schemas"]["StreamQueryName"][];
+                /** @description For overview.requests, .ratelimited, .latency and .tenants: a route of the latest published config version, or * (the default) for every route. */
+                route?: string;
+                /** @description For overview.requests, .ratelimited, .latency and .routes: a tenant's name, none (requests without a tenant), other (tenants outside the top 50, OB-01), or * (the default) for every tenant. */
+                tenant?: string;
+                /** @description The time range of the overview, throttling queries: 15m (the default), 1h, 6h, 24h or 7d. A range query's step is 15 s, 1 m, 5 m, 15 m or 1 h. */
+                range?: "15m" | "1h" | "6h" | "24h" | "7d";
+                /** @description For throttling.heavy_hitters, only this policy's keys. */
+                policy_id?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The event stream. Each event's data is one line of JSON: ready is a StreamReady, result a StreamResult, error a StreamError, end a StreamEnd */
+            200: {
+                headers: {
+                    /** @description no-store */
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": string;
+                };
+            };
+            400: components["responses"]["BadRequest"];
             default: components["responses"]["Error"];
         };
     };

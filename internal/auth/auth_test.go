@@ -173,6 +173,9 @@ func TestVerifyAccepts(t *testing.T) {
 		if err := got.Decode(&extra); err != nil || got.Subject != "user-1" || extra.Name != "test-admin" || extra.Realm.Roles[0] != "admin" {
 			t.Errorf("%s: claims %+v %+v %v", name, got, extra, err)
 		}
+		if want := time.Unix(int64(c.unix(5*time.Minute)), 0); !got.Expiry.Equal(want) {
+			t.Errorf("%s: expiry %v, want %v (the stream ends at it, ADR-0059)", name, got.Expiry, want)
+		}
 	}
 }
 

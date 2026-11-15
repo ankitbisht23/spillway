@@ -4,9 +4,11 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
+	"net/url"
 	"strconv"
 
 	"github.com/ankitbisht23/spillway/internal/auth"
+	"github.com/ankitbisht23/spillway/internal/controlplane/live"
 	"github.com/ankitbisht23/spillway/internal/mtls"
 	"github.com/ankitbisht23/spillway/internal/proxy"
 	"github.com/ankitbisht23/spillway/internal/secret"
@@ -32,6 +34,12 @@ type settings struct {
 	oidcJWKSURL  string // SPILLWAY_CP_OIDC_JWKS_URL: where the issuer's keys are fetched (in-network in dev, ADR-0004)
 	oidcAudience string // SPILLWAY_CP_OIDC_AUDIENCE: a value every token's aud must contain, default spillway-controlplane
 	devMode      bool   // SPILLWAY_CP_DEV_MODE: accept http:// issuer and JWKS URLs (SEC-04), default false
+
+	// SPILLWAY_CP_PROMETHEUS_URL: the Prometheus the live-data stream's
+	// named queries run against (UI-03, ADR-0059), http or https, no user
+	// info; not a secret. Unset (nil), those queries answer error events
+	// and the stream still serves the Postgres-backed ones.
+	prometheusURL *url.URL
 }
 
 // migrateSettings are what `controlplane migrate` needs (CP-19).
@@ -81,6 +89,11 @@ func loadSettings(getenv func(string) string) (settings, error) {
 	for name, u := range map[string]string{"SPILLWAY_CP_OIDC_ISSUER": s.oidcIssuer, "SPILLWAY_CP_OIDC_JWKS_URL": s.oidcJWKSURL} {
 		if err := auth.CheckURL(u, s.devMode); err != nil {
 			return s, fmt.Errorf("%s: %w", name, err)
+		}
+	}
+	if v := getenv("SPILLWAY_CP_PROMETHEUS_URL"); v != "" {
+		if s.prometheusURL, err = live.ParsePrometheusURL(v); err != nil {
+			return s, fmt.Errorf("SPILLWAY_CP_PROMETHEUS_URL: %w", err)
 		}
 	}
 	return s, nil

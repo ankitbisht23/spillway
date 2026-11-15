@@ -66,6 +66,31 @@ func TestLoadSettings(t *testing.T) {
 	if s.oidcAudience != "spillway-controlplane" || !s.devMode || s.oidcIssuer != "http://localhost:8180/auth/realms/spillway" {
 		t.Errorf("OIDC settings = %+v", s)
 	}
+	if s.prometheusURL != nil {
+		t.Errorf("Prometheus URL = %v, want none when unset", s.prometheusURL)
+	}
+}
+
+// TestPrometheusURL: SPILLWAY_CP_PROMETHEUS_URL is optional; a value
+// that is not an http(s) URL with a host stops the start (ADR-0059).
+func TestPrometheusURL(t *testing.T) {
+	kv := func(v string) map[string]string {
+		return withOIDC(map[string]string{
+			"SPILLWAY_CP_DATABASE_URL":      "postgres://spillway_app@db:5432/spillway",
+			"SPILLWAY_CP_DATABASE_PASSWORD": secretValue,
+			"SPILLWAY_CP_ALLOWED_NETWORKS":  "172.29.0.0/16",
+			"SPILLWAY_CP_PROMETHEUS_URL":    v,
+		})
+	}
+	s, err := loadSettings(env(kv("http://prometheus:9090")))
+	if err != nil || s.prometheusURL == nil || s.prometheusURL.String() != "http://prometheus:9090" {
+		t.Fatalf("settings = %v, %v", s.prometheusURL, err)
+	}
+	for _, bad := range []string{"prometheus:9090", "ftp://prometheus", "http://", "http://user:pw@prometheus:9090", "http://prometheus:9090/?x=1", "http://prom etheus"} {
+		if _, err := loadSettings(env(kv(bad))); err == nil || !strings.Contains(err.Error(), "SPILLWAY_CP_PROMETHEUS_URL") {
+			t.Errorf("%q: error = %v", bad, err)
+		}
+	}
 }
 
 func TestSettingsErrors(t *testing.T) {

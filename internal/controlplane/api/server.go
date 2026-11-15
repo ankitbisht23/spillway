@@ -26,6 +26,7 @@ import (
 	"strings"
 
 	"github.com/ankitbisht23/spillway/internal/apikey"
+	"github.com/ankitbisht23/spillway/internal/controlplane/live"
 	"github.com/ankitbisht23/spillway/internal/controlplane/store"
 	"github.com/ankitbisht23/spillway/internal/gen/apiv1"
 	"github.com/ankitbisht23/spillway/internal/secret"
@@ -53,6 +54,7 @@ type Server struct {
 	// hitterSecret keys heavy-hitter digests, as the gateways' does
 	// (ADR-0053).
 	hitterSecret secret.Value
+	streams      *live.Hub // GET /stream (ADR-0059); nil answers 503
 	log          *slog.Logger
 }
 
@@ -74,7 +76,8 @@ func New(st *store.Store, allowed Allowlist, resolver Resolver, authn Authentica
 // Handler returns the API's HTTP handler; it serves BasePath and answers 404
 // elsewhere. Each operation's path and method go through guard first
 // (ADR-0040); other requests reach only the 404, never the body reader or
-// the generated server.
+// the generated server. The stream goes from the guard to its own handler
+// (ADR-0059).
 func (s *Server) Handler() http.Handler {
 	notFound := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, &apiError{http.StatusNotFound, apiv1.ErrorCodeNotFound, "no such path", nil})
@@ -92,7 +95,11 @@ func (s *Server) Handler() http.Handler {
 	guarded := http.NewServeMux()
 	guarded.Handle("/", notFound)
 	for pattern, op := range operations() {
-		guarded.Handle(pattern, s.guard(op, api))
+		next := api
+		if op.id == openStreamID {
+			next = http.HandlerFunc(s.openStream)
+		}
+		guarded.Handle(pattern, s.guard(op, next))
 	}
 	return requestID(guarded)
 }

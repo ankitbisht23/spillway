@@ -24,6 +24,7 @@ import (
 
 	"github.com/ankitbisht23/spillway/internal/auth"
 	"github.com/ankitbisht23/spillway/internal/controlplane/api"
+	"github.com/ankitbisht23/spillway/internal/controlplane/live"
 	"github.com/ankitbisht23/spillway/internal/controlplane/store"
 	"github.com/ankitbisht23/spillway/internal/controlplane/stream"
 	"github.com/ankitbisht23/spillway/internal/controlplane/webui"
@@ -133,10 +134,19 @@ func serve(log *slog.Logger, getenv func(string) string) error {
 	streams := prometheus.NewGauge(prometheus.GaugeOpts{Name: "cp_watch_streams", Help: "Open Watch streams."})
 	reg.MustRegister(active, streams)
 	admin := telemetry.NewAdminServer(reg, ready.Load, log)
+	// The live-data stream's named queries (UI-03, ADR-0059).
+	var prom *live.Prometheus
+	if s.prometheusURL != nil {
+		prom = live.NewPrometheus(s.prometheusURL, nil)
+		log.Info("live-data queries use Prometheus", "url", s.prometheusURL.String())
+	} else {
+		log.Warn("SPILLWAY_CP_PROMETHEUS_URL is not set: the stream's Prometheus queries answer prometheus_not_configured")
+	}
+	apiServer := api.New(st, s.allow, net.DefaultResolver, api.OIDC{Verifier: verifier}, s.hitterSecret, log)
+	hub := live.NewHub(live.Config{Prometheus: prom, Postgres: apiServer.LiveSource(), Registerer: reg, Log: log})
 	// The REST API and the admin UI share the listener, same origin (UI-09,
 	// ADR-0057).
-	handler, err := webui.New(webui.Files(), webui.Config{Issuer: s.oidcIssuer, ClientID: uiClientID},
-		api.New(st, s.allow, net.DefaultResolver, api.OIDC{Verifier: verifier}, s.hitterSecret, log).Handler())
+	handler, err := webui.New(webui.Files(), webui.Config{Issuer: s.oidcIssuer, ClientID: uiClientID}, apiServer.WithStreams(hub).Handler())
 	if err != nil {
 		return err
 	}
@@ -148,6 +158,9 @@ func serve(log *slog.Logger, getenv func(string) string) error {
 		IdleTimeout:       120 * time.Second,
 		ErrorLog:          slog.NewLogLogger(log.Handler(), slog.LevelWarn),
 	}
+	// Streams end with an end event at shutdown, so they do not hold
+	// Shutdown for its whole timeout (ADR-0059).
+	apiSrv.RegisterOnShutdown(hub.Shutdown)
 	errc := make(chan error, 2)
 	lc := &net.ListenConfig{}
 	for _, srv := range []struct {
