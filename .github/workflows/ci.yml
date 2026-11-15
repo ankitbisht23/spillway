@@ -39,7 +39,7 @@ jobs:
       - name: sqlc generated code (CP-01)
         run: make lint-sql
       - name: Unit tests and fuzz smoke
-        run: make test FUZZTIME=10s
+        run: make test-go FUZZTIME=10s
       - name: govulncheck
         run: make tool-govulncheck && bin/govulncheck ./...
 
@@ -55,8 +55,15 @@ jobs:
           node-version-file: .node-version
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - name: ESLint and typecheck
+      - name: ESLint, typecheck, generated client (UI-05)
         run: make lint-web
+      - name: Vitest with coverage thresholds (ADR-0061)
+        run: make test-web
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: The embedded production build (UI-09)
+        run: make web-build && go test -tags webui -count=1 ./internal/controlplane/webui/
       - name: pnpm audit
         run: pnpm audit
 

@@ -11,7 +11,7 @@ FUZZTIME ?= 5s
 # Committed dev defaults first, then local overrides if present (ADR-0004).
 COMPOSE := docker compose --env-file .env.example $(if $(wildcard .env.local),--env-file .env.local)
 
-.PHONY: tools hooks certs dev test fuzz test-integration proto api sqlc lint lint-go lint-web lint-proto lint-api lint-sql bench verify-m0 verify-m0-stack verify-m1 verify-m1-reload verify-m2 verify-m2-shadow verify-m3 verify-m4 verify-m5 accuracy chaos-redis-outage chaos-redis-primary chaos-cp-outage
+.PHONY: tools hooks certs dev test test-go test-web fuzz test-integration proto api sqlc web-gen web-build lint lint-go lint-web lint-proto lint-api lint-sql bench verify-m0 verify-m0-stack verify-m1 verify-m1-reload verify-m2 verify-m2-shadow verify-m3 verify-m4 verify-m5 accuracy chaos-redis-outage chaos-redis-primary chaos-cp-outage
 
 # Host-run processes and tests reach Redis Cluster nodes through this map
 # (ADR-0004). Set only here, never in compose or .env files.
@@ -110,10 +110,18 @@ $(STREAM)/gateway-%/cert.pem: $(STREAM_CA)
 dev: certs
 	$(COMPOSE) up -d --build --wait --wait-timeout 300
 
-# Unit and property tests, then a short run of every fuzz target. No Docker.
-test:
+# Every unit test: Go's and the admin UI's (ADR-0057). No Docker. Both need
+# `pnpm install` once after cloning; CI runs them in separate jobs.
+test: test-go test-web
+
+# Go unit and property tests, then a short run of every fuzz target.
+test-go:
 	go test -race -count=1 ./...
 	@$(MAKE) --no-print-directory fuzz
+
+# The admin UI's Vitest suite with its coverage thresholds (ADR-0061).
+test-web:
+	pnpm -C web test
 
 # Runs each Fuzz* target for FUZZTIME (go test -fuzz takes one target per run).
 fuzz:
@@ -138,6 +146,17 @@ proto: tool-buf tool-protoc-gen-go tool-protoc-gen-go-grpc
 api: tool-oapi-codegen
 	$(BIN)/oapi-codegen -config api/oapi-codegen.yaml api/openapi.yaml
 
+# The admin UI's typed client from api/openapi.yaml into web/src/api
+# (UI-05, ADR-0057); committed, like internal/gen/apiv1.
+web-gen:
+	pnpm -C web gen
+
+# The admin UI's production build into internal/controlplane/webui/dist
+# (gitignored), which `go build -tags webui ./cmd/controlplane` embeds
+# (UI-09, ADR-0057). Images always build it themselves.
+web-build:
+	pnpm -C web build
+
 # The control plane's sqlc queries into internal/controlplane/store/db
 # (ADR-0036); committed.
 sqlc: tool-sqlc
@@ -149,8 +168,11 @@ lint-go: tool-golangci-lint
 	$(BIN)/golangci-lint run ./...
 	go mod tidy -diff
 
+# ESLint and both typechecks, then web/src/api matches what
+# api/openapi.yaml generates (ADR-0057).
 lint-web:
 	pnpm -C web lint
+	pnpm -C web gen:check
 
 # buf lint; internal/gen matches what api/proto generates; no breaking change
 # against origin/main, skipped while main has no buf.yaml (the first M1 PR).
