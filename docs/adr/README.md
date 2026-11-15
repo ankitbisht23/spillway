@@ -64,3 +64,9 @@ Decisions that shape Spillway and are not obvious from the code or from docs/des
 | [0053](0053-keyed-heavy-hitter-digests.md) | Keyed heavy-hitter digests and the admin lookup | Accepted | 2026-11-15 |
 | [0054](0054-key-rotation-carries-key-level-access-list-entries.md) | Key rotation carries key-level access-list entries | Accepted | 2026-11-15 |
 | [0055](0055-stream-epoch-and-resync-after-a-database-restore.md) | Stream epoch: gateways resync after a database restore | Accepted | 2026-11-15 |
+| [0056](0056-m6-admin-ui-plan-and-decisions.md) | M6 admin UI: plan and decisions | Accepted | 2026-11-15 |
+| [0057](0057-admin-ui-app-toolchain-embedding-and-serving.md) | Admin UI: app, toolchain, embedding and serving | Accepted | 2026-11-15 |
+| [0058](0058-admin-ui-session-and-roles.md) | Admin UI: session and roles | Accepted | 2026-11-15 |
+| [0059](0059-live-data-the-sse-stream-and-named-queries.md) | Live data: the SSE stream and named queries | Accepted | 2026-11-15 |
+| [0060](0060-admin-ui-screens-states-and-api-additions.md) | Admin UI: screens, states and API additions | Accepted | 2026-11-15 |
+| [0061](0061-admin-ui-tests-and-make-verify-m6.md) | Admin UI tests and make verify-m6 | Accepted | 2026-11-15 |
