@@ -15,6 +15,10 @@ import { PolicyList } from "../screens/policies/PolicyList";
 import { WINDOWS, type Window } from "../screens/policies/queries";
 import { ShadowReportScreen } from "../screens/policies/ShadowReportScreen";
 import { Publish } from "../screens/publish/Publish";
+import { NewRoute, RouteScreen } from "../screens/routes/RouteEditor";
+import { RouteList } from "../screens/routes/RouteList";
+import { UpstreamList } from "../screens/routes/UpstreamList";
+import { NewUpstream, UpstreamScreen } from "../screens/routes/UpstreamScreen";
 import { Layout } from "./Layout";
 import { navigation, screenOp } from "./screens";
 
@@ -76,6 +80,24 @@ const shadowRoute = createRoute({
 });
 const publishRoute = createRoute({ getParentRoute: () => rootRoute, path: "/publish", component: Publish });
 
+/** A list's search: its page's cursor (D9) and an exact name filter (ADR-0036); every key set (ADR-0062). */
+function listSearch(s: Record<string, unknown>): { cursor?: string; name?: string } {
+  const str = (v: unknown) => (typeof v === "string" && v ? v : undefined);
+  return { cursor: str(s.cursor), name: str(s.name) };
+}
+/** An entity page's search: saved marks one the form just created, for its banner. */
+function savedSearch(s: Record<string, unknown>): { saved?: true } {
+  return { saved: s.saved === true ? true : undefined };
+}
+
+/** Routes & upstreams (m6-routes). */
+const routesRoute = createRoute({ getParentRoute: () => rootRoute, path: "/routes", validateSearch: listSearch, component: RouteList });
+const newRouteRoute = createRoute({ getParentRoute: () => rootRoute, path: "/routes/new", component: NewRoute });
+const routeRoute = createRoute({ getParentRoute: () => rootRoute, path: "/routes/$id", validateSearch: savedSearch, component: RouteScreen });
+const upstreamsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/upstreams", validateSearch: listSearch, component: UpstreamList });
+const newUpstreamRoute = createRoute({ getParentRoute: () => rootRoute, path: "/upstreams/new", component: NewUpstream });
+const upstreamRoute = createRoute({ getParentRoute: () => rootRoute, path: "/upstreams/$id", validateSearch: savedSearch, component: UpstreamScreen });
+
 /**
  * A consumer's screen (m6-consumers-keys). Throttling's Add override opens
  * it with override_policy, the policy to prefill an override for.
@@ -99,10 +121,12 @@ export const routeTree = rootRoute.addChildren([
   policyRoute,
   shadowRoute,
   publishRoute,
-  placeholder("/routes", "Routes", "routes"),
-  placeholder("/routes/$id", "Route", "routes"),
-  placeholder("/upstreams", "Upstreams", "routes"),
-  placeholder("/upstreams/$id", "Upstream", "routes"),
+  routesRoute,
+  newRouteRoute,
+  routeRoute,
+  upstreamsRoute,
+  newUpstreamRoute,
+  upstreamRoute,
   placeholder("/consumers", "Consumers & keys", "consumers-keys"),
   consumerRoute,
   placeholder("/access-lists", "Access lists", "consumers-keys"),
