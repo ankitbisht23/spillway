@@ -17,6 +17,7 @@ import (
 type settings struct {
 	databaseURL      string          // SPILLWAY_CP_DATABASE_URL: postgres://spillway_app@host:5432/spillway?sslmode=..., without a password
 	databasePassword secret.Value    // SPILLWAY_CP_DATABASE_PASSWORD or _FILE: the app role's password (SEC-09)
+	hitterSecret     secret.Value    // SPILLWAY_CP_HEAVY_HITTER_SECRET or _FILE: the gateways' heavy-hitter secret, for lookups (SEC-09, ADR-0053)
 	httpAddr         string          // SPILLWAY_CP_HTTP_ADDR: REST listener, default :8080
 	grpcAddr         string          // SPILLWAY_CP_GRPC_ADDR: ConfigService listener, active replica only, default :9090 (ADR-0038)
 	adminAddr        string          // SPILLWAY_CP_ADMIN_ADDR: /metrics, pprof, /healthz, /readyz, default 127.0.0.1:8081 (SEC-02)
@@ -54,6 +55,9 @@ func loadSettings(getenv func(string) string) (settings, error) {
 	}
 	var err error
 	if s.databasePassword, err = secret.Required(getenv, "SPILLWAY_CP_DATABASE_PASSWORD"); err != nil {
+		return s, err
+	}
+	if s.hitterSecret, err = secret.Required(getenv, "SPILLWAY_CP_HEAVY_HITTER_SECRET"); err != nil {
 		return s, err
 	}
 	s.grpcTLS = mtls.Files{Cert: getenv("SPILLWAY_CP_GRPC_TLS_CERT"), Key: getenv("SPILLWAY_CP_GRPC_TLS_KEY"), CA: getenv("SPILLWAY_CP_GRPC_CLIENT_CA")}

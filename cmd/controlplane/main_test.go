@@ -14,16 +14,22 @@ import (
 
 const secretValue = "s3cret-dev-only-not-secret" //nolint:gosec // G101: a fake password the test looks for in logs
 
+const hitterSecret = "hh-dev-only-not-secret" //nolint:gosec // G101: a fake heavy-hitter secret the tests look for in logs
+
 func env(kv map[string]string) func(string) string {
 	return func(k string) string { return kv[k] }
 }
 
-// withOIDC adds the compose stack's bearer-token settings to kv, and the
-// stream's mTLS files, which need not exist for loadSettings.
+// withOIDC adds the compose stack's bearer-token settings to kv, the
+// heavy-hitter secret unless kv has one, and the stream's mTLS files,
+// which need not exist for loadSettings.
 func withOIDC(kv map[string]string) map[string]string {
 	kv["SPILLWAY_CP_OIDC_ISSUER"] = "http://localhost:8180/auth/realms/spillway"
 	kv["SPILLWAY_CP_OIDC_JWKS_URL"] = "http://keycloak:8080/auth/realms/spillway/protocol/openid-connect/certs"
 	kv["SPILLWAY_CP_DEV_MODE"] = "true"
+	if _, ok := kv["SPILLWAY_CP_HEAVY_HITTER_SECRET"]; !ok {
+		kv["SPILLWAY_CP_HEAVY_HITTER_SECRET"] = hitterSecret
+	}
 	for k, v := range map[string]string{"SPILLWAY_CP_GRPC_TLS_CERT": "cert.pem", "SPILLWAY_CP_GRPC_TLS_KEY": "key.pem", "SPILLWAY_CP_GRPC_CLIENT_CA": "ca.pem"} {
 		if _, ok := kv[k]; !ok {
 			kv[k] = "/etc/spillway-stream/" + v
@@ -53,7 +59,7 @@ func TestLoadSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.httpAddr != ":8080" || s.adminAddr != "127.0.0.1:8081" || s.databasePassword.Reveal() != secretValue || len(s.allow) != 1 ||
+	if s.httpAddr != ":8080" || s.adminAddr != "127.0.0.1:8081" || s.databasePassword.Reveal() != secretValue || s.hitterSecret.Reveal() != hitterSecret || len(s.allow) != 1 ||
 		s.grpcTLS.Cert != "/etc/spillway-stream/cert.pem" || s.grpcTLS.Key != "/etc/spillway-stream/key.pem" || s.grpcTLS.CA != "/etc/spillway-stream/ca.pem" {
 		t.Errorf("settings = %+v", s)
 	}
@@ -84,6 +90,8 @@ func TestSettingsErrors(t *testing.T) {
 		{"no URL", with("SPILLWAY_CP_DATABASE_URL", ""), "SPILLWAY_CP_DATABASE_URL is required"},
 		{"no password", with("SPILLWAY_CP_DATABASE_PASSWORD", ""), "SPILLWAY_CP_DATABASE_PASSWORD (or SPILLWAY_CP_DATABASE_PASSWORD_FILE) is required"},
 		{"password and file", with("SPILLWAY_CP_DATABASE_PASSWORD_FILE", "/nope"), "not both"},
+		{"no heavy-hitter secret", with("SPILLWAY_CP_HEAVY_HITTER_SECRET", ""), "SPILLWAY_CP_HEAVY_HITTER_SECRET (or SPILLWAY_CP_HEAVY_HITTER_SECRET_FILE) is required"},
+		{"heavy-hitter secret and file", with("SPILLWAY_CP_HEAVY_HITTER_SECRET_FILE", "/nope"), "not both"},
 		{"no allow-list", with("SPILLWAY_CP_ALLOWED_NETWORKS", ""), "SPILLWAY_CP_ALLOWED_NETWORKS is required"},
 		{"no stream certificate", with("SPILLWAY_CP_GRPC_TLS_CERT", ""), "the config stream is mTLS only (SEC-02)"},
 		{"no stream key", with("SPILLWAY_CP_GRPC_TLS_KEY", ""), "the config stream is mTLS only (SEC-02)"},
@@ -99,8 +107,8 @@ func TestSettingsErrors(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Errorf("error = %v, want %q", err, tt.want)
 			}
-			if err != nil && strings.Contains(err.Error(), secretValue) {
-				t.Errorf("the error shows the password: %v", err)
+			if err != nil && (strings.Contains(err.Error(), secretValue) || strings.Contains(err.Error(), hitterSecret)) {
+				t.Errorf("the error shows a secret: %v", err)
 			}
 		})
 	}
@@ -120,12 +128,14 @@ func TestSecretsFromFiles(t *testing.T) {
 	}
 	ownerSecret := "owner-" + secretValue
 	s, err := loadSettings(env(withOIDC(map[string]string{
-		"SPILLWAY_CP_DATABASE_URL":           "postgres://spillway_app@db:5432/spillway",
-		"SPILLWAY_CP_DATABASE_PASSWORD_FILE": file("app", secretValue),
-		"SPILLWAY_CP_ALLOWED_NETWORKS":       "172.29.0.0/16",
+		"SPILLWAY_CP_DATABASE_URL":             "postgres://spillway_app@db:5432/spillway",
+		"SPILLWAY_CP_DATABASE_PASSWORD_FILE":   file("app", secretValue),
+		"SPILLWAY_CP_HEAVY_HITTER_SECRET":      "",
+		"SPILLWAY_CP_HEAVY_HITTER_SECRET_FILE": file("hh", hitterSecret),
+		"SPILLWAY_CP_ALLOWED_NETWORKS":         "172.29.0.0/16",
 	})))
-	if err != nil || s.databasePassword.Reveal() != secretValue {
-		t.Fatalf("serve settings: %q, %v", s.databasePassword.Reveal(), err)
+	if err != nil || s.databasePassword.Reveal() != secretValue || s.hitterSecret.Reveal() != hitterSecret {
+		t.Fatalf("serve settings: %v", err)
 	}
 	m, err := loadMigrateSettings(env(map[string]string{
 		"SPILLWAY_CP_MIGRATE_DATABASE_URL":   "postgres://spillway@db:5432/spillway",
@@ -139,9 +149,9 @@ func TestSecretsFromFiles(t *testing.T) {
 	log := slog.New(slog.NewJSONHandler(&logs, nil))
 	log.Info("settings", "serve", s, "migrate", m)
 	dump := strings.Join([]string{fmt.Sprintf("%v %+v %#v", s, s, s), fmt.Sprintf("%v %+v %#v", m, m, m), logs.String()}, "\n")
-	for _, v := range []string{secretValue, ownerSecret} {
+	for _, v := range []string{secretValue, ownerSecret, hitterSecret} {
 		if strings.Contains(dump, v) {
-			t.Errorf("a settings dump shows a password:\n%s", dump)
+			t.Errorf("a settings dump shows a secret:\n%s", dump)
 		}
 	}
 	for _, tt := range []struct {
@@ -211,9 +221,9 @@ func TestPasswordsNeverLogged(t *testing.T) {
 		}
 		log.Error("controlplane failed", "err", err)
 	}
-	for _, s := range []string{secretValue, ownerSecret} {
+	for _, s := range []string{secretValue, ownerSecret, hitterSecret} {
 		if strings.Contains(logs.String(), s) {
-			t.Errorf("a log line or error shows a password:\n%s", logs.String())
+			t.Errorf("a log line or error shows a secret:\n%s", logs.String())
 		}
 	}
 }

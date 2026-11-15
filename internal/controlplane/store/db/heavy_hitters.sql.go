@@ -54,6 +54,70 @@ func (q *Queries) AddHeavyHitters(ctx context.Context, arg AddHeavyHittersParams
 	return err
 }
 
+const heavyHitterWindows = `-- name: HeavyHitterWindows :many
+SELECT window_start, policy_id, key_digest, coalesce(consumer_id, 0)::bigint AS consumer_id,
+       coalesce(api_key_id, 0)::bigint AS api_key_id, denied, shadow_denied
+FROM heavy_hitters
+WHERE policy_id = $1 AND key_digest = $2
+  AND window_start >= coalesce($3::timestamptz, now() - interval '15 minutes')
+  AND window_start < coalesce($4::timestamptz, 'infinity')
+ORDER BY window_start DESC
+`
+
+type HeavyHitterWindowsParams struct {
+	PolicyID  int64
+	KeyDigest string
+	Since     *time.Time
+	Until     *time.Time
+}
+
+type HeavyHitterWindowsRow struct {
+	WindowStart  time.Time
+	PolicyID     int64
+	KeyDigest    string
+	ConsumerID   int64
+	ApiKeyID     int64
+	Denied       int64
+	ShadowDenied int64
+}
+
+// heavy_hitters_policy_id_key_digest_window_start. One (policy, digest)'s
+// windows that start in [since, until), newest first, for POST
+// /heavy-hitters/lookup (ADR-0053); the defaults are TopHeavyHitters'. An
+// ID of NULL is 0.
+func (q *Queries) HeavyHitterWindows(ctx context.Context, arg HeavyHitterWindowsParams) ([]HeavyHitterWindowsRow, error) {
+	rows, err := q.db.Query(ctx, heavyHitterWindows,
+		arg.PolicyID,
+		arg.KeyDigest,
+		arg.Since,
+		arg.Until,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []HeavyHitterWindowsRow
+	for rows.Next() {
+		var i HeavyHitterWindowsRow
+		if err := rows.Scan(
+			&i.WindowStart,
+			&i.PolicyID,
+			&i.KeyDigest,
+			&i.ConsumerID,
+			&i.ApiKeyID,
+			&i.Denied,
+			&i.ShadowDenied,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const pruneHeavyHitters = `-- name: PruneHeavyHitters :execrows
 DELETE FROM heavy_hitters
 WHERE ctid = ANY(ARRAY(

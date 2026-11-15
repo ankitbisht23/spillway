@@ -1342,8 +1342,10 @@ paths:
         kept as one-minute windows for 7 days (CP-22). The windows that
         start in [since, until) are summed by policy and key digest and the
         most throttled (denied + shadow_denied) come first. A key digest is
-        the 22-character digest of the policy's filled key template, never
-        the key itself. Counts are exact for keys that every replica
+        the 22-character digest of the policy's filled key template keyed
+        with the deployment's heavy-hitter secret (ADR-0053), never the key
+        itself; only an admin can match it to a subject, with
+        lookupHeavyHitters. Counts are exact for keys that every replica
         tracked, and a lower bound otherwise
       x-spillway-roles: [viewer, editor, publisher, key-admin, admin]
       parameters:
@@ -1367,6 +1369,38 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/HeavyHitterList' }
         '400': { $ref: '#/components/responses/BadRequest' }
+        default: { $ref: '#/components/responses/Error' }
+  /heavy-hitters/lookup:
+    post:
+      operationId: lookupHeavyHitters
+      tags: [heavy-hitters]
+      summary: >-
+        The heavy-hitter windows of one subject (RL-21, ADR-0053): the
+        control plane fills the policy's key template, as of the latest
+        published config version, with the subject's values as a gateway
+        would, computes its keyed digest and answers the policy's windows
+        under that digest that start in [since, until), newest first. It
+        de-pseudonymises a digest, so it is admin only and every lookup
+        writes an audit record, which holds the digest but never the
+        subject. A POST, so that the subject is in no URL. A template with
+        {api_key} cannot be filled here (the control plane keeps only the
+        hash of a key's secret part): such windows carry api_key_id
+      x-spillway-roles: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/HeavyHitterLookup' }
+      responses:
+        '200':
+          description: The subject's digest and its windows
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HeavyHitterLookupResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
         default: { $ref: '#/components/responses/Error' }
   /audit:
     get:
@@ -2064,7 +2098,7 @@ components:
       required: [policy_id, key_digest, consumer_id, api_key_id, denied, shadow_denied]
       properties:
         policy_id: { type: integer, format: int64 }
-        key_digest: { type: string, description: 'base64url of the first 16 bytes of the SHA-256 of the filled key template, as in the Redis key; 22 characters.' }
+        key_digest: { type: string, description: 'base64url of the first 16 bytes of HMAC-SHA256, under the heavy-hitter secret, of the 16-byte digest of the filled key template (ADR-0053); 22 characters. Not the digest in the Redis key.' }
         consumer_id: { type: integer, format: int64, nullable: true, description: The consumer of the latest throttled request that had one; null when none did. }
         api_key_id: { type: integer, format: int64, nullable: true, description: The API key of the latest throttled request that had one; null when none did. }
         denied: { type: integer, format: int64, description: Requests an enforce limit of the policy denied. }
@@ -2076,6 +2110,53 @@ components:
         items:
           type: array
           items: { $ref: '#/components/schemas/HeavyHitter' }
+    HeavyHitterLookup:
+      type: object
+      additionalProperties: false
+      required: [policy_id, subject]
+      properties:
+        policy_id: { type: integer, format: int64, description: The policy whose key template the subject fills. }
+        subject: { $ref: '#/components/schemas/HeavyHitterSubject' }
+        since: { type: string, format: date-time, description: Windows that start at or after this time; by default 15 minutes ago. At most 7 days before until (or now). }
+        until: { type: string, format: date-time, description: Windows that start before this time; by default none. Without since, since is 15 minutes before it. }
+    HeavyHitterSubject:
+      type: object
+      additionalProperties: false
+      description: >-
+        The values the policy's key template takes, as a gateway fills
+        them; only those its placeholders name are needed, the others are
+        ignored. Never echoed in answers, logs or audit records.
+      properties:
+        ip: { type: string, description: '{ip}: the client IP; an IPv6 address stands for its /64, as on the gateway.' }
+        consumer_id: { type: integer, format: int64, description: '{consumer}: the consumer ID.' }
+        tenant_id: { type: integer, format: int64, description: '{tenant}: the tenant ID of the consumer.' }
+        route: { type: string, description: '{route}: the route name.' }
+        method: { type: string, description: '{method}: the HTTP method, upper-cased as on the gateway.' }
+        headers:
+          type: object
+          additionalProperties: { type: string }
+          description: '{header:<Name>}: the header value by name, the first value the request carried.'
+    HeavyHitterLookupResult:
+      type: object
+      required: [key_digest, items]
+      properties:
+        key_digest: { type: string, description: The subject's keyed digest under the policy's template (ADR-0053). }
+        items:
+          type: array
+          description: The windows, newest first; at most one per minute of the range.
+          items: { $ref: '#/components/schemas/HeavyHitterWindow' }
+    HeavyHitterWindow:
+      type: object
+      additionalProperties: false
+      required: [window_start, policy_id, key_digest, consumer_id, api_key_id, denied, shadow_denied]
+      properties:
+        window_start: { type: string, format: date-time, description: The window's minute, UTC. }
+        policy_id: { type: integer, format: int64 }
+        key_digest: { type: string }
+        consumer_id: { type: integer, format: int64, nullable: true, description: The consumer of the window's latest throttled request that had one; null when none did. }
+        api_key_id: { type: integer, format: int64, nullable: true, description: The API key of the window's latest throttled request that had one; null when none did. }
+        denied: { type: integer, format: int64 }
+        shadow_denied: { type: integer, format: int64 }
 
     # Pages (UI-06): next_cursor is null on the last page.
     UpstreamList:

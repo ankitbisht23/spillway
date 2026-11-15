@@ -317,7 +317,7 @@ func TestKeyTemplate(t *testing.T) {
 		{"{ip}:{tenant}", "", true},
 	}
 	for _, tt := range tests {
-		k, err := parseKeyTemplate(tt.tmpl)
+		k, err := ParseKeyTemplate(tt.tmpl)
 		if err != nil {
 			t.Errorf("%s: %v", tt.tmpl, err)
 			continue

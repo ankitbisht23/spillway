@@ -59,3 +59,16 @@ WHERE ctid = ANY(ARRAY(
     SELECT ctid FROM heavy_hitters
     WHERE window_start < (SELECT clock_timestamp() - interval '7 days')
     LIMIT 10000));
+
+-- name: HeavyHitterWindows :many
+-- heavy_hitters_policy_id_key_digest_window_start. One (policy, digest)'s
+-- windows that start in [since, until), newest first, for POST
+-- /heavy-hitters/lookup (ADR-0053); the defaults are TopHeavyHitters'. An
+-- ID of NULL is 0.
+SELECT window_start, policy_id, key_digest, coalesce(consumer_id, 0)::bigint AS consumer_id,
+       coalesce(api_key_id, 0)::bigint AS api_key_id, denied, shadow_denied
+FROM heavy_hitters
+WHERE policy_id = @policy_id AND key_digest = @key_digest
+  AND window_start >= coalesce(sqlc.narg(since)::timestamptz, now() - interval '15 minutes')
+  AND window_start < coalesce(sqlc.narg(until)::timestamptz, 'infinity')
+ORDER BY window_start DESC;
