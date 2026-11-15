@@ -117,6 +117,9 @@ export function LookupDialog({ policy, digest, since, onClose }: LookupProps) {
   const fields = placeholders(policy.keyTemplate);
   const [values, setValues] = useState<Record<string, string>>(() => Object.fromEntries(fields.map((f) => [f, ""])));
   const lookup = useMutation({
+    // Dropped from the mutation cache as soon as the dialog closes: its
+    // function holds the subject (by default it would stay for 5 min).
+    gcTime: 0,
     mutationFn: async () =>
       (await call(api.POST("/heavy-hitters/lookup", {
         body: { policy_id: policy.id, subject: subjectOf(values), since: new Date(Date.now() - RANGE_MS[since]).toISOString() },

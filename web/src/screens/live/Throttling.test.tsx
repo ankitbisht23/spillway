@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { createQueryClient } from "../../api/queryClient";
 import type { Role } from "../../auth/permissions";
 import { setSession } from "../../auth/session";
 import { matrix, mockConfig, mockStream, result, startSession } from "../../test/live";
@@ -36,9 +37,9 @@ beforeEach(() => {
 });
 afterEach(() => setSession(null));
 
-async function open(roles: Role[], path = "/throttling") {
+async function open(roles: Role[], path = "/throttling", queryClient = createQueryClient()) {
   const stream = mockStream();
-  const router = renderApp(path, roles);
+  const router = renderApp(path, roles, undefined, queryClient);
   await waitFor(() => expect(stream.opened).toHaveLength(1));
   act(() => {
     stream.last.send("result", result("throttling.policies", policies));
@@ -177,7 +178,8 @@ describe("Throttling (UI-03, RL-21)", () => {
           ? { key_digest: "AAAAAAAAAAAAAAAAAAAAAA", items: [{ window_start: "t", policy_id: 7, key_digest: "AAAAAAAAAAAAAAAAAAAAAA", consumer_id: 12, api_key_id: 34, denied: 100, shadow_denied: 0 }] }
           : { key_digest: "CCCCCCCCCCCCCCCCCCCCCC", items: [] });
       }));
-      const { router } = await open(["admin"]);
+      const queryClient = createQueryClient();
+      const { router } = await open(["admin"], "/throttling", queryClient);
       const actions = await select("AAAAAAAAAAAAAAAAAAAAAA");
       await userEvent.click(actions.getByRole("button", { name: "Who is this?" }));
       const dialog = within(screen.getByRole("dialog", { name: "Who is this?" }));
@@ -193,6 +195,9 @@ describe("Throttling (UI-03, RL-21)", () => {
       expect(router.state.location.href).not.toContain("198.51.100");
       await userEvent.click(dialog.getByRole("button", { name: "Close" }));
       expect(screen.queryByRole("dialog")).toBeNull();
+      // The lookups' mutations, whose functions hold the subject, leave the cache with the dialog.
+      await waitFor(() => expect(queryClient.getMutationCache().getAll()).toHaveLength(0));
+      expect(JSON.stringify(queryClient.getQueryCache().getAll().map((q) => q.state.data))).not.toContain("198.51.100");
     });
   });
 });
