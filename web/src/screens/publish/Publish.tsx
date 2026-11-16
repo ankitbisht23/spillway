@@ -4,7 +4,6 @@
 // never a newer one. A 412 (the working set moved) shows the new preview
 // and asks for another click; a 409 (nothing to publish) refreshes it.
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
 import { useState, type FormEvent } from "react";
 
 import { api, call } from "../../api/client";
@@ -16,14 +15,10 @@ import { ChangeNote, noteError } from "../../components/ChangeNote";
 import { ChangesList, ValidationErrors } from "../../components/Changes";
 import { DiffView } from "../../components/DiffView";
 import { ErrorLine } from "../../components/ErrorLine";
+import { Published } from "../../components/Published";
 import { QueryState } from "../../components/QueryState";
 
 type Validation = components["schemas"]["ConfigValidation"];
-type Version = components["schemas"]["ConfigVersion"];
-
-/** How long and how often the page checks where a new version applied (ADR-0060). */
-const APPLIED_POLLS = 30;
-const APPLIED_EVERY_MS = 1000;
 
 /** Why the preview cannot be published, if it cannot (the role aside). */
 export function blocker(p: Validation): string | undefined {
@@ -135,43 +130,5 @@ export function Publish() {
         )}
       </QueryState>
     </section>
-  );
-}
-
-/** The new version, and on how many live replicas it applied, checked every second for 30 s. */
-function Published({ version }: { version: Version }) {
-  const qc = useQueryClient();
-  const key = ["config", "versions", version.version, "applied"] as const;
-  const replicas = useQuery({
-    queryKey: ["replicas", "live"],
-    queryFn: async () => (await call(api.GET("/replicas", { params: { query: { limit: 500 } } }))).data.items.filter((r) => r.live).map((r) => r.id),
-  });
-  const live = replicas.data ?? [];
-  const applied = useQuery({
-    queryKey: key,
-    queryFn: async () => (await call(api.GET("/config/versions/{v}", { params: { path: { v: version.version } } }))).data.applied ?? [],
-    enabled: live.length > 0,
-    gcTime: 0,
-    refetchInterval: (q) => {
-      const done = live.every((r) => (q.state.data ?? []).some((a) => a.replica === r));
-      return done || q.state.dataUpdateCount >= APPLIED_POLLS ? false : APPLIED_EVERY_MS;
-    },
-  });
-  const n = live.filter((r) => (applied.data ?? []).some((a) => a.replica === r)).length;
-  const gaveUp = (qc.getQueryState(key)?.dataUpdateCount ?? 0) >= APPLIED_POLLS;
-  return (
-    <div className="banner" role="status">
-      <p>
-        Published version {version.version}: <Link to="/history/$version" params={{ version: String(version.version) }}>see it in History</Link>.
-      </p>
-      <p className="muted">Note: {version.note}</p>
-      {replicas.isSuccess && (
-        <p>
-          {live.length === 0
-            ? "No live replica reports applied versions (static gateways do not)."
-            : `Applied on ${n} of ${live.length} live replicas${n < live.length && gaveUp ? " after 30 s" : ""}.`}
-        </p>
-      )}
-    </div>
   );
 }
