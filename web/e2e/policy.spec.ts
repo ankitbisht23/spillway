@@ -2,9 +2,8 @@
 // is created in shadow mode, published with its diff and note, its shadow
 // report opens (in make dev the gateways are static, so it shows its
 // empty states), it is promoted with an edit and published again, and the
-// config is rolled back to the version before it, after which it is gone
-// from the working set. Rollback is History's (m6-replicas-history), which
-// will replace the API call below with the UI.
+// config is rolled back from History to the version before it, after which
+// it is gone from the working set.
 import type { Page } from "@playwright/test";
 
 import { expect, login, signOut, test } from "./fixtures";
@@ -77,12 +76,27 @@ test("a new policy goes shadow → published → reviewed → promoted → publi
     await page.goto(`/policies/${id}/shadow`);
     await expect(page.getByText(`Version ${enforceVersion} runs this policy in enforce mode.`)).toBeVisible();
 
-    // Rolled back to the version before it (History's, through the API until m6-replicas-history).
-    const validated = await api.post("config/validate");
-    const rollback = await api.post(`config/versions/${base}/rollback`, {
-      headers: { "If-Match": validated.headers().etag ?? "" }, data: { note: `Playwright ${s.run}: roll back ${name}` },
-    });
-    expect(rollback.status(), "rollback").toBe(200);
+    // Rolled back to the version before it, from History: the dialog shows
+    // what the rollback removes against the latest version, and takes a note.
+    await page.getByRole("navigation", { name: "Screens" }).getByRole("link", { name: "History" }).click();
+    await expect(page.getByRole("row").nth(1)).toContainText(`Version ${enforceVersion}`);
+    await page.getByRole("link", { name: `Version ${base}`, exact: true }).click();
+    await expect(page.getByRole("heading", { name: `Version ${base}` })).toBeVisible();
+    await page.getByRole("button", { name: `Roll back to version ${base}` }).click();
+    const dialog = page.getByRole("dialog", { name: `Roll back to version ${base}?` });
+    const rollbackDiff = dialog.getByLabel(`Diff from version ${enforceVersion} to version ${base}`);
+    await expect(rollbackDiff.locator(".diff-del", { hasText: `name: ${name}` })).toBeVisible();
+    await expect(dialog.getByRole("list", { name: "Changes" })).toContainText(`removed policy ${name}`);
+    await expect(dialog.getByText(/discards/)).toHaveCount(0); // nothing unpublished
+    await dialog.getByRole("textbox", { name: "Change note (required)" }).fill(`Playwright ${s.run}: roll back ${name}`);
+    await dialog.getByRole("button", { name: `Roll back to version ${base}` }).click();
+    await expect(dialog).toBeHidden();
+    const rolledBack = page.getByRole("status").filter({ hasText: "Published version" });
+    await expect(rolledBack).toContainText(`Published version ${enforceVersion + 1}, a copy of version ${base}`);
+    await rolledBack.getByRole("link", { name: "see it in History" }).click();
+    await expect(page.getByRole("heading", { name: `Version ${enforceVersion + 1}` })).toBeVisible();
+    await expect(page.getByRole("definition").filter({ hasText: "rollback to version" })).toContainText(`rollback to version ${base}`);
+    await expect(page.getByRole("list", { name: "Changes" })).toContainText(`removed policy ${name}`);
     await page.goto("/policies");
     await expect(page.getByRole("link", { name: "e2e-per-client" })).toBeVisible();
     await expect(page.getByRole("link", { name })).toHaveCount(0);

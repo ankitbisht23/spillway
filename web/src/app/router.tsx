@@ -11,21 +11,23 @@ import { ConsumerList } from "../screens/consumers/ConsumerList";
 import { ConsumerScreen, NewConsumer } from "../screens/consumers/ConsumerScreen";
 import { PlanList } from "../screens/consumers/PlanList";
 import { NewTenant, TenantList, TenantScreen } from "../screens/consumers/Tenants";
+import { Audit } from "../screens/history/Audit";
+import { HistoryList } from "../screens/history/HistoryList";
+import { VersionScreen } from "../screens/history/VersionScreen";
 import { Overview } from "../screens/live/Overview";
 import { overviewSearch, throttlingSearch } from "../screens/live/search";
 import { Throttling } from "../screens/live/Throttling";
-import { Placeholder } from "../screens/Placeholder";
 import { NewPolicy, PolicyScreen } from "../screens/policies/PolicyEditor";
 import { PolicyList } from "../screens/policies/PolicyList";
 import { WINDOWS, type Window } from "../screens/policies/queries";
 import { ShadowReportScreen } from "../screens/policies/ShadowReportScreen";
 import { Publish } from "../screens/publish/Publish";
+import { Replicas } from "../screens/replicas/Replicas";
 import { NewRoute, RouteScreen } from "../screens/routes/RouteEditor";
 import { RouteList } from "../screens/routes/RouteList";
 import { UpstreamList } from "../screens/routes/UpstreamList";
 import { NewUpstream, UpstreamScreen } from "../screens/routes/UpstreamScreen";
 import { Layout } from "./Layout";
-import { navigation, screenOp } from "./screens";
 
 const rootRoute = createRootRoute({ component: Layout, notFoundComponent: () => <NotFound /> });
 
@@ -36,17 +38,6 @@ const indexRoute = createRoute({
     throw redirect({ to: "/overview", replace: true });
   },
 });
-
-/**
- * A screen whose M6 task (m6-<task>, ADR-0056) has not landed yet: a
- * placeholder that calls no API. Each task replaces its own.
- */
-function placeholder<P extends string>(path: P, title: string, task: string) {
-  const nav = navigation.find((s) => s.to === path);
-  const op = nav && screenOp(nav);
-  const screen = () => <Placeholder title={title} task={task} />;
-  return createRoute({ getParentRoute: () => rootRoute, path, component: op ? () => <Hidden op={op}>{screen()}</Hidden> : screen });
-}
 
 /**
  * A screen hidden from roles that cannot call op (ADR-0058): its URL shows
@@ -156,6 +147,34 @@ const tenantRoute = createRoute({
   getParentRoute: () => rootRoute, path: "/tenants/$id", validateSearch: savedSearch, component: () => <Hidden op="createTenant"><TenantScreen /></Hidden>,
 });
 
+/** Replicas and History (m6-replicas-history). */
+const replicasRoute = createRoute({ getParentRoute: () => rootRoute, path: "/replicas", component: Replicas });
+const historyRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/history",
+  validateSearch: (s: Record<string, unknown>): { cursor?: string } => ({ cursor: str(s.cursor) }),
+  component: HistoryList,
+});
+/** A version; against is the version its diff starts from (0: the empty config; none: the one before it). */
+const versionRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/history/$version",
+  validateSearch: (s: Record<string, unknown>): { against?: number } => {
+    const n = Number(s.against);
+    return { against: s.against !== undefined && s.against !== "" && Number.isSafeInteger(n) && n >= 0 ? n : undefined };
+  },
+  component: VersionScreen,
+});
+/** The audit log: hidden from every role but admin (ADR-0058), so no API is called for them. */
+const auditRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/audit",
+  validateSearch: (s: Record<string, unknown>): { cursor?: string; entity?: string; entity_id?: string; actor_sub?: string; since?: string; until?: string } => ({
+    cursor: str(s.cursor), entity: str(s.entity), entity_id: str(s.entity_id), actor_sub: str(s.actor_sub), since: str(s.since), until: str(s.until),
+  }),
+  component: () => <Hidden op="listAudit"><Audit /></Hidden>,
+});
+
 export const routeTree = rootRoute.addChildren([
   indexRoute,
   overviewRoute,
@@ -179,10 +198,10 @@ export const routeTree = rootRoute.addChildren([
   tenantsRoute,
   newTenantRoute,
   tenantRoute,
-  placeholder("/replicas", "Replicas", "replicas-history"),
-  placeholder("/history", "History", "replicas-history"),
-  placeholder("/history/$version", "Config version", "replicas-history"),
-  placeholder("/audit", "Audit log", "replicas-history"),
+  replicasRoute,
+  historyRoute,
+  versionRoute,
+  auditRoute,
 ]);
 
 /** A render error in a screen: the error state with a Reload button (UI-06). */

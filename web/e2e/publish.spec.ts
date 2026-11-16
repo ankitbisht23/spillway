@@ -2,8 +2,8 @@
 // edited in the Routes screen shows in the publish page's diff, publishes
 // with a note, and the version keeps the note; an edit of another route
 // through the API between the preview and the click is a 412 that shows
-// the newer diff and needs another click. History arrives with
-// m6-replicas-history, so the version is checked through the API.
+// the newer diff and needs another click. History then lists the version
+// with its note, and shows its diff.
 import { expect, login, test } from "./fixtures";
 import { ciApi, seeded } from "./seed";
 
@@ -53,9 +53,19 @@ test("an edit shows in the diff and publishes with its note; a 412 shows the new
     const done = page.getByRole("status").filter({ hasText: "Published version" });
     await expect(done).toBeVisible();
     const version = Number(/Published version (\d+)/.exec((await done.textContent()) ?? "")?.[1]);
-    const latest = (await (await api.get("config/versions?limit=1")).json()) as { items: { version: number; note: string }[] };
-    expect(latest.items[0]).toMatchObject({ version, note });
     await expect(page.getByText(`Nothing to publish: the working set is version ${version}`)).toBeVisible();
+
+    // History has it, newest, with its note and its diff against the version before.
+    await done.getByRole("link", { name: "see it in History" }).click();
+    await expect(page.getByRole("heading", { name: `Version ${version}` })).toBeVisible();
+    await expect(page.getByRole("definition").filter({ hasText: note })).toHaveText(note);
+    const versionDiff = page.getByLabel(`Diff from version ${version - 1} to version ${version}`);
+    await expect(versionDiff.locator(".diff-add", { hasText: `value: ${s.run}` })).toBeVisible();
+    await expect(versionDiff.locator(".diff-add", { hasText: "priority: 7" })).toBeVisible();
+    await page.getByRole("link", { name: "All versions" }).click();
+    const newest = page.getByRole("row").nth(1);
+    await expect(newest).toContainText(`Version ${version}`);
+    await expect(newest).toContainText(note);
   } finally {
     await api.dispose();
   }

@@ -5,8 +5,7 @@
 // way, so the run ends where it started. In make dev the gateways are
 // static, so the live view says no gateway reports the upstream: the
 // stream answers, from Prometheus, for an upstream no gateway runs.
-// History arrives with m6-replicas-history, so the version is checked
-// through the API.
+// The version's diff is checked in History.
 import type { Page } from "@playwright/test";
 
 import { expect, login, test } from "./fixtures";
@@ -51,8 +50,9 @@ test("drain an endpoint, publish it with its diff, then undrain", async ({ page 
     await expect(diff.locator(".diff-add", { hasText: "draining: true" })).toBeVisible();
     await expect(page.getByRole("list", { name: "Changes" })).toContainText("changed upstream e2e");
     const drained = await publish(page, `Playwright ${s.run}: drain ${ENDPOINT}`);
-    const d = (await (await api.get(`config/versions/${drained}/diff`)).json()) as { diff: string };
-    expect(d.diff).toMatch(/^\+\s+draining: true$/m);
+    await page.getByRole("status").filter({ hasText: "Published version" }).getByRole("link", { name: "see it in History" }).click();
+    const versionDiff = page.getByLabel(`Diff from version ${drained - 1} to version ${drained}`);
+    await expect(versionDiff.locator(".diff-add", { hasText: "draining: true" })).toBeVisible();
 
     await openUpstream(page);
     await row.getByRole("button", { name: `Undrain ${ENDPOINT}` }).click();

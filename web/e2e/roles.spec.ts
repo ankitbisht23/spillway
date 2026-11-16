@@ -15,6 +15,13 @@ for (const role of ["viewer", "editor", "publisher", "key-admin", "admin"]) {
     await login(page, `test-${role}`);
     await expect(page.getByLabel("Roles")).toHaveText(role);
     await expect(page.getByRole("navigation", { name: "Screens" }).getByRole("link")).toHaveText(role === "admin" ? all : everyone);
+    // Audit and Tenants: hidden, and Not allowed at their URLs without an
+    // API call, for every role but admin (UI-04, ADR-0058).
+    const asked: string[] = [];
+    page.on("request", (r) => {
+      const path = new URL(r.url()).pathname;
+      if (path.startsWith("/api/v1/audit") || path.startsWith("/api/v1/tenants")) asked.push(path);
+    });
     for (const [path, title] of [["/audit", "Audit log"], ["/tenants", "Tenants"]]) {
       await page.goto(path ?? "");
       if (role === "admin") {
@@ -23,6 +30,13 @@ for (const role of ["viewer", "editor", "publisher", "key-admin", "admin"]) {
         await expect(page.getByRole("heading", { name: "Not allowed" })).toBeVisible();
         await expect(page.getByText("Needs the admin role.")).toBeVisible();
       }
+    }
+    if (role === "admin") {
+      // The audit log answers: the run's tenant was created in setup.
+      await page.goto(`/audit?entity=tenant`);
+      await expect(page.getByRole("row").filter({ hasText: "tenant.create" }).first()).toBeVisible();
+    } else {
+      expect(asked, "no audit or tenants call for a role that cannot see them").toEqual([]);
     }
 
     // Throttling's actions on the seeded throttled key (UI-04, ADR-0060).
@@ -82,6 +96,15 @@ for (const role of ["viewer", "editor", "publisher", "key-admin", "admin"]) {
     for (const name of [/^Rotate /, /^Revoke /, /^Block /]) await expectAllowed(seededKey.getByRole("button", { name }), keyAdmin, keyReason);
     await page.goto("/access-lists");
     await expectAllowed(page.getByRole("button", { name: "New entry" }), keyAdmin, keyReason);
+
+    // Replicas is for everyone; History's rollback is for publisher and
+    // admin, disabled with the reason for the rest (UI-06, CP-04).
+    await page.goto("/replicas");
+    await expect(page.getByRole("heading", { name: "Replicas" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Not allowed" })).toHaveCount(0);
+    await page.goto("/history");
+    await page.getByRole("link", { name: /^Version \d+$/ }).first().click();
+    await expectAllowed(page.getByRole("button", { name: /^Roll back to version \d+$/ }), publisher, "Needs the publisher or admin role");
 
     await page.goto("/publish");
     const publish = page.getByRole("button", { name: /^Publish revision \d+$/ });

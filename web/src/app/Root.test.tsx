@@ -26,8 +26,8 @@ function session(): Session {
   return s;
 }
 
-// A screen that calls no API of its own, so each test mocks only what it is about.
-function renderRoot(boot: Boot, path = "/replicas") {
+// Not found inside the app shell calls no API of its own, so each test mocks only what it is about.
+function renderRoot(boot: Boot, path = "/no-such-screen") {
   const signIn = vi.fn();
   const queryClient = createQueryClient();
   render(<Root boot={boot} queryClient={queryClient} createRouter={() => appRouterAt(path)} signIn={signIn} />);
