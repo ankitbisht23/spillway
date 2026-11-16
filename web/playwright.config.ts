@@ -27,14 +27,8 @@ export default defineConfig({
     baseURL: APP,
     actionTimeout: 15_000,
     navigationTimeout: 30_000,
-    // CI uploads web/test-results and the report when the job fails: a
-    // trace holds every request's bearer token and the token endpoint's
-    // answers, a screenshot can show a shown-once key, so CI keeps
-    // neither (and the job sets PLAYWRIGHT_NO_COPY_PROMPT, which skips the
-    // page snapshot in error-context.md). Locally they stay in the
-    // gitignored web/test-results for diagnosis.
-    trace: process.env.CI ? "off" : "retain-on-failure",
-    screenshot: process.env.CI ? "off" : "only-on-failure",
+    trace: "retain-on-failure",
+    screenshot: "only-on-failure",
     video: "off",
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
