@@ -353,7 +353,7 @@ func TestCIDRDenyBeforeAuthn(t *testing.T) {
 		t.Fatal(err)
 	}
 	g.identity.Store(id)
-	bad := good.Secret.Reveal()[:len(good.Secret.Reveal())-1] + "x"
+	bad := corrupt(good.Secret.Reveal())
 
 	var bodies []string
 	for i, tt := range []struct {
@@ -429,6 +429,23 @@ func TestCIDRDenyBeforeAuthn(t *testing.T) {
 		_, sec, _ := apikey.Parse(k)
 		if strings.Contains(outputs, k) || sec != "" && strings.Contains(outputs, sec) {
 			t.Error("a key or its secret appears in the logs, spans or bodies")
+		}
+	}
+}
+
+// corrupt is key with its last character changed, so never key itself.
+func corrupt(key string) string {
+	last := "x"
+	if strings.HasSuffix(key, last) {
+		last = "y"
+	}
+	return key[:len(key)-1] + last
+}
+
+func TestCorrupt(t *testing.T) {
+	for _, k := range []string{"spw_abcx", "spw_abcy", "spw_abc0"} {
+		if c := corrupt(k); c == k || len(c) != len(k) || c[:len(c)-1] != k[:len(k)-1] {
+			t.Errorf("corrupt(%q) = %q", k, c)
 		}
 	}
 }
