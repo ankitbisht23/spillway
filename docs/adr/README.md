@@ -75,3 +75,4 @@ Decisions that shape Spillway and are not obvious from the code or from docs/des
 | [0064](0064-routes-and-upstreams-details.md) | Routes and upstreams: details | Accepted | 2026-11-16 |
 | [0065](0065-consumers-keys-and-access-lists-details.md) | Consumers, keys and access lists: details | Accepted | 2026-11-16 |
 | [0066](0066-replicas-history-and-audit-details.md) | Replicas, History and the audit log: details | Accepted | 2026-11-16 |
+| [0067](0067-m1-m6-review-fixes.md) | M1–M6 review fixes | Accepted | 2026-11-16 |
