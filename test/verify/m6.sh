@@ -137,6 +137,8 @@ if ! grep -q '^probe started' "$tmp/probe.err"; then
 fi
 
 echo "== the UI run: web/e2e/m6-exit.spec.ts as test-admin, 20 publishes then shadow → reviewed → enforced → rolled back (about 2 minutes)"
+# An earlier failed run's records must never reach this run's probe.
+rm -f web/test-results/m6-exit.json web/test-results/m6-leak-guard.json
 SPILLWAY_VERIFY_M6_RUN=$run_id SPILLWAY_VERIFY_M6_BASE=$base \
 	pnpm -C web exec playwright test -c playwright.m6.config.ts >"$tmp/playwright.log" 2>&1
 spec=$?
