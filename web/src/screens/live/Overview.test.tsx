@@ -180,7 +180,7 @@ describe("Overview (UI-03)", () => {
     const stream = mockStream();
     renderApp("/overview", ["viewer"]);
     await waitFor(() => expect(stream.opened).toHaveLength(1));
-    await userEvent.click(screen.getByRole("link", { name: "Replicas" }));
+    await userEvent.click(screen.getByRole("link", { name: "History" }));
     await waitFor(() => expect(stream.last.signal.aborted).toBe(true));
   });
 });

@@ -21,16 +21,10 @@ describe("the app shell", () => {
     expect(screen.getByRole("link", { name: "Replicas" })).toHaveAttribute("aria-current", "page");
   });
 
-  it("shows a placeholder naming the task for a screen not built yet", async () => {
-    renderAt("/replicas");
-    expect(await screen.findByRole("heading", { name: "Replicas" })).toBeInTheDocument();
-    expect(screen.getByText("Arrives with m6-replicas-history.")).toBeInTheDocument();
-  });
-
   it("navigates", async () => {
     const router = renderAt("/overview");
     await userEvent.click(await screen.findByRole("link", { name: "History" }));
-    expect(await screen.findByText("Arrives with m6-replicas-history.")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "History" })).toBeInTheDocument();
     expect(router.state.location.pathname).toBe("/history");
   });
 
@@ -58,7 +52,7 @@ describe("role-aware navigation (UI-04)", () => {
     renderAt(path, ["viewer"]);
     expect(await screen.findByRole("heading", { name: "Not allowed" })).toBeInTheDocument();
     expect(screen.getByText(why)).toBeInTheDocument();
-    expect(screen.queryByText(/Arrives with/)).toBeNull();
+    expect(screen.queryByRole("heading", { name: /Audit log|Tenants/ })).toBeNull();
   });
 
   it("opens the hidden screens for an admin", async () => {

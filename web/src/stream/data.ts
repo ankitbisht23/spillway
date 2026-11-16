@@ -20,3 +20,10 @@ export function asVector(d: unknown): Vector | null {
 export function asHeavyHitters(d: unknown): HeavyHitter[] | null {
   return isObject(d) && Array.isArray(d.items) ? (d.items as HeavyHitter[]) : null;
 }
+
+export type StreamReplica = components["schemas"]["StreamReplica"];
+
+/** The replicas subscription's rows: each replica with its staleness on Postgres's clock. */
+export function asReplicas(d: unknown): StreamReplica[] | null {
+  return isObject(d) && Array.isArray(d.items) ? (d.items as StreamReplica[]) : null;
+}
