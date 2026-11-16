@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/url"
 	"slices"
 	"strings"
@@ -411,6 +412,7 @@ func TestQueries(t *testing.T) {
 		th := newTestHub(t, true, nil)
 		s := th.serve(t, "u", "sub=overview.requests&sub=overview.ratelimited&sub=overview.latency&sub=overview.routes&sub=overview.tenants"+
 			"&sub=throttling.policies&sub=throttling.heavy_hitters&sub=replicas&route=r1&tenant=acme&range=1h&policy_id=7", time.Time{})
+		s2 := th.serve(t, "u", "sub=routes.endpoints&sub=routes.circuits", time.Time{})
 		synctest.Wait()
 		want := []string{
 			`sum by (code_class) (rate(gw_requests_total{route="r1",tenant="acme"}[2m]))`,
@@ -424,6 +426,9 @@ func TestQueries(t *testing.T) {
 			`sum by (tenant) (rate(gw_requests_total{route="r1",reason="ratelimited"}[1h]))`,
 			`histogram_quantile(0.99, sum by (tenant, le) (rate(gw_request_duration_seconds_bucket{route="r1"}[1h])))`,
 			`sum by (policy, mode) (rate(gw_ratelimit_decisions_total{decision="deny"}[2m]))`,
+			`max by (replica, upstream, endpoint) (gw_upstream_endpoint_healthy)`,
+			`max by (replica, upstream, endpoint) (gw_upstream_endpoint_ejected)`,
+			`max by (replica, upstream) (gw_circuit_state)`,
 		}
 		got := th.prom.queries()
 		slices.Sort(got)
@@ -442,6 +447,7 @@ func TestQueries(t *testing.T) {
 		if th.pg.since != time.Now().Add(-time.Hour) || th.pg.policyID == nil || *th.pg.policyID != 7 {
 			t.Errorf("heavy hitters since %v policy %v", th.pg.since, th.pg.policyID)
 		}
+		s2.stop()
 		s.stop()
 		checkClean(t, th)
 	})
@@ -475,12 +481,15 @@ func TestData(t *testing.T) {
 		th := newTestHub(t, true, nil)
 		s := th.serve(t, "u", "sub=overview.requests&sub=overview.latency&sub=overview.routes&sub=throttling.heavy_hitters&sub=replicas", time.Now().Add(time.Second))
 		settle(time.Second)
+		s3 := th.serve(t, "u", "sub=routes.endpoints&sub=routes.circuits", time.Time{})
+		synctest.Wait()
 		th.prom.setMode("down")
 		s2 := th.serve(t, "u", "sub=overview.tenants", time.Time{})
 		synctest.Wait()
 		events, _ := s.w.events(t)
 		e2, _ := s2.w.events(t)
-		events = append(events, e2...)
+		e3, _ := s3.w.events(t)
+		events = append(append(events, e2...), e3...)
 		schemas := map[string]string{"ready": "StreamReady", "result": "StreamResult", "error": "StreamError", "end": "StreamEnd"}
 		seen := map[string]bool{}
 		for _, e := range events {
@@ -517,6 +526,23 @@ func TestData(t *testing.T) {
 		if want := []string{"route-00", "route-01", "route-02", "route-04", "route-05", "route-06", "route-07", "route-08", "route-09", "route-10"}; !slices.Equal(order, want) {
 			t.Errorf("top routes %v, want %v", order, want)
 		}
+		// routes.*: sorted by replica, upstream, endpoint and stat; NaN is null.
+		var eps []string
+		for _, s := range named(events, "result", "routes.endpoints")[0].data["data"].(map[string]any)["series"].([]any) {
+			l := s.(map[string]any)["labels"].(map[string]any)
+			eps = append(eps, fmt.Sprintf("%s %s %s %s %v", l["replica"], l["upstream"], l["endpoint"], l["stat"], s.(map[string]any)["value"]))
+		}
+		if want := []string{
+			"gateway-1 u 10.0.0.1:80 ejected <nil>", "gateway-1 u 10.0.0.1:80 healthy <nil>",
+			"gateway-2 u 10.0.0.1:80 ejected 1", "gateway-2 u 10.0.0.1:80 healthy 1",
+		}; !slices.Equal(eps, want) {
+			t.Errorf("routes.endpoints series %v, want %v", eps, want)
+		}
+		circuits := named(events, "result", "routes.circuits")[0].data["data"].(map[string]any)["series"].([]any)
+		if len(circuits) != 2 || circuits[0].(map[string]any)["labels"].(map[string]any)["replica"] != "gateway-1" {
+			t.Errorf("routes.circuits series %v", circuits)
+		}
+		s3.stop()
 		s2.stop()
 		s.cancel()
 		checkClean(t, th)

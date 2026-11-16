@@ -69,6 +69,14 @@ func (f *fakeProm) RoundTrip(req *http.Request) (*http.Response, error) {
 				form.Get("start"), form.Get("end"))
 			break
 		}
+		// routes.*: two replicas, listed out of order, with one value
+		// that is no number.
+		if strings.Contains(q, "max by (replica") {
+			_, _ = rec.WriteString(`{"status":"success","data":{"resultType":"vector","result":[` +
+				`{"metric":{"replica":"gateway-2","upstream":"u","endpoint":"10.0.0.1:80"},"value":[1,"1"]},` +
+				`{"metric":{"replica":"gateway-1","upstream":"u","endpoint":"10.0.0.1:80"},"value":[1,"NaN"]}]}}`)
+			break
+		}
 		// Instant: by route or tenant, 12 values with decreasing rates.
 		by := "route"
 		if strings.Contains(q, "sum by (tenant") {

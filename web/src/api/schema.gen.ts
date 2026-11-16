@@ -1519,7 +1519,7 @@ export interface components {
          * @description A named query of the stream's catalogue (ADR-0059); openStream's sub parameter says what each answers.
          * @enum {string}
          */
-        StreamQueryName: "overview.requests" | "overview.ratelimited" | "overview.latency" | "overview.routes" | "overview.tenants" | "throttling.policies" | "throttling.heavy_hitters" | "replicas";
+        StreamQueryName: "overview.requests" | "overview.ratelimited" | "overview.latency" | "overview.routes" | "overview.tenants" | "throttling.policies" | "throttling.heavy_hitters" | "replicas" | "routes.endpoints" | "routes.circuits";
         StreamReady: {
             subscriptions: components["schemas"]["StreamQueryName"][];
             /**
@@ -3716,7 +3716,7 @@ export interface operations {
     openStream: {
         parameters: {
             query: {
-                /** @description The subscriptions, 1 to 8 distinct catalogue names, as repeated parameters. overview.requests: request rate by code_class (matrix; route, tenant, range). overview.ratelimited: the share of requests rate-limited (matrix; route, tenant, range). overview.latency: p50 and p99 request duration in seconds, series labelled quantile (matrix; route, tenant, range). overview.routes: the top 10 routes by request rate over the range, each with stat rps, ratelimited_rps and p99_s (vector; tenant, range). overview.tenants: the same by tenant (vector; route, range). throttling.policies: the deny rate by policy name and mode, shadow would-denies as mode shadow (matrix; range). throttling.heavy_hitters: the top 50 throttled keys since the range's start (HeavyHitterList; range, policy_id). replicas: the gateway replicas with their staleness (StreamReplicas). */
+                /** @description The subscriptions, 1 to 8 distinct catalogue names, as repeated parameters. overview.requests: request rate by code_class (matrix; route, tenant, range). overview.ratelimited: the share of requests rate-limited (matrix; route, tenant, range). overview.latency: p50 and p99 request duration in seconds, series labelled quantile (matrix; route, tenant, range). overview.routes: the top 10 routes by request rate over the range, each with stat rps, ratelimited_rps and p99_s (vector; tenant, range). overview.tenants: the same by tenant (vector; route, range). throttling.policies: the deny rate by policy name and mode, shadow would-denies as mode shadow (matrix; range). throttling.heavy_hitters: the top 50 throttled keys since the range's start (HeavyHitterList; range, policy_id). replicas: the gateway replicas with their staleness (StreamReplicas). routes.endpoints: each gateway replica's upstream endpoints now, by resolved address, with stat healthy (1 while it takes traffic) and ejected (1 while outlier detection has it ejected), labelled replica, upstream, endpoint and stat (vector; no parameters). routes.circuits: each gateway replica's circuit state per upstream now, 0 closed, 1 open, 2 half-open, labelled replica and upstream (vector; no parameters). */
                 sub: components["schemas"]["StreamQueryName"][];
                 /** @description For overview.requests, .ratelimited, .latency and .tenants: a route of the latest published config version, or * (the default) for every route. */
                 route?: string;

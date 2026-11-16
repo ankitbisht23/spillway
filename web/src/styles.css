@@ -181,3 +181,10 @@ button.link-button { padding: 0; border: 0; background: none; color: var(--accen
 .diff-del { background: var(--danger-bg); }
 .diff-hunk { color: var(--accent); background: var(--bg); }
 .diff-file { color: var(--muted); }
+
+/* Routes & upstreams (m6-routes) */
+.tabs { display: flex; gap: 0.25rem; margin-bottom: var(--space); border-bottom: 1px solid var(--border); }
+.tabs a { padding: 0.35rem var(--space); color: var(--text); text-decoration: none; border-bottom: 2px solid transparent; }
+.tabs a.active { font-weight: 600; color: var(--accent); border-bottom-color: var(--accent); }
+.endpoint-ejected, .endpoint-failing, .circuit-open { color: var(--danger); }
+.circuit-half-open { color: #b26a00; }

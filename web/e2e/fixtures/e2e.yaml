@@ -14,6 +14,12 @@ routes:
     match: { path_prefix: /anything/e2e }
     upstream: e2e
     auth_mode: none
+  # The route publish.spec.ts edits through the API between the preview
+  # and the click, while the UI edits e2e-orders.
+  - name: e2e-other
+    match: { path_prefix: /anything/e2e-other }
+    upstream: e2e
+    auth_mode: none
 policies:
   # The policy of the seeded heavy-hitter windows on the Throttling screen.
   - name: e2e-per-client

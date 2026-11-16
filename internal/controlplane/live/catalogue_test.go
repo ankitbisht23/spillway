@@ -38,7 +38,7 @@ func TestValidation(t *testing.T) {
 		{"unknown sub", "sub=overview.nope", "sub: not a named query"},
 		{"PromQL as sub", "sub=" + url.QueryEscape(`sum(rate(gw_requests_total[1m]))`), "sub: not a named query"},
 		{"sub case", "sub=Replicas", "sub: not a named query"},
-		{"routes.* not yet", "sub=routes.endpoints", "sub: not a named query"},
+		{"routes.* takes no parameter", "sub=routes.endpoints&sub=routes.circuits&range=1h", "range: none of the requested queries takes it"},
 		{"repeated sub", "sub=replicas&sub=replicas", "sub: each named query at most once"},
 		{"nine subs", "sub=replicas" + strings.Repeat("&sub=replicas", 8), "sub: give 1 to 8"},
 		{"unknown parameter", "sub=replicas&query=up", "unknown query parameter"},
@@ -102,6 +102,7 @@ func TestValid(t *testing.T) {
 		"sub=throttling.heavy_hitters&policy_id=12&range=24h":     "throttling.heavy_hitters&range=24h&policy_id=12",
 		"sub=throttling.heavy_hitters":                            "throttling.heavy_hitters&range=15m&policy_id=",
 		"sub=replicas&sub=overview.tenants&route=orders&range=6h": "replicas",
+		"sub=routes.endpoints&sub=routes.circuits":                "routes.endpoints",
 	} {
 		q, _ := url.ParseQuery(query)
 		r, err := parse(q)

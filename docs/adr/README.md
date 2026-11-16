@@ -72,3 +72,4 @@ Decisions that shape Spillway and are not obvious from the code or from docs/des
 | [0061](0061-admin-ui-tests-and-make-verify-m6.md) | Admin UI tests and make verify-m6 | Accepted | 2026-11-15 |
 | [0062](0062-live-screens-details.md) | Live screens: details | Accepted | 2026-11-16 |
 | [0063](0063-policies-and-publish-details.md) | Policies and publish: details | Accepted | 2026-11-16 |
+| [0064](0064-routes-and-upstreams-details.md) | Routes and upstreams: details | Accepted | 2026-11-16 |
