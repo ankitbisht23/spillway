@@ -3,9 +3,10 @@
 // identity versions each runs, its staleness (seconds since it last
 // synced, on Postgres's clock, not the browser's), its last heartbeat,
 // whether it is live and the last config version it refused. View only.
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 
-import { useLatestConfig } from "../../api/latestConfig";
+import { api, call } from "../../api/client";
 import { LiveState, newestAt, StreamStatusLine } from "../../components/LiveState";
 import type { StreamQueryName } from "../../stream/client";
 import { asReplicas, type StreamReplica } from "../../stream/data";
@@ -24,9 +25,23 @@ export function staleness(s: number | null): string {
   return `${Math.floor(m / 60)} h ${m % 60} min`;
 }
 
+/**
+ * The latest published config version (null before the first), read again
+ * with each replicas result, so "behind" follows a publish made while the
+ * screen is open.
+ */
+function useNewestVersion(at: string | undefined) {
+  return useQuery({
+    queryKey: ["config", "versions", "newest", at ?? ""],
+    queryFn: async () => (await call(api.GET("/config/versions", { params: { query: { limit: 1 } } }))).data.items[0]?.version ?? null,
+    placeholderData: keepPreviousData,
+    gcTime: 0,
+  });
+}
+
 export function Replicas() {
   const live = useSubscription(SUBS);
-  const latest = useLatestConfig();
+  const latest = useNewestVersion(live.subs.replicas?.result?.at);
   const stale = live.status.state !== "open";
   return (
     <section>
@@ -37,7 +52,7 @@ export function Replicas() {
       <p className="muted">
         Gateway replicas from their heartbeats (every 5 s); live means a heartbeat in the last 15 s. Staleness is the time since a replica last synced
         with the control plane.
-        {latest.data && <> The latest config version is <Link to="/history/$version" params={{ version: String(latest.data.version) }}>{latest.data.version}</Link>.</>}
+        {typeof latest.data === "number" && <> The latest config version is <Link to="/history/$version" params={{ version: String(latest.data) }}>{latest.data}</Link>.</>}
       </p>
       {live.status.state === "failed" ? (
         <StreamFailed error={live.status.error} reset={null} />
@@ -50,7 +65,7 @@ export function Replicas() {
           isEmpty={(items) => items.length === 0}
           empty="No gateway replica has sent a heartbeat in the last 7 days. Gateways with static config (make dev's default) do not report."
         >
-          {(items) => <ReplicaTable items={items} latest={latest.data?.version} />}
+          {(items) => <ReplicaTable items={items} latest={latest.data ?? undefined} />}
         </LiveState>
       )}
     </section>
@@ -76,7 +91,7 @@ function ReplicaTable({ items, latest }: { items: StreamReplica[]; latest: numbe
             </td>
             <td>
               {r.config_version === 0 ? "none" : <Link to="/history/$version" params={{ version: String(r.config_version) }}>{r.config_version}</Link>}
-              {latest !== undefined && r.config_version < latest && <span className="muted"> · behind {latest}</span>}
+              {latest !== undefined && r.config_version < latest && <span className="muted"> · behind version {latest}</span>}
             </td>
             <td>{r.identity_version === 0 ? "none" : r.identity_version}</td>
             <td>{staleness(staleness_s)}</td>

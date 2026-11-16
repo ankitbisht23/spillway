@@ -1,10 +1,12 @@
 import { act, screen, waitFor, within } from "@testing-library/react";
+import { http, HttpResponse } from "msw";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { components } from "../../api/schema.gen";
 import { setSession } from "../../auth/session";
 import { mockConfig, mockStream, result, startSession } from "../../test/live";
 import { renderApp } from "../../test/render";
+import { server } from "../../test/server";
 import { staleness } from "./Replicas";
 
 type Replica = components["schemas"]["Replica"];
@@ -50,7 +52,7 @@ describe("Replicas (UI-06, CP-08)", () => {
     expect(within(one).getByRole("link", { name: "3" })).toHaveAttribute("href", "/history/3");
     const two = screen.getByRole("row", { name: /^gateway-2/ });
     expect(two).toHaveTextContent("down");
-    expect(two).toHaveTextContent("2 · behind 3");
+    expect(two).toHaveTextContent("2 · behind version 3");
     expect(two).toHaveTextContent("1 h 2 min");
     const three = screen.getByRole("row", { name: /^gateway-3/ });
     expect(three).toHaveTextContent("none");
@@ -62,6 +64,20 @@ describe("Replicas (UI-06, CP-08)", () => {
     act(() => stream.last.send("result", result("replicas", { items: [{ replica: replica("gateway-1"), staleness_s: 7.5 }] }, "2026-11-16T10:00:10Z")));
     await waitFor(() => expect(screen.queryByRole("row", { name: /^gateway-2/ })).toBeNull());
     expect(screen.getByRole("row", { name: /^gateway-1/ })).toHaveTextContent("7.5 s");
+  });
+
+  it("reads the latest version again with each result, so behind follows a publish", async () => {
+    let newest = 3;
+    server.use(http.get("/api/v1/config/versions", () => HttpResponse.json({ items: [{ version: newest }], next_cursor: null })));
+    const stream = await open();
+    act(() => stream.last.send("result", result("replicas", { items: [{ replica: replica("gateway-1"), staleness_s: 1 }] })));
+    expect(await screen.findByRole("row", { name: /^gateway-1/ })).not.toHaveTextContent("behind");
+    expect(screen.getByText(/The latest config version is/)).toHaveTextContent("The latest config version is 3.");
+
+    newest = 4;
+    act(() => stream.last.send("result", result("replicas", { items: [{ replica: replica("gateway-1"), staleness_s: 1 }] }, "2026-11-16T10:00:10Z")));
+    await waitFor(() => expect(screen.getByRole("row", { name: /^gateway-1/ })).toHaveTextContent("3 · behind version 4"));
+    expect(screen.getByText(/The latest config version is/)).toHaveTextContent("The latest config version is 4.");
   });
 
   it("says when no replica reports, as with make dev's static gateways", async () => {
