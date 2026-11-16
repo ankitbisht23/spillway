@@ -115,4 +115,35 @@ describe("Upstreams (UI-06, D9)", () => {
     // The navigation's Routes & upstreams is current on the upstream pages too.
     expect(within(screen.getByRole("navigation", { name: "Screens" })).getByRole("link", { name: "Routes & upstreams" })).toHaveAttribute("aria-current", "page");
   });
+
+  it("shows the empty state with the reason a viewer cannot create one", async () => {
+    server.use(http.get("/api/v1/upstreams", () => HttpResponse.json({ items: [], next_cursor: null })));
+    mockStream();
+    renderApp("/upstreams", ["viewer"]);
+    expect(await screen.findByText("No upstreams yet. Needs the editor or admin role to create one.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "New upstream" })).toBeDisabled();
+  });
+
+  it("shows the empty state of a name filter", async () => {
+    server.use(http.get("/api/v1/upstreams", () => HttpResponse.json({ items: [], next_cursor: null })));
+    mockStream();
+    renderApp("/upstreams?name=orders-up", ["editor"]);
+    expect(await screen.findByText("No upstream named orders-up.")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "All upstreams" })).toHaveAttribute("href", "/upstreams");
+  });
+
+  it("shows the error state with its request ID and a Retry that asks again", async () => {
+    let calls = 0;
+    server.use(http.get("/api/v1/upstreams", () => {
+      calls++;
+      return calls === 1
+        ? HttpResponse.json({ code: "internal", error: "boom", request_id: "req-up-1" }, { status: 500 })
+        : HttpResponse.json({ items: [{ id: 2, name: "orders-up", version: 1, created_at: "", updated_at: "", endpoints: [] }], next_cursor: null });
+    }));
+    mockStream();
+    renderApp("/upstreams");
+    expect(await screen.findByText(/req-up-1/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByRole("row", { name: /orders-up/ })).toBeInTheDocument();
+  });
 });

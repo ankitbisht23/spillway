@@ -91,7 +91,8 @@ func newM6Run(t *testing.T) *m6Run {
 	}
 	r := &m6Run{o: o, versions: map[int64]published{}, stage: map[string]published{}}
 	t0 := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
-	exit := &m6Exit{Run: "r1", BaseVersion: 100, Review: &m6Review{UIShowed: true, UIWouldDeny: "2,123", HeavyDigest: "hd", LightDigest: "ld"}}
+	uiHeavy := int64(2000)
+	exit := &m6Exit{Run: "r1", BaseVersion: 100, Review: &m6Review{UIShowed: true, UIWouldDeny: "2,123", UIHeavy: &uiHeavy, HeavyDigest: "hd", LightDigest: "ld"}}
 	wd, ev, sh := 2123.0, 4300.0, 0.49
 	exit.Review.WouldDeny, exit.Review.Evaluated, exit.Review.Share = &wd, &ev, &sh
 	exit.Review.Keys = append(exit.Review.Keys, struct {
@@ -229,6 +230,8 @@ func TestJudgeM6Fails(t *testing.T) {
 		}},
 		{"no would-denies", []string{"(b2)"}, func(r *m6Run) { r.in.Exit.Review.WouldDeny = nil }},
 		{"the UI showed none", []string{"(b2)"}, func(r *m6Run) { r.in.Exit.Review.UIShowed = false }},
+		{"the UI showed no heavy key row", []string{"(b2)"}, func(r *m6Run) { r.in.Exit.Review.UIHeavy = nil }},
+		{"the UI's heavy key row would-denied none", []string{"(b2)"}, func(r *m6Run) { zero := int64(0); r.in.Exit.Review.UIHeavy = &zero }},
 		{"no review", []string{"(b2)"}, func(r *m6Run) { r.in.Exit.Review = nil }},
 		{"40 % heavy 429s", []string{"(c)"}, func(r *m6Run) {
 			r.set(r.during("enforce"), func(x *probeRecord) {

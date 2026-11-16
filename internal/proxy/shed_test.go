@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"bufio"
+	"context"
 	"crypto/tls"
 	"errors"
 	"io"
@@ -474,29 +475,34 @@ func TestShedLatencyUnderOverload(t *testing.T) {
 	})
 	g := newGateway(t, newResolver(u), upstreamOf("", u))
 	g.capped(t, 20)
-	client := &http.Client{Transport: &http.Transport{MaxIdleConnsPerHost: 200}}
+	// At most 20 connections are dialled at once: a burst of 200 connects
+	// can overflow macOS's listen backlog of 128, and the kernel's resets
+	// would fail the test, not shedding. Every dial counts, not only each
+	// client's first: a shed answer closes its connection, so the client
+	// dials again.
+	connecting := make(chan struct{}, 20)
+	var dialer net.Dialer
+	client := &http.Client{Transport: &http.Transport{MaxIdleConnsPerHost: 200, DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+		select {
+		case connecting <- struct{}{}:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		defer func() { <-connecting }()
+		return dialer.DialContext(ctx, network, addr)
+	}}}
 	t.Cleanup(client.CloseIdleConnections)
 	var mu sync.Mutex
 	var shed []time.Duration
 	ok := 0
 	var wg sync.WaitGroup
 	end := time.Now().Add(2 * time.Second)
-	// At most 20 clients open their connection at once: a burst of 200
-	// connects can overflow macOS's listen backlog of 128, and the kernel's
-	// resets would fail the test, not shedding.
-	connecting := make(chan struct{}, 20)
 	for range 200 {
 		wg.Go(func() {
-			connecting <- struct{}{}
-			first := true
 			for time.Now().Before(end) {
 				start := time.Now()
 				req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, g.URL+"/", nil)
 				resp, err := client.Do(req)
-				if first { // this client's connection is open
-					<-connecting
-					first = false
-				}
 				if err != nil {
 					t.Error(err)
 					return

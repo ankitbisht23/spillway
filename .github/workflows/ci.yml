@@ -183,9 +183,18 @@ jobs:
         if: failure()
         with:
           name: playwright
+          # The report and error text only (ADR-0067): a trace holds every
+          # request's bearer token and the token endpoint's answers, and a
+          # screenshot or error-context.md's page snapshot can show a
+          # shown-once key. The report's own copies are in its data/.
           path: |
             web/playwright-report
             web/test-results
+            !web/playwright-report/data
+            !web/**/*.zip
+            !web/**/*.png
+            !web/**/*.webm
+            !web/**/error-context.md
           retention-days: 7
 
   ci-ok:

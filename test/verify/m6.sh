@@ -14,7 +14,9 @@
 #        heartbeats (Postgres clock), < 5 s;
 #   (b)  shadow: no 429s in S's window, both clients answered by all five;
 #   (b2) reviewed: the report has would-denies, the heavy client's digest
-#        among its keys, the light one's without, and the UI showed them;
+#        among its keys, the light one's without, and the UI showed them,
+#        the heavy key's row included (the key rows are by this run's
+#        policy ID; would_deny is by name and may include earlier runs);
 #   (c)  enforced: >= 50 % of heavy requests 429 with the policy's
 #        RateLimit item and Retry-After, the rest 200, light all 200;
 #   (d)  rolled back: no 429s in R's window;
@@ -81,7 +83,10 @@ cleanup() {
 	if [ -n "$pid" ]; then kill "$pid" 2>/dev/null; fi
 	docker rm -f "$probe" >/dev/null 2>&1
 	if [ -n "$managed" ]; then
-		"${compose[@]}" up -d --no-deps --force-recreate --wait --wait-timeout 120 gateway-1 >/dev/null 2>&1 ||
+		# Removed, then created, not recreated in place (see
+		# test/integration/managed_test.go's composeManaged).
+		"${compose[@]}" rm -fsv gateway-1 >/dev/null 2>&1
+		"${compose[@]}" up -d --no-deps --wait --wait-timeout 120 gateway-1 >/dev/null 2>&1 ||
 			echo "      restoring: gateway-1 did not come back in static mode"
 		"${compose[@]}" --profile replicas rm -fsv gateway-2 gateway-3 gateway-4 gateway-5 >/dev/null 2>&1
 	fi

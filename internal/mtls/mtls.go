@@ -36,17 +36,18 @@ type set struct {
 // content changes. Like the traffic certificate (ADR-0012) the files are
 // polled, which also catches the symlink swaps of a Kubernetes Secret.
 type Reloader struct {
-	files Files
-	check func(leaf *x509.Certificate) error
-	log   *slog.Logger
-	cur   atomic.Pointer[set]
-	sum   [3][sha256.Size]byte // content last tried, good or bad
+	files    Files
+	check    func(leaf *x509.Certificate) error
+	log      *slog.Logger
+	readFile func(name string) ([]byte, error)
+	cur      atomic.Pointer[set]
+	sum      [3][sha256.Size]byte // content last tried, good or bad
 }
 
 // Load reads the files once; a set that does not load, or whose leaf
 // certificate check refuses, is an error. check may be nil.
 func Load(files Files, check func(leaf *x509.Certificate) error, log *slog.Logger) (*Reloader, error) {
-	r := &Reloader{files: files, check: check, log: log}
+	r := &Reloader{files: files, check: check, log: log, readFile: os.ReadFile}
 	if err := r.reload(); err != nil {
 		return nil, err
 	}
@@ -80,12 +81,12 @@ func (r *Reloader) Leaf() *x509.Certificate { return r.cur.Load().cert.Leaf }
 // set one file at a time may log one failed load before the last file
 // lands.
 func (r *Reloader) reload() error {
-	var data [3][]byte
-	var errs [3]error
-	var sum [3][sha256.Size]byte
-	for i, f := range []string{r.files.Cert, r.files.Key, r.files.CA} {
-		data[i], errs[i] = os.ReadFile(f) //nolint:gosec // G304: the operator names the files
-		sum[i] = sha256.Sum256(data[i])
+	data, errs, sum, stable := r.read()
+	if !stable {
+		if r.cur.Load() != nil {
+			return nil // still changing: the next poll reads the files again
+		}
+		return errors.New("the files kept changing while they were read")
 	}
 	if r.cur.Load() != nil && sum == r.sum {
 		return nil
@@ -113,6 +114,33 @@ func (r *Reloader) reload() error {
 	r.log.Info("stream certificate loaded", "cert", r.files.Cert, "serial", cert.Leaf.SerialNumber.String(),
 		"dns_names", cert.Leaf.DNSNames, "not_after", cert.Leaf.NotAfter, "ca", r.files.CA)
 	return nil
+}
+
+// maxReads bounds read's passes over the files.
+const maxReads = 4
+
+// read reads the three files, then again, until two passes in a row read
+// the same content (at most maxReads passes). Each file is read through
+// its path, so a swap of the whole set between two reads, as a Kubernetes
+// Secret's ..data symlink makes, would otherwise mix two sets in one pass.
+// stable is false when no two passes in a row agreed.
+func (r *Reloader) read() (data [3][]byte, errs [3]error, sum [3][sha256.Size]byte, stable bool) {
+	pass := func() (data [3][]byte, errs [3]error, sum [3][sha256.Size]byte) {
+		for i, f := range []string{r.files.Cert, r.files.Key, r.files.CA} {
+			data[i], errs[i] = r.readFile(f)
+			sum[i] = sha256.Sum256(data[i])
+		}
+		return data, errs, sum
+	}
+	data, errs, sum = pass()
+	for range maxReads - 1 {
+		d, e, s := pass()
+		if s == sum {
+			return data, errs, sum, true
+		}
+		data, errs, sum = d, e, s
+	}
+	return data, errs, sum, false
 }
 
 // ServerConfig is the control plane's gRPC server config: TLS 1.3, the

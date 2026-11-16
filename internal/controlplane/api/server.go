@@ -58,7 +58,9 @@ type Server struct {
 	// prometheus answers the shadow report's counts (ADR-0060); nil
 	// leaves them null.
 	prometheus *live.Prometheus
-	log        *slog.Logger
+	// shadowSlots bounds the shadow reports evaluating at once.
+	shadowSlots chan struct{}
+	log         *slog.Logger
 }
 
 // Allowlist is the upstream allow-list of SEC-06, the same networks as the

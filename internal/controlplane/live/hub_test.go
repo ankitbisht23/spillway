@@ -416,7 +416,7 @@ func TestQueries(t *testing.T) {
 		synctest.Wait()
 		want := []string{
 			`sum by (code_class) (rate(gw_requests_total{route="r1",tenant="acme"}[2m]))`,
-			`sum(rate(gw_requests_total{route="r1",tenant="acme",reason="ratelimited"}[2m])) / sum(rate(gw_requests_total{route="r1",tenant="acme"}[2m]))`,
+			`(sum(rate(gw_requests_total{route="r1",tenant="acme",reason="ratelimited"}[2m])) or vector(0)) / sum(rate(gw_requests_total{route="r1",tenant="acme"}[2m]))`,
 			`histogram_quantile(0.5, sum by (le) (rate(gw_request_duration_seconds_bucket{route="r1",tenant="acme"}[2m])))`,
 			`histogram_quantile(0.99, sum by (le) (rate(gw_request_duration_seconds_bucket{route="r1",tenant="acme"}[2m])))`,
 			`sum by (route) (rate(gw_requests_total{tenant="acme"}[1h]))`,

@@ -89,7 +89,15 @@ func TestStreamMTLS(t *testing.T) {
 		}
 		// The server's log line names the reason; gRPC on the client may
 		// have it too, but the server's own line is what an operator reads.
-		if added := strings.TrimPrefix(logs.String(), before); !strings.Contains(added, tc.logged) {
+		// A refused handshake is logged after crypto/tls has sent its
+		// alert, so the client's call can fail first: wait for the line,
+		// up to 5 s, far above a host stall (ADR-0034).
+		added := strings.TrimPrefix(logs.String(), before)
+		for deadline := time.Now().Add(5 * time.Second); !strings.Contains(added, tc.logged) && time.Now().Before(deadline); {
+			time.Sleep(10 * time.Millisecond)
+			added = strings.TrimPrefix(logs.String(), before)
+		}
+		if !strings.Contains(added, tc.logged) {
 			t.Errorf("%s: the server logged %q, want a line with %q", tc.name, added, tc.logged)
 		}
 	}

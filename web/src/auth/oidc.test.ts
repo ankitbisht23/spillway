@@ -37,7 +37,11 @@ describe("discovery", () => {
     expect(p.redirectUri).toBe(`${origin}/oidc/callback`);
     expect(p.postLogoutRedirectUri).toBe(`${origin}/signed-out`);
     expect(p.options[oauth.allowInsecureRequests]).toBe(true);
-    await expect(discover({ issuer: "http://id.example.com/realms/x", client_id: "admin-ui" }, origin)).rejects.toThrow();
+    // Only for loopback: oauth4webapi refuses plain HTTP to any other
+    // host before it sends anything.
+    for (const issuer of ["http://id.example.com/realms/x", "http://10.0.0.5:8180/realms/x", "http://localhost.example.com/realms/x"]) {
+      await expect(discover({ issuer, client_id: "admin-ui" }, origin)).rejects.toMatchObject({ code: oauth.HTTP_REQUEST_FORBIDDEN });
+    }
   });
 });
 

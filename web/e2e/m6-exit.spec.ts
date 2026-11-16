@@ -69,7 +69,7 @@ const record = {
   run,
   base_version: base,
   publishes: [] as Timed[],
-  review: null as (ShadowReport & { ui_showed_would_deny: boolean; ui_would_deny: string; heavy_digest: string; light_digest: string }) | null,
+  review: null as (ShadowReport & { ui_showed_would_deny: boolean; ui_would_deny: string; ui_heavy_shadow_denied: number | null; heavy_digest: string; light_digest: string }) | null,
   steps: [] as string[],
 };
 const save = () => writeFileSync(OUT, JSON.stringify(record, null, 2));
@@ -189,13 +189,21 @@ test("make verify-m6: a new policy goes shadow → reviewed → enforced → rol
     await expect(page).toHaveURL(/window=15m/);
     await expect(page.getByText(`Version ${shadow} runs this policy in shadow mode.`)).toBeVisible();
     const wouldDeny = page.getByLabel("Counts").locator("div").filter({ has: page.getByText("Would deny (shadow)", { exact: true }) }).locator("dd");
-    const keyRows = page.locator("table tbody tr");
+    const digest = async (client: string) => (await json<{ key_digest: string }>(`lookup ${client}`,
+      api.post("heavy-hitters/lookup", { data: { policy_id: id, subject: { headers: { [PROBE_HEADER]: client } } } }))).key_digest;
+    const heavyDigest = await digest("heavy");
+    const lightDigest = await digest("light");
+    // The heavy key's row, by this run's policy ID: would_deny counts by
+    // policy name over 15 min and can include an earlier run's.
+    const heavyRow = page.locator("table tbody tr").filter({ has: page.getByRole("rowheader", { name: heavyDigest, exact: true }) });
     let shown = "";
+    let heavyShown: number | null = null;
     // The report does not refresh by itself: switching the window away
     // and back fetches it again once it is 10 s old.
     await expect.poll(async () => {
       shown = ((await wouldDeny.textContent()) ?? "").trim();
-      const ok = Number(shown.replace(/,/g, "")) > 0 && (await keyRows.count()) > 0;
+      heavyShown = (await heavyRow.count()) === 1 ? Number(((await heavyRow.locator("td").nth(2).textContent()) ?? "").replace(/,/g, "")) : null;
+      const ok = Number(shown.replace(/,/g, "")) > 0 && heavyShown !== null && heavyShown > 0;
       if (!ok) {
         await windowSelect.selectOption("1h");
         await expect(page).toHaveURL(/window=1h/);
@@ -203,15 +211,13 @@ test("make verify-m6: a new policy goes shadow → reviewed → enforced → rol
         await expect(page).toHaveURL(/window=15m/);
       }
       return ok;
-    }, { ...REPORT, message: "the shadow report shows would-denies and a key" }).toBe(true);
+    }, { ...REPORT, message: "the shadow report shows would-denies and the heavy key's row with would-denies" }).toBe(true);
     const report = await json<ShadowReport>("shadow report", api.get(`policies/${id}/shadow-report?window=15m`));
-    const digest = async (client: string) => (await json<{ key_digest: string }>(`lookup ${client}`,
-      api.post("heavy-hitters/lookup", { data: { policy_id: id, subject: { headers: { [PROBE_HEADER]: client } } } }))).key_digest;
     record.review = {
-      ui_showed_would_deny: true, ui_would_deny: shown,
+      ui_showed_would_deny: true, ui_would_deny: shown, ui_heavy_shadow_denied: heavyShown,
       would_deny: report.would_deny, evaluated: report.evaluated, share: report.share,
       keys: report.keys.map((k) => ({ key_digest: k.key_digest, shadow_denied: k.shadow_denied, denied: k.denied })),
-      heavy_digest: await digest("heavy"), light_digest: await digest("light"),
+      heavy_digest: heavyDigest, light_digest: lightDigest,
     };
     record.steps.push("reviewed");
     save();

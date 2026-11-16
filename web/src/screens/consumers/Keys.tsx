@@ -258,7 +258,7 @@ export function KeysSection({ consumerId, consumerName, cursor, onPage }: Props)
                 ))}
               </tbody>
             </table>
-            <Pager cursor={cursor} nextCursor={d.next_cursor} onNavigate={onPage} />
+            <Pager cursor={cursor} nextCursor={d.next_cursor} onNavigate={onPage} list="keys" />
           </>
         )}
       </QueryState>

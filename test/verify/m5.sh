@@ -89,7 +89,10 @@ cleanup() {
 		echo "      restoring: tenant m5-verify not removed; the next run removes it"
 	fi
 	if [ -n "$managed" ]; then
-		"${compose[@]}" up -d --no-deps --force-recreate --wait --wait-timeout 120 gateway-1 >/dev/null 2>&1 ||
+		# Removed, then created, not recreated in place (see
+		# test/integration/managed_test.go's composeManaged).
+		"${compose[@]}" rm -fsv gateway-1 >/dev/null 2>&1
+		"${compose[@]}" up -d --no-deps --wait --wait-timeout 120 gateway-1 >/dev/null 2>&1 ||
 			echo "      restoring: gateway-1 did not come back in static mode"
 		"${compose[@]}" --profile replicas rm -fsv gateway-2 gateway-3 gateway-4 gateway-5 >/dev/null 2>&1
 	fi

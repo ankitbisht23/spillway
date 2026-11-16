@@ -107,6 +107,15 @@ export const UPSTREAM_FIELDS: readonly FieldSpec[] = [
   { path: "retry_budget.min_per_sec", label: "Min retries per second", kind: "number", group: "Retry budget" },
 ];
 
+/**
+ * A route body with its required match (api/openapi.yaml), which bodyOf
+ * drops once every match field is empty: the server then answers its 422
+ * on match.path.
+ */
+export function withMatch(body: Obj): Obj {
+  return "match" in body ? body : { ...body, match: {} };
+}
+
 /** The fields the API sets, never the client. */
 const READ_ONLY = ["id", "version", "created_at", "updated_at"];
 
@@ -254,7 +263,11 @@ export function bodyOf(specs: readonly FieldSpec[], values: Values, base: Obj = 
   return { body, errors };
 }
 
-/** The field a server message is about: the longest field path, or its top-level name, it starts with. */
+/**
+ * The field a server message is about: the longest field path, or its
+ * top-level name, it starts with; else the first nested path (such as
+ * match.path) it names as a whole word.
+ */
 function fieldOfMessage(specs: readonly FieldSpec[], msg: string): string | undefined {
   let best: string | undefined;
   for (const s of specs) {
@@ -263,6 +276,12 @@ function fieldOfMessage(specs: readonly FieldSpec[], msg: string): string | unde
       const next = msg.charAt(c.length);
       if (msg.startsWith(c) && (c.endsWith(" ") || next === "" || !/[\w]/.test(next)) && (!best || s.path.length > best.length)) best = s.path;
     }
+  }
+  if (best) return best;
+  let first = Infinity;
+  for (const s of specs.filter((x) => x.path.includes("."))) {
+    const at = msg.search(new RegExp(`(?<![\\w.])${s.path.replace(/[.]/g, "\\.")}(?![\\w.])`));
+    if (at >= 0 && at < first) [first, best] = [at, s.path];
   }
   return best;
 }
