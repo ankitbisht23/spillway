@@ -43,13 +43,25 @@ export function LiveCell({ live, children }: { live: UpstreamLive; children: (en
   return <span className="muted">…</span>;
 }
 
-/** Confirms a delete from the working set (ADR-0060), then sends it. */
-export function DeleteDialog({ noun, name, del, onDeleted, onClose }: { noun: string; name: string; del: () => Promise<unknown>; onDeleted: () => void; onClose: () => void }) {
+interface DeleteProps {
+  noun: string;
+  name: string;
+  del: () => Promise<unknown>;
+  onDeleted: () => void;
+  onClose: () => void;
+  /** What the delete does; by default, a working-set delete's. */
+  effect?: string;
+  /** The roles the delete needs, named on a 403. */
+  needs?: readonly string[];
+}
+
+/** Confirms a delete (ADR-0060), then sends it. */
+export function DeleteDialog({ noun, name, del, onDeleted, onClose, effect = "It leaves the working set now and the gateways with the next publish.", needs = ["editor", "admin"] }: DeleteProps) {
   const m = useMutation({ mutationFn: del, onSuccess: onDeleted });
   return (
     <Dialog title={`Delete ${noun} ${name}?`} onClose={onClose}>
-      <p>It leaves the working set now and the gateways with the next publish.</p>
-      {m.isError && <ErrorLine error={m.error} needs={["editor", "admin"]} />}
+      <p>{effect}</p>
+      {m.isError && <ErrorLine error={m.error} needs={needs} />}
       <div className="actions">
         <button type="button" className="danger" disabled={m.isPending} onClick={() => m.mutate()}>Delete {noun}</button>
         <button type="button" className="secondary" onClick={onClose}>Cancel</button>

@@ -17,9 +17,11 @@ export type Endpoint = components["schemas"]["Endpoint"];
  * How a field shows its setting: text and select as typed; int and number
  * parsed; bool a checkbox; list comma-separated; headers one "Name: value"
  * a line; headerMatch one "Name: value" (exact) or "Name ~ regex" a line;
- * endpoints one host:port a line.
+ * endpoints one host:port a line; datetime a local date and time, sent as
+ * an RFC 3339 instant; limits one "rate/period" or "rate/period burst n"
+ * a line.
  */
-export type Kind = "text" | "select" | "int" | "number" | "bool" | "list" | "headers" | "headerMatch" | "endpoints";
+export type Kind = "text" | "select" | "int" | "number" | "bool" | "list" | "headers" | "headerMatch" | "endpoints" | "datetime" | "limits";
 
 export interface FieldSpec {
   /** Where the setting is in the entity, dot-separated. */
@@ -32,6 +34,10 @@ export interface FieldSpec {
   required?: boolean;
   /** A select's choices; its empty choice is the default. */
   options?: readonly string[];
+  /** An int field's choices, shown as a select: an ID and its label (such as a plan's name). */
+  choices?: readonly { value: string; label: string }[];
+  /** A select's empty choice; "Default" when not set. */
+  emptyLabel?: string;
 }
 
 export type Values = Record<string, string | boolean>;
@@ -128,6 +134,15 @@ function put(o: Obj, keys: readonly string[], value: unknown): Obj {
   return { ...others, [k]: next };
 }
 
+/** An RFC 3339 instant as a datetime-local input's value, in the browser's time zone; "" if it is none. */
+export function localInput(v: unknown): string {
+  if (typeof v !== "string" || v === "") return "";
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return "";
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
 const str = (v: unknown) => (typeof v === "string" || typeof v === "number" ? String(v) : "");
 const items = (v: unknown): Obj[] => (Array.isArray(v) ? v.filter((x): x is Obj => typeof x === "object" && x !== null) : []);
 
@@ -144,6 +159,10 @@ function show(spec: FieldSpec, v: unknown): string | boolean {
       return items(v).map((h) => (h.regex ? `${str(h.name)} ~ ${str(h.regex)}` : `${str(h.name)}: ${str(h.exact)}`)).join("\n");
     case "endpoints":
       return items(v).map((e) => str(e.address)).join("\n");
+    case "datetime":
+      return localInput(v);
+    case "limits":
+      return items(v).map((l) => `${str(l.rate)}/${str(l.period)}${l.burst ? ` burst ${str(l.burst)}` : ""}`).join("\n");
     default:
       return str(v);
   }
@@ -190,6 +209,21 @@ function parse(spec: FieldSpec, raw: string | boolean, before: unknown): { value
         if (re) out.push({ name: re[1], regex: re[2] });
         else if (exact) out.push({ name: exact[1], exact: exact[2] });
         else return { error: `"${l}": want Name: value or Name ~ regex` };
+      }
+      return { value: out };
+    }
+    case "datetime": {
+      // Unchanged, the instant is sent back as it was, seconds and all.
+      if (text === localInput(before)) return { value: before };
+      const d = new Date(text);
+      return Number.isNaN(d.getTime()) ? { error: "Must be a date and time" } : { value: d.toISOString() };
+    }
+    case "limits": {
+      const out = [];
+      for (const l of lines(text)) {
+        const m = /^(\d+)\s*\/\s*(\S+?)(?:\s+burst\s+(\d+))?$/.exec(l);
+        if (!m) return { error: `"${l}": want rate/period, such as 100/1m or 100/1s burst 20` };
+        out.push(m[3] ? { rate: Number(m[1]), period: m[2], burst: Number(m[3]) } : { rate: Number(m[1]), period: m[2] });
       }
       return { value: out };
     }

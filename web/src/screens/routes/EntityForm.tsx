@@ -36,9 +36,11 @@ interface Props<R> {
   submitLabel: string;
   /** Suggestions for text fields, by path (a datalist). */
   suggestions?: Record<string, readonly string[]>;
+  /** The roles the save needs, named on a 403. */
+  needs?: readonly string[];
 }
 
-export function EntityForm<R>({ noun, specs, form, base, save, onSaved, disabledReason, reload, submitLabel, suggestions = {} }: Props<R>) {
+export function EntityForm<R>({ noun, specs, form, base, save, onSaved, disabledReason, reload, submitLabel, suggestions = {}, needs = ["editor", "admin"] }: Props<R>) {
   const [checked, setChecked] = useState<FieldErrors | null>(null);
   const mutation = useMutation({ mutationFn: save, onSuccess: onSaved });
   const server = mutation.error instanceof ApiError && mutation.error.status === 422 ? serverErrors(specs, mutation.error.details) : null;
@@ -81,7 +83,7 @@ export function EntityForm<R>({ noun, specs, form, base, save, onSaved, disabled
       {server && server.rest.length > 0 && (
         <div role="alert"><ul className="form-error" aria-label="Other errors">{server.rest.map((m, i) => <li key={i}>{m}</li>)}</ul></div>
       )}
-      {mutation.isError && !server && !stale && <ErrorLine error={mutation.error} needs={["editor", "admin"]} />}
+      {mutation.isError && !server && !stale && <ErrorLine error={mutation.error} needs={needs} />}
       {stale && (
         <div className="banner banner-warn" role="alert">
           This {noun} changed since you opened it. <button type="button" className="secondary" onClick={reload}>Reload</button>{" "}
@@ -101,7 +103,16 @@ function Field({ spec, value, error, suggestions, onChange }: { spec: FieldSpec;
   const describedBy = [spec.hint && `${id}-hint`, error && `${id}-error`].filter(Boolean).join(" ") || undefined;
   const invalid = error ? true : undefined;
   let control: ReactNode;
-  switch (spec.kind) {
+  if (spec.choices) {
+    const known = spec.choices.some((c) => c.value === String(value));
+    control = (
+      <select id={id} value={String(value)} aria-invalid={invalid} aria-describedby={describedBy} onChange={(e) => onChange(e.target.value)}>
+        <option value="">{spec.emptyLabel ?? "Default"}</option>
+        {!known && value !== "" && <option value={String(value)}>{String(value)}</option>}
+        {spec.choices.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+      </select>
+    );
+  } else switch (spec.kind) {
     case "bool":
       return (
         <div className="field field-check">
@@ -115,15 +126,19 @@ function Field({ spec, value, error, suggestions, onChange }: { spec: FieldSpec;
     case "select":
       control = (
         <select id={id} value={String(value)} aria-invalid={invalid} aria-describedby={describedBy} onChange={(e) => onChange(e.target.value)}>
-          <option value="">Default</option>
+          <option value="">{spec.emptyLabel ?? "Default"}</option>
           {!spec.options?.includes(String(value)) && value !== "" && <option value={String(value)}>{String(value)}</option>}
           {spec.options?.map((o) => <option key={o} value={o}>{o}</option>)}
         </select>
       );
       break;
+    case "datetime":
+      control = <input id={id} type="datetime-local" value={String(value)} aria-invalid={invalid} aria-describedby={describedBy} onChange={(e) => onChange(e.target.value)} />;
+      break;
     case "headers":
     case "headerMatch":
     case "endpoints":
+    case "limits":
       control = <textarea id={id} rows={3} value={String(value)} aria-invalid={invalid} aria-describedby={describedBy} onChange={(e) => onChange(e.target.value)} />;
       break;
     default:

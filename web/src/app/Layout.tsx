@@ -26,7 +26,7 @@ export function Layout() {
         <ul>
           {shown.map((s) => (
             <li key={s.to}>
-              {"also" in s && path.startsWith(s.also)
+              {"also" in s && s.also.some((p) => path.startsWith(p))
                 ? <Link to={s.to} aria-current="page" className="active">{s.label}</Link>
                 : <Link to={s.to} activeProps={{ "aria-current": "page", className: "active" }}>{s.label}</Link>}
             </li>
