@@ -10,6 +10,9 @@ import { APP } from "./e2e/env";
 export default defineConfig({
   testDir: "e2e",
   testMatch: "*.spec.ts",
+  // make verify-m6's exit flow needs its managed gateways and probe; it
+  // runs with playwright.m6.config.ts only.
+  testIgnore: "m6-exit.spec.ts",
   globalSetup: "./e2e/global-setup.ts",
   globalTeardown: "./e2e/global-teardown.ts",
   retries: 0,

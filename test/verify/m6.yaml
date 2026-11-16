@@ -1,0 +1,24 @@
+# The config make verify-m6 imports and publishes as its base version B
+# before the UI run (ADR-0061), served by gateway-1 … gateway-5 in managed
+# mode: one upstream of the three mock upstreams with no health check, two
+# routes with the default timeouts (connect 5 s, total and per try 15 s)
+# and no retries, and no rate-limit policy, so Redis is not in the path.
+# The exit spec (web/e2e/m6-exit.spec.ts) edits m6-propagation's response
+# headers in the Routes screen for its 20 timed publishes, and creates the
+# local policy m6-limit on m6-probe in the Policy editor; chaos m6 probe
+# sends its heavy and light clients to m6-probe on all five gateways.
+upstreams:
+  - name: m6
+    endpoints:
+      - address: upstream-1:8080
+      - address: upstream-2:8080
+      - address: upstream-3:8080
+routes:
+  - name: m6-probe
+    match: { path: /status/200 }
+    upstream: m6
+    auth_mode: none
+  - name: m6-propagation
+    match: { path_prefix: /anything/m6 }
+    upstream: m6
+    auth_mode: none

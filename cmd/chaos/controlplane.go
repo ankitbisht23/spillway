@@ -482,21 +482,27 @@ type setupReport struct {
 	ConsumerID    int64 `json:"consumer_id"`
 }
 
+// importPublish imports yaml as the working set, with If-Match on the
+// exported one, and publishes it with note; a 409 (the working set already
+// is that config, published) answers the latest version.
+func (r *cpRun) importPublish(ctx context.Context, yaml []byte, note string) (published, error) {
+	a, err := r.rest.must(ctx, http.StatusOK, http.MethodGet, "/config/export", nil, nil)
+	if err != nil {
+		return published{}, err
+	}
+	if _, err := r.rest.must(ctx, http.StatusOK, http.MethodPost, "/config/import?"+url.Values{"note": {note}}.Encode(), yaml, nil,
+		"If-Match", a.header.Get("ETag"), "Content-Type", "application/yaml"); err != nil {
+		return published{}, err
+	}
+	return r.publish(ctx, note, true)
+}
+
 func (r *cpRun) setup(ctx context.Context, yaml []byte) (setupReport, error) {
 	var rep setupReport
 	if err := r.removeTenant(ctx); err != nil {
 		return rep, fmt.Errorf("removing an earlier run's tenant: %w", err)
 	}
-	a, err := r.rest.must(ctx, http.StatusOK, http.MethodGet, "/config/export", nil, nil)
-	if err != nil {
-		return rep, err
-	}
-	note := "make verify-m5 " + r.o.runID + ": test/verify/m5.yaml"
-	if _, err := r.rest.must(ctx, http.StatusOK, http.MethodPost, "/config/import?"+url.Values{"note": {note}}.Encode(), yaml, nil,
-		"If-Match", a.header.Get("ETag"), "Content-Type", "application/yaml"); err != nil {
-		return rep, err
-	}
-	p, err := r.publish(ctx, note, true)
+	p, err := r.importPublish(ctx, yaml, "make verify-m5 "+r.o.runID+": test/verify/m5.yaml")
 	if err != nil {
 		return rep, err
 	}

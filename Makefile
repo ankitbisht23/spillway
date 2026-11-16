@@ -11,7 +11,7 @@ FUZZTIME ?= 5s
 # Committed dev defaults first, then local overrides if present (ADR-0004).
 COMPOSE := docker compose --env-file .env.example $(if $(wildcard .env.local),--env-file .env.local)
 
-.PHONY: tools hooks certs dev test test-go test-web test-e2e fuzz test-integration proto api sqlc web-gen web-build lint lint-go lint-web lint-proto lint-api lint-sql bench verify-m0 verify-m0-stack verify-m1 verify-m1-reload verify-m2 verify-m2-shadow verify-m3 verify-m4 verify-m5 accuracy chaos-redis-outage chaos-redis-primary chaos-cp-outage
+.PHONY: tools hooks certs dev test test-go test-web test-e2e fuzz test-integration proto api sqlc web-gen web-build lint lint-go lint-web lint-proto lint-api lint-sql bench verify-m0 verify-m0-stack verify-m1 verify-m1-reload verify-m2 verify-m2-shadow verify-m3 verify-m4 verify-m5 verify-m6 accuracy chaos-redis-outage chaos-redis-primary chaos-cp-outage
 
 # Host-run processes and tests reach Redis Cluster nodes through this map
 # (ADR-0004). Set only here, never in compose or .env files.
@@ -281,6 +281,18 @@ verify-m4: dev
 # after. CI runs none of it: it takes the control plane down for 10 minutes.
 verify-m5: dev
 	@test/verify/m5.sh all
+
+# M6 exit check (docs/design.md, ADR-0061): gateway-1 … gateway-5 in
+# managed mode serve test/verify/m6.yaml while chaos m6 probe drives them;
+# Playwright (web/e2e/m6-exit.spec.ts) takes a new policy shadow →
+# reviewed → enforced → rolled back in the UI and times 23 publishes from
+# the click to all five applied (NFR-08); the probe checks the gateways at
+# each stage, and zero console errors and zero tokens in storage, cookies
+# or URLs are PASS lines. About 3 minutes; needs pnpm install and
+# Chromium (as make test-e2e); the gateways go back to static mode after.
+# CI runs none of it: its e2e job runs the flows against static gateways.
+verify-m6: dev
+	@test/verify/m6.sh
 
 # Accuracy harness v1 (NFR-06, ADR-0021): gateway-1 … gateway-$(REPLICAS)
 # (1 to 5) run test/accuracy/gateway.yaml and cmd/accuracy drives them from

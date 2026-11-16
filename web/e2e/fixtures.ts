@@ -4,7 +4,11 @@
 // navigates to or puts in history, and the console; after the test it
 // asserts that no token, JWT or key is in Web Storage, a cookie or a URL,
 // that the app set no cookie and left sessionStorage empty, and that the
-// control plane's pages logged no error.
+// control plane's pages logged no error. With the option leakReport set
+// to a path, it also writes what it checked and found there (make
+// verify-m6 prints it, ADR-0061), before it asserts.
+import { writeFileSync } from "node:fs";
+
 import { test as base, expect, type Page } from "@playwright/test";
 
 import { APP, DEV_PASSWORD, TOKEN_ENDPOINT } from "./env";
@@ -29,10 +33,12 @@ export interface LeakGuard {
   expectFailedLoad(status: number, path: string): void;
 }
 
-export const test = base.extend<{ leakGuard: LeakGuard }>({
-  leakGuard: [async ({ context }, use) => {
+export const test = base.extend<{ leakGuard: LeakGuard; leakReport: string }>({
+  /** A path for the guard's report (JSON); "" for none. */
+  leakReport: ["", { option: true }],
+  leakGuard: [async ({ context, leakReport }, use) => {
     const secrets = new Set<string>();
-    const urls: { where: string; url: string }[] = [];
+    const urls: { where: "request" | "navigation" | "history"; url: string }[] = [];
     const errors: string[] = [];
     const excused: { status: number; url: string }[] = [];
     const reading: Promise<void>[] = [];
@@ -92,27 +98,40 @@ export const test = base.extend<{ leakGuard: LeakGuard }>({
 
     await Promise.all(reading);
     const leaks = (s: string) => [...secrets].some((t) => s.includes(t)) || JWT.test(s) || API_KEY.test(s);
-    expect(secrets.size, "the guard saw the session's tokens").toBeGreaterThan(0);
+    const findings: string[] = [];
+    const found = (bad: boolean, what: string) => void (bad && findings.push(what));
+    const checked = { request_urls: 0, navigations: 0, history_entries: 0, pages_storage: 0, cookies: 0 };
+    const kind = { request: "request_urls", navigation: "navigations", history: "history_entries" } as const;
 
-    for (const u of urls) expect(leaks(u.url), `a token or key in a ${u.where} URL: ${redact(u.url)}`).toBe(false);
-    for (const u of urls.filter((x) => x.where === "history")) expect(new URL(u.url).searchParams.has("code"), `code= in a history entry: ${redact(u.url)}`).toBe(false);
+    for (const u of urls) {
+      checked[kind[u.where]]++;
+      found(leaks(u.url), `a token or key in a ${u.where} URL: ${redact(u.url)}`);
+    }
+    for (const u of urls.filter((x) => x.where === "history")) found(new URL(u.url).searchParams.has("code"), `code= in a history entry: ${redact(u.url)}`);
 
     for (const page of context.pages()) {
-      expect(new URL(page.url()).searchParams.has("code"), `code= still in the address bar: ${redact(page.url())}`).toBe(false);
+      found(new URL(page.url()).searchParams.has("code"), `code= still in the address bar: ${redact(page.url())}`);
       if (!onApp(page.url())) continue;
+      checked.pages_storage++;
       const storage = await page.evaluate(() => ({ local: JSON.stringify({ ...localStorage }), session: sessionStorage.length }));
-      expect(leaks(storage.local), "a token or key in localStorage").toBe(false);
-      expect(storage.session, "sessionStorage once the app has loaded").toBe(0);
+      found(leaks(storage.local), "a token or key in localStorage");
+      found(storage.session !== 0, `sessionStorage once the app has loaded: ${storage.session} items`);
     }
 
     for (const c of await context.cookies()) {
-      expect(c.path.startsWith(KEYCLOAK_COOKIE_PATH), `a cookie that is not Keycloak's: ${c.name} on ${c.path}`).toBe(true);
-      expect([...secrets].some((t) => c.value.includes(t)) || API_KEY.test(c.value), `a token or key in cookie ${c.name}`).toBe(false);
+      checked.cookies++;
+      found(!c.path.startsWith(KEYCLOAK_COOKIE_PATH), `a cookie that is not Keycloak's: ${c.name} on ${c.path}`);
+      found([...secrets].some((t) => c.value.includes(t)) || API_KEY.test(c.value), `a token or key in cookie ${c.name}`);
     }
 
     const judged = errors.filter((e) => !excused.some((x) =>
-      e.startsWith(`Failed to load resource: the server responded with a status of ${x.status}`) && e.includes(`(${x.url})`)));
-    expect(judged.map(redact), "console errors on the control plane's pages").toEqual([]);
+      e.startsWith(`Failed to load resource: the server responded with a status of ${x.status}`) && e.includes(`(${x.url})`))).map(redact);
+    if (leakReport) {
+      writeFileSync(leakReport, JSON.stringify({ checked, secrets_seen: secrets.size, findings, console_errors: judged }, null, 2));
+    }
+    expect(secrets.size, "the guard saw the session's tokens").toBeGreaterThan(0);
+    expect(findings, "tokens, keys or the code in storage, cookies or URLs").toEqual([]);
+    expect(judged, "console errors on the control plane's pages").toEqual([]);
   }, { auto: true }],
 });
 
