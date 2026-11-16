@@ -45,7 +45,16 @@ function loopback(u: URL): boolean {
   return u.hostname === "localhost" || u.hostname === "127.0.0.1" || u.hostname === "[::1]";
 }
 
-/** Discovery from <issuer>/.well-known/openid-configuration. */
+/**
+ * Discovery from <issuer>/.well-known/openid-configuration.
+ *
+ * Plain HTTP is allowed only for an http issuer on a loopback host
+ * (compose's Keycloak), the browser's side of SEC-04's dev_mode. It uses
+ * oauth4webapi's allowInsecureRequests, which is deprecated for anything
+ * but local use: that is this use, on purpose. Any other issuer (https,
+ * or http on another host) never gets it. Drop it if a later
+ * oauth4webapi removes the option.
+ */
 export async function discover(cfg: UiConfig, origin: string = location.origin): Promise<Provider> {
   const issuer = new URL(cfg.issuer);
   const options = issuer.protocol === "http:" && loopback(issuer) ? { [oauth.allowInsecureRequests]: true } : {};
