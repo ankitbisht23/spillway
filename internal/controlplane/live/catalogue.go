@@ -289,10 +289,13 @@ func evalRequests(ctx context.Context, h *Hub, p Params, at time.Time) (any, err
 	return h.rangeQuery(ctx, p.Range, at, fmt.Sprintf(`sum by (code_class) (rate(gw_requests_total{%s}[%s]))`, f, p.Range.window))
 }
 
+// evalRateLimited is the 429 share. With no 429 series the numerator is
+// 0, not empty, so traffic without a 429 shows 0; with no traffic at all
+// the denominator, and so the share, is empty.
 func evalRateLimited(ctx context.Context, h *Hub, p Params, at time.Time) (any, error) {
 	f := matchers(p, []string{paramRoute, paramTenant})
 	limited := matchers(p, []string{paramRoute, paramTenant}, `reason="ratelimited"`)
-	return h.rangeQuery(ctx, p.Range, at, fmt.Sprintf(`sum(rate(gw_requests_total{%s}[%s])) / sum(rate(gw_requests_total{%s}[%s]))`,
+	return h.rangeQuery(ctx, p.Range, at, fmt.Sprintf(`(sum(rate(gw_requests_total{%s}[%s])) or vector(0)) / sum(rate(gw_requests_total{%s}[%s]))`,
 		limited, p.Range.window, f, p.Range.window))
 }
 

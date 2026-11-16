@@ -179,6 +179,27 @@ func TestStreamCatalogueOnPrometheus(t *testing.T) {
 		t.Error("overview.requests shows no series 30 s after gateway-1's requests")
 	}
 
+	// overview.ratelimited on a route with traffic and no 429 (the
+	// compose config's "default" has no policy that the 20 requests
+	// above reach): a share of 0, not no series.
+	req, _ = http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/?sub=overview.ratelimited&route=default", nil)
+	respRL, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = respRL.Body.Close() }()
+	rlEvents, ok := readEvents(t, bufio.NewReader(respRL.Body), 30*time.Second, func(ev []streamEvent) bool {
+		e, found := lastBySub(ev)["overview.ratelimited"]
+		if !found || e.name != "result" {
+			return false
+		}
+		series, _ := e.data["data"].(map[string]any)["series"].([]any)
+		return len(series) > 0
+	})
+	if !ok {
+		t.Errorf("overview.ratelimited shows no series for route default 30 s after gateway-1's requests: %v", rlEvents)
+	}
+
 	// routes.*: gateway-1's endpoints, healthy and ejected, and its
 	// circuits, labelled with its replica name by the scrape (ADR-0059).
 	// 30 s: a fresh gateway shows within two scrapes.
