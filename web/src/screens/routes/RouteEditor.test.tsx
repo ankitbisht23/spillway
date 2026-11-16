@@ -79,13 +79,29 @@ describe("a route (UI-06, CP-14)", () => {
   it("shows the server's 422 on its field and the rest under the form", async () => {
     mockRoute(route(), () => HttpResponse.json({
       code: "validation_failed", error: "invalid route",
-      details: [{ entity: "route", message: 'auth_mode "basic": want none, api_key, jwt or either' }, { entity: "route", message: "set exactly one of match.path and match.path_prefix" }],
+      details: [{ entity: "route", message: 'auth_mode "basic": want none, api_key, jwt or either' }, { entity: "route", message: "the config is too large" }],
     }, { status: 422 }));
     renderApp("/routes/3", ["admin"]);
     await userEvent.type(await screen.findByRole("textbox", { name: "Path" }), "/v1/x");
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
-    expect(await screen.findByRole("list", { name: "Other errors" })).toHaveTextContent("set exactly one of match.path and match.path_prefix");
+    expect(await screen.findByRole("list", { name: "Other errors" })).toHaveTextContent("the config is too large");
     expect(screen.getByRole("combobox", { name: "Auth mode" })).toHaveAccessibleDescription('Unset means none (GW-20). auth_mode "basic": want none, api_key, jwt or either');
+  });
+
+  it("with every match field cleared, still sends match and shows the server's 422 on Path", async () => {
+    const api = mockRoute(route(), () => HttpResponse.json({
+      code: "validation_failed", error: "invalid route",
+      details: [{ entity: "route", message: "set exactly one of match.path and match.path_prefix" }],
+    }, { status: 422 }));
+    renderApp("/routes/3", ["editor"]);
+    await userEvent.clear(await screen.findByRole("textbox", { name: "Path prefix" }));
+    await userEvent.clear(field("Header predicates"));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(field("Path")).toHaveAccessibleDescription(/set exactly one of match\.path and match\.path_prefix$/));
+    expect(screen.queryByRole("list", { name: "Other errors" })).not.toBeInTheDocument();
+    expect(api.sent).toEqual([{
+      method: "PUT", ifMatch: '"5"', body: { name: "orders", upstream: "orders-up", match: {}, max_body_bytes: 1024 },
+    }]);
   });
 
   it("checks fields in the browser before sending anything", async () => {

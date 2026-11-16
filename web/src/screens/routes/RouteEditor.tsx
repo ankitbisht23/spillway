@@ -13,7 +13,7 @@ import { NotFound } from "../../components/states";
 import { Unpublished } from "../../components/Unpublished";
 import { DeleteDialog } from "./common";
 import { EntityForm, useFormValues } from "./EntityForm";
-import { ROUTE_FIELDS, type Route } from "./fields";
+import { ROUTE_FIELDS, withMatch, type Route } from "./fields";
 import { routeKey, useRoute, useUpstreamNames, type Loaded } from "./queries";
 
 /** The route form's suggestions: the working set's upstream names. */
@@ -38,7 +38,7 @@ export function NewRoute() {
         noun="route"
         specs={ROUTE_FIELDS}
         form={form}
-        save={(body) => call(api.POST("/routes", { body: body as unknown as Route }))}
+        save={(body) => call(api.POST("/routes", { body: withMatch(body) as unknown as Route }))}
         onSaved={(r) => {
           qc.setQueryData(routeKey(r.data.id), r);
           void qc.invalidateQueries({ queryKey: ["routes", "list"] });
@@ -102,7 +102,7 @@ function RouteView({ id, loaded, notice, onSaved, reload }: { id: number; loaded
         specs={ROUTE_FIELDS}
         form={form}
         base={loaded.data}
-        save={(body) => call(api.PUT("/routes/{id}", { params: { path: { id }, header: { "If-Match": loaded.etag ?? "" } }, body: body as unknown as Route }))}
+        save={(body) => call(api.PUT("/routes/{id}", { params: { path: { id }, header: { "If-Match": loaded.etag ?? "" } }, body: withMatch(body) as unknown as Route }))}
         onSaved={(r) => {
           onSaved();
           qc.setQueryData(routeKey(id), r);

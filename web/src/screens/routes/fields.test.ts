@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 
-import { bodyOf, ROUTE_FIELDS, serverErrors, UPSTREAM_FIELDS, valuesOf, writable, type Route, type Upstream } from "./fields";
+import { bodyOf, ROUTE_FIELDS, serverErrors, UPSTREAM_FIELDS, valuesOf, withMatch, writable, type Route, type Upstream } from "./fields";
 
 const route: Route = {
   id: 3, name: "orders", upstream: "orders-up", version: 5, created_at: "2026-11-16T10:00:00Z", updated_at: "2026-11-16T10:00:00Z",
@@ -64,8 +64,26 @@ describe("the route form (UI-06, ADR-0064)", () => {
       upstream: 'upstream "x" does not exist',
       "timeouts.connect": "timeouts.connect: want a duration",
       auth_mode: 'auth_mode "basic": want none, api_key, jwt or either',
+      "match.path": "set exactly one of match.path and match.path_prefix",
     });
-    expect(r.rest).toEqual(["set exactly one of match.path and match.path_prefix", "elsewhere: something"]);
+    expect(r.rest).toEqual(["elsewhere: something"]);
+  });
+
+  it("puts a message on the first nested path it names as a whole word, else in the rest", () => {
+    const r = serverErrors(ROUTE_FIELDS, [
+      { message: "match.path_prefix and match.path are both set" },
+      { message: "the route's cost is too high" },
+      { message: "rematch.paths is not a field" },
+    ]);
+    expect(r.fields).toEqual({ "match.path_prefix": "match.path_prefix and match.path are both set" });
+    expect(r.rest).toEqual(["the route's cost is too high", "rematch.paths is not a field"]);
+  });
+
+  it("always sends a route's match, which the server requires", () => {
+    const { body } = bodyOf(ROUTE_FIELDS, valuesOf(ROUTE_FIELDS, {}), { name: "r", upstream: "u", match: { path: "/x" } });
+    expect(body).not.toHaveProperty("match");
+    expect(withMatch(body)).toEqual({ name: "r", upstream: "u", match: {} });
+    expect(withMatch({ match: { path: "/x" } })).toEqual({ match: { path: "/x" } });
   });
 });
 
