@@ -67,6 +67,22 @@ for (const role of ["viewer", "editor", "publisher", "key-admin", "admin"]) {
     await expectAllowed(page.getByRole("button", { name: "Drain upstream-1:8080" }), editor, "Needs the editor or admin role");
     await expectAllowed(page.getByRole("button", { name: "Save" }), editor, "Needs the editor or admin role");
 
+    // Consumers & keys (UI-06, CP-15 – CP-17, RL-08, RL-09): key-admin and
+    // admin manage consumers, keys, overrides and access lists; every
+    // other role sees each write disabled with the reason.
+    const keyReason = "Needs the key-admin or admin role";
+    await page.goto("/consumers");
+    await expectAllowed(page.getByRole("button", { name: "New consumer" }), keyAdmin, keyReason);
+    await page.goto(`/consumers/${s.consumerId}`);
+    await expect(page.getByRole("heading", { name: `Consumer ${s.run}` })).toBeVisible();
+    for (const name of ["Save", "Delete", "Issue key", "Add override", "Deny this consumer", "Allow this consumer"]) {
+      await expectAllowed(page.getByRole("button", { name, exact: true }), keyAdmin, keyReason);
+    }
+    const seededKey = page.getByRole("region", { name: "API keys" }).getByRole("row", { name: new RegExp(`\\(ID ${s.keyId}\\)`) });
+    for (const name of [/^Rotate /, /^Revoke /, /^Block /]) await expectAllowed(seededKey.getByRole("button", { name }), keyAdmin, keyReason);
+    await page.goto("/access-lists");
+    await expectAllowed(page.getByRole("button", { name: "New entry" }), keyAdmin, keyReason);
+
     await page.goto("/publish");
     const publish = page.getByRole("button", { name: /^Publish revision \d+$/ });
     if (publisher) {
@@ -89,13 +105,14 @@ async function expectAllowed(button: Locator, allowed: boolean, reason: string) 
   }
 }
 
-test("the server refuses a viewer's publish, drain, key issue, rollback, override and block", async ({ page, request }) => {
+test("the server refuses a viewer's publish, drain, key issue, rotate and revoke, rollback, override, block and tenant", async ({ page, request }) => {
   await login(page, "test-viewer"); // the leak guard wants a session to watch
   const form = { grant_type: "password", client_id: "rbac-tests", client_secret: DEV_PASSWORD, username: "test-viewer", password: DEV_PASSWORD };
   const tok = await request.post(TOKEN_ENDPOINT, { form });
   expect(tok.status()).toBe(200);
   const { access_token: token } = await tok.json() as { access_token: string };
-  for (const path of ["/api/v1/config/publish", "/api/v1/upstreams/1/endpoints/1/drain", "/api/v1/consumers/1/keys", "/api/v1/config/versions/1/rollback", "/api/v1/overrides", "/api/v1/access-lists"]) {
+  for (const path of ["/api/v1/config/publish", "/api/v1/upstreams/1/endpoints/1/drain", "/api/v1/consumers/1/keys", "/api/v1/keys/1/rotate", "/api/v1/keys/1/revoke",
+    "/api/v1/config/versions/1/rollback", "/api/v1/overrides", "/api/v1/access-lists", "/api/v1/tenants"]) {
     const r = await request.post(APP + path, { headers: { Authorization: `Bearer ${token}`, "If-Match": '"1"' }, data: {} });
     expect(r.status(), path).toBe(403);
     expect((await r.json() as { code: string }).code, path).toBe("forbidden");

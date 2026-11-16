@@ -20,6 +20,12 @@ routes:
     match: { path_prefix: /anything/e2e-other }
     upstream: e2e
     auth_mode: none
+  # The route keys.spec.ts calls through gateway-1, made managed for it,
+  # with the keys it issues, rotates and revokes (GW-17, CP-17).
+  - name: e2e-keys
+    match: { path_prefix: /anything/e2e-keys }
+    upstream: e2e
+    auth_mode: api_key
 policies:
   # The policy of the seeded heavy-hitter windows on the Throttling screen.
   - name: e2e-per-client
