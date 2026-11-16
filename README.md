@@ -2,7 +2,7 @@
 
 A horizontally scalable API gateway in Go with a Redis-backed distributed rate limiter, a Postgres-backed control plane and a React admin UI.
 
-Status: M0 (foundations), M1 (proxy core), M2 (local rate limiting), M3 (distributed rate limiting), M4 (resilience) and M5 (control plane and auth) are done; M6 (admin UI) is next.
+Status: M0 (foundations), M1 (proxy core), M2 (local rate limiting), M3 (distributed rate limiting), M4 (resilience), M5 (control plane and auth) and M6 (admin UI) are done; M7 (performance and hardening) is next.
 
 - [Requirements and build plan](docs/design.md)
 - [Prerequisites and setup](docs/setup.md)
@@ -53,6 +53,21 @@ Control-plane propagation and outage (NFR-08, NFR-09, NFR-12, CP-07, [Chaos scen
 | Control plane down for 10 minutes (NFR-12) | `docker compose stop` of the control plane and Postgres for 600 s under 500 rps over the five gateways; gateway-3 restarted at +300 s | 347,774–347,899 requests, all 2xx; every scrape in the outage at the versions from before it, ready, with the sync age growing (603–630 s at the end); gateway-3 ready from its on-disk snapshot 5.0 s after its restart; after the control plane was back, all five live again in 8.1 s and synced within 11.3–11.5 s | PASS in 6 of 6 runs with the reconnect fix; the first run, before it, failed only its recovery rule (below) |
 
 The first full run found a real defect: three gateways had not reconnected 60 s after the control plane came back. While the control plane is stopped its name does not resolve, and gRPC's default DNS resolver retries with its own backoff of up to 120 s, so after 10 minutes a gateway could stay away for 2 minutes. Managed gateways now resolve the control plane's name on every dial and reconnect within the 5 s backoff (ADR-0052). Every timeout in the check is at least 4× the 820 ms worst stall measured on this laptop, and no check is ever run again (ADR-0042).
+
+## Admin UI
+
+The M6 exit (UI-01, UI-02, NFR-08, ADR-0061), measured on the same laptop with `make verify-m6`: gateway-1 … gateway-5 in managed mode; Playwright in Chromium drives the control plane's embedded UI as `test-admin` after a real Keycloak login, while an independent probe in the compose network sends a heavy client (200 rps) and a light one (10 rps) through all five gateways. Each stage is judged over a 20 s window starting 1 s after the last of the five gateways reported applying it.
+
+| Check | Done in the UI | Measured | Result |
+| --- | --- | --- | --- |
+| A publish reaches every replica, from the click (NFR-08) | 23 publishes: 20 route edits in the Routes screen, then the shadow, enforce and rollback publishes below | click to the publish answer (host clock) plus `published_at` to the last of the five apply heartbeats (Postgres clock): p50 52–53 ms, p99 (the maximum at N = 23) 54–71 ms, against 5 s; the UI part at most 53 ms, the propagation part at most 18 ms | PASS in 4 of 4 runs |
+| Shadow | policy `m6-limit` (local GCRA, 50/s with a burst of 50, keyed by a request header) created in the Policy editor in shadow mode, published from the diff with a note | 4,000/4,000 heavy and 200/200 light requests answered 200, by all five gateways | PASS in 4 of 4 runs |
+| Reviewed | its shadow report over the last 15 minutes | the report shows would-denies; the heavy client's key 3,661–3,682 would-denies, the light client's key absent | PASS in 4 of 4 runs |
+| Enforced | promoted from the report, published from the diff with a note | 3,000 of 4,000 heavy requests (75.0 %) answered 429 with `"m6-limit";r=0` and `Retry-After`, the rest 200; light 200/200 | PASS in 4 of 4 runs |
+| Rolled back | History, roll back to the version before the policy, with a note | 4,000/4,000 heavy and 200/200 light requests answered 200 | PASS in 4 of 4 runs |
+| The whole run | 21,612–21,628 requests over 103 s; the browser watched throughout | only 200s and 429s, and every 429 between the enforce publish and the rollback's apply; zero console errors; no token or key in Web Storage, cookies, or any of the 204 request URLs, 78 navigations and 74 history entries | PASS in 4 of 4 runs |
+
+A run takes about 2.5 minutes. Every Playwright timeout is at least 12× the 820 ms worst stall measured on this laptop; there are no retries, and no check is ever run again (ADR-0061). The CI `e2e` job runs the main flows (login, publish with diff, shadow → promote → rollback, issue/rotate/revoke a key, drain an endpoint, roles, live screens) against the compose stack with static gateways on every PR.
 
 ## Licence
 
