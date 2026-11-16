@@ -130,11 +130,19 @@ describe("Throttling (UI-03, RL-21)", () => {
     });
 
     it("add override opens the consumer with the policy to prefill", async () => {
+      const t = "2026-11-16T10:00:00Z";
+      server.use(
+        http.get("/api/v1/consumers/12", () => HttpResponse.json({ id: 12, tenant_id: 1, name: "c12", status: "active", version: 1, created_at: t, updated_at: t }, { headers: { ETag: '"1"' } })),
+        http.get("/api/v1/consumers/12/keys", () => HttpResponse.json({ items: [], next_cursor: null })),
+        http.get("/api/v1/overrides", () => HttpResponse.json({ items: [], next_cursor: null })),
+      );
       const { router } = await open(["key-admin"]);
       const actions = await select("AAAAAAAAAAAAAAAAAAAAAA");
       await userEvent.click(actions.getByRole("button", { name: "Add override" }));
       await waitFor(() => expect(router.state.location.pathname).toBe("/consumers/12"));
       expect(router.state.location.search).toEqual({ override_policy: 7 });
+      const dialog = await screen.findByRole("dialog", { name: "Add an override" });
+      expect(within(dialog).getByRole("combobox", { name: "Policy (required)" })).toHaveValue("7");
     });
 
     it("block key confirms, then creates a deny entry on the key", async () => {
@@ -208,6 +216,6 @@ describe("the lookup's form", () => {
     expect(subjectOf({ ip: " 10.0.0.1 ", consumer: "5", tenant: "", route: "r", method: "get", "header:X-A": "v" }))
       .toEqual({ ip: "10.0.0.1", consumer_id: 5, route: "r", method: "GET", headers: { "X-A": "v" } });
     expect(lookupBlocker(undefined)).toBe("Its policy is not in the latest published config");
-    expect(lookupBlocker({ id: 1, name: "p", mode: "enforce", keyTemplate: "{ip}" })).toBeUndefined();
+    expect(lookupBlocker({ id: 1, name: "p", mode: "enforce", keyTemplate: "{ip}", level: "route" })).toBeUndefined();
   });
 });
