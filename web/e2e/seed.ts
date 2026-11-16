@@ -101,7 +101,10 @@ const MANAGED = ["SPILLWAY_GATEWAY_CONFIG", "SPILLWAY_GATEWAY_IDENTITY", "SPILLW
 export function gatewayMode(mode: "managed" | "static") {
   const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !MANAGED.includes(k)));
   if (mode === "managed") Object.assign(env, { SPILLWAY_GATEWAY_CONFIG: "", SPILLWAY_GATEWAY_IDENTITY: "", SPILLWAY_GATEWAY_CONTROL_PLANE: "controlplane:9090" });
-  compose(["up", "-d", "--no-deps", "--force-recreate", "--wait", "--wait-timeout", "120", "gateway-1"], env);
+  // Removed, then created, not recreated in place (see
+  // test/integration/managed_test.go's composeManaged).
+  compose(["rm", "-fsv", "gateway-1"], env);
+  compose(["up", "-d", "--no-deps", "--wait", "--wait-timeout", "120", "gateway-1"], env);
 }
 
 /** Removes every e2e- tenant with what it holds, and the inserted heavy-hitter windows. */

@@ -791,7 +791,11 @@ func compose(t *testing.T, env []string, args ...string) {
 func composeManaged(t *testing.T) {
 	t.Helper()
 	t.Cleanup(func() {
-		compose(t, nil, "up", "-d", "--no-deps", "--force-recreate", "--wait", "--wait-timeout", "120", "gateway-1")
+		// Removed, then created: compose's in-place recreate renames the
+		// old container first, and Docker Desktop once refused the new
+		// name as still in use, leaving no gateway-1 for later tests.
+		compose(t, nil, "rm", "-fsv", "gateway-1")
+		compose(t, nil, "up", "-d", "--no-deps", "--wait", "--wait-timeout", "120", "gateway-1")
 		compose(t, nil, append([]string{"--profile", "replicas", "rm", "-fsv"}, composeGateways[1:]...)...)
 	})
 	managedEnv := []string{"SPILLWAY_GATEWAY_CONFIG=", "SPILLWAY_GATEWAY_IDENTITY=", "SPILLWAY_GATEWAY_CONTROL_PLANE=controlplane:9090"}
