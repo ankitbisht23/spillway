@@ -3,7 +3,8 @@
 // from the page on close), rotates it with a grace period, and revokes
 // both keys after confirming; the list shows the rotation and the
 // revocations. Each key is exercised through a gateway: it works once
-// issued, and is refused with 401 once revoked.
+// issued, and is refused with 401 once revoked. Then the Replicas screen
+// shows the managed gateway live.
 //
 // make dev's gateway-1 runs static config and keys, so this spec makes it
 // managed for its run (as make verify-m5 does) and puts it back after.
@@ -122,4 +123,13 @@ test("issue, rotate and revoke a key, each exercised through a gateway", async (
     await expect.poll(() => status(request, key), { ...CHANGE, message: `revoked key ${shown(key)} is refused` }).toBe(401);
   }
   await expect(keys.getByRole("button", { name: /^(Rotate|Revoke) / })).toHaveCount(0);
+
+  // Replicas (UI-06, CP-08): the managed gateway-1 reports over the
+  // stream, live, with its versions and staleness. The stream's first
+  // result comes within its 5 s tick; 15 s leaves room for stalls.
+  await page.getByRole("navigation", { name: "Screens" }).getByRole("link", { name: "Replicas" }).click();
+  const gw = page.getByRole("row").filter({ has: page.getByRole("rowheader", { name: "gateway-1", exact: true }) });
+  await expect(gw.getByRole("cell").first(), "gateway-1 is live").toHaveText(/^live/, { timeout: CHANGE.timeout });
+  await expect(gw.getByRole("link"), "gateway-1 runs a published config version").toHaveText(/^\d+$/);
+  await expect(gw).toContainText(/\d+\.\d s/);
 });
