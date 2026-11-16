@@ -14,7 +14,9 @@
 #        heartbeats (Postgres clock), < 5 s;
 #   (b)  shadow: no 429s in S's window, both clients answered by all five;
 #   (b2) reviewed: the report has would-denies, the heavy client's digest
-#        among its keys, the light one's without, and the UI showed them;
+#        among its keys, the light one's without, and the UI showed them,
+#        the heavy key's row included (the key rows are by this run's
+#        policy ID; would_deny is by name and may include earlier runs);
 #   (c)  enforced: >= 50 % of heavy requests 429 with the policy's
 #        RateLimit item and Retry-After, the rest 200, light all 200;
 #   (d)  rolled back: no 429s in R's window;

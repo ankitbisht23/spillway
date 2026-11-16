@@ -249,6 +249,11 @@ type m6Review struct {
 	} `json:"keys"`
 	HeavyDigest string `json:"heavy_digest"`
 	LightDigest string `json:"light_digest"`
+
+	// UIHeavy is the heavy key's would-deny as the UI's key table showed
+	// it: this run's, as its row is under this run's policy ID; nil when
+	// the table had no such row.
+	UIHeavy *int64 `json:"ui_heavy_shadow_denied"`
 }
 
 // m6Guard is the leak guard's report of the exit spec (web/e2e/fixtures.ts).
@@ -661,9 +666,14 @@ func judgeM6(rep *m6Report, o m6Options, in m6Inputs, versions map[int64]publish
 		if rv.WouldDeny != nil {
 			wd = *rv.WouldDeny
 		}
-		ok := rv.UIShowed && wd >= 1 && rv.HeavyDigest != "" && heavy != nil && *heavy >= 1 && (light == nil || *light == 0)
-		add(ok, "(b2) reviewed: would-denies reported", fmt.Sprintf("would_deny %s of %s shadow decisions (share %s); %d key rows; heavy key %s, light key %s; UI showed %q",
-			optNum(rv.WouldDeny), optNum(rv.Evaluated), optPercent(rv.Share), len(rv.Keys), keyCount(heavy), keyCount(light), rv.UIWouldDeny))
+		// would_deny counts by policy name over 15 min, so it can include
+		// an earlier run's; the key rows, by this run's policy ID, are the
+		// per-run evidence, in the API and in the UI.
+		ok := rv.UIShowed && wd >= 1 && rv.HeavyDigest != "" && heavy != nil && *heavy >= 1 && (light == nil || *light == 0) &&
+			rv.UIHeavy != nil && *rv.UIHeavy >= 1
+		add(ok, "(b2) reviewed: would-denies reported", fmt.Sprintf("would_deny %s of %s shadow decisions (share %s; by policy name over 15 min, may include earlier runs); "+
+			"%d key rows; heavy key %s, light key %s; UI showed %q, heavy key %s",
+			optNum(rv.WouldDeny), optNum(rv.Evaluated), optPercent(rv.Share), len(rv.Keys), keyCount(heavy), keyCount(light), rv.UIWouldDeny, keyCount(rv.UIHeavy)))
 	}
 
 	// (c) enforced.
