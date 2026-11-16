@@ -188,3 +188,7 @@ button.link-button { padding: 0; border: 0; background: none; color: var(--accen
 .tabs a.active { font-weight: 600; color: var(--accent); border-bottom-color: var(--accent); }
 .endpoint-ejected, .endpoint-failing, .circuit-open { color: var(--danger); }
 .circuit-half-open { color: #b26a00; }
+
+/* Consumers & keys (m6-consumers-keys) */
+.row-actions { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0.5rem; }
+.secret code { display: block; padding: 0.5rem; border: 1px solid var(--border); border-radius: var(--radius); word-break: break-all; user-select: all; }

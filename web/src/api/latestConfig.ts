@@ -11,15 +11,24 @@ export interface PublishedPolicy {
   name: string;
   mode: string;
   keyTemplate: string;
+  /** global, tenant, consumer or route. */
+  level: string;
+}
+
+/** A plan of the snapshot: what tenants and consumers may name (CP-20). */
+export interface PublishedPlan {
+  id: number;
+  name: string;
 }
 
 export interface LatestConfig {
   version: number;
   routes: string[];
   policies: PublishedPolicy[];
+  plans: PublishedPlan[];
 }
 
-/** The snapshot's routes and policies; anything not of the expected shape is skipped. */
+/** The snapshot's routes, policies and plans; anything not of the expected shape is skipped. */
 export function parseSnapshot(version: number, snapshot: Record<string, unknown> | undefined): LatestConfig {
   const list = (k: string): Record<string, unknown>[] => {
     const v = snapshot?.[k];
@@ -28,11 +37,17 @@ export function parseSnapshot(version: number, snapshot: Record<string, unknown>
   const routes = list("routes").map((r) => r.name).filter((n): n is string => typeof n === "string").sort();
   const policies = list("policies").flatMap((p) =>
     typeof p.id === "number" && typeof p.name === "string"
-      ? [{ id: p.id, name: p.name, mode: typeof p.mode === "string" && p.mode ? p.mode : "enforce", keyTemplate: typeof p.key_template === "string" ? p.key_template : "" }]
+      ? [{
+          id: p.id, name: p.name, mode: typeof p.mode === "string" && p.mode ? p.mode : "enforce",
+          keyTemplate: typeof p.key_template === "string" ? p.key_template : "", level: typeof p.level === "string" ? p.level : "",
+        }]
       : [],
   );
-  policies.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
-  return { version, routes, policies };
+  const byName = (a: { name: string }, b: { name: string }) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+  policies.sort(byName);
+  const plans = list("plans").flatMap((p) => (typeof p.id === "number" && typeof p.name === "string" ? [{ id: p.id, name: p.name }] : []));
+  plans.sort(byName);
+  return { version, routes, policies, plans };
 }
 
 /** The latest published config, or null before the first publish. */

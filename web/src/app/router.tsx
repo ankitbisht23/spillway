@@ -6,6 +6,11 @@ import { describeError } from "../api/errors";
 import type { OperationId } from "../api/roles.gen";
 import { useCan } from "../auth/SessionContext";
 import { ErrorState, NotAllowed, NotFound } from "../components/states";
+import { AccessListList } from "../screens/consumers/AccessLists";
+import { ConsumerList } from "../screens/consumers/ConsumerList";
+import { ConsumerScreen, NewConsumer } from "../screens/consumers/ConsumerScreen";
+import { PlanList } from "../screens/consumers/PlanList";
+import { NewTenant, TenantList, TenantScreen } from "../screens/consumers/Tenants";
 import { Overview } from "../screens/live/Overview";
 import { overviewSearch, throttlingSearch } from "../screens/live/search";
 import { Throttling } from "../screens/live/Throttling";
@@ -98,18 +103,57 @@ const upstreamsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/up
 const newUpstreamRoute = createRoute({ getParentRoute: () => rootRoute, path: "/upstreams/new", component: NewUpstream });
 const upstreamRoute = createRoute({ getParentRoute: () => rootRoute, path: "/upstreams/$id", validateSearch: savedSearch, component: UpstreamScreen });
 
+/** Consumers & keys (m6-consumers-keys). */
+const str = (v: unknown) => (typeof v === "string" && v ? v : undefined);
+const id = (v: unknown) => {
+  const n = Number(v);
+  return v !== undefined && v !== "" && Number.isSafeInteger(n) && n >= 1 ? n : undefined;
+};
+const consumersRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/consumers",
+  validateSearch: (s: Record<string, unknown>): { cursor?: string; name?: string; tenant_id?: number } => ({ ...listSearch(s), tenant_id: id(s.tenant_id) }),
+  component: ConsumerList,
+});
+const newConsumerRoute = createRoute({ getParentRoute: () => rootRoute, path: "/consumers/new", component: NewConsumer });
 /**
- * A consumer's screen (m6-consumers-keys). Throttling's Add override opens
- * it with override_policy, the policy to prefill an override for.
+ * A consumer: keys and overrides each have their page's cursor; saved
+ * marks one the form just created. Throttling's Add override opens it
+ * with override_policy, the policy to prefill an override for.
  */
 const consumerRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/consumers/$id",
-  validateSearch: (s: Record<string, unknown>): { override_policy?: number } => {
-    const p = Number(s.override_policy);
-    return { override_policy: Number.isSafeInteger(p) && p >= 1 ? p : undefined };
-  },
-  component: () => <Placeholder title="Consumer" task="consumers-keys" />,
+  validateSearch: (s: Record<string, unknown>): { override_policy?: number; keys?: string; overrides?: string; saved?: true } => ({
+    override_policy: id(s.override_policy), keys: str(s.keys), overrides: str(s.overrides), ...savedSearch(s),
+  }),
+  component: ConsumerScreen,
+});
+const ACTIONS = ["allow", "deny"] as const;
+const SUBJECTS = ["key", "consumer", "cidr"] as const;
+const accessListsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/access-lists",
+  validateSearch: (s: Record<string, unknown>): { cursor?: string; action?: (typeof ACTIONS)[number]; subject_type?: (typeof SUBJECTS)[number] } => ({
+    cursor: str(s.cursor),
+    action: ACTIONS.find((a) => a === s.action),
+    subject_type: SUBJECTS.find((t) => t === s.subject_type),
+  }),
+  component: AccessListList,
+});
+const plansRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/plans",
+  validateSearch: (s: Record<string, unknown>): { cursor?: string } => ({ cursor: str(s.cursor) }),
+  component: PlanList,
+});
+/** Tenants: hidden from every role but admin (ADR-0058), so no API is called for them. */
+const tenantsRoute = createRoute({
+  getParentRoute: () => rootRoute, path: "/tenants", validateSearch: listSearch, component: () => <Hidden op="createTenant"><TenantList /></Hidden>,
+});
+const newTenantRoute = createRoute({ getParentRoute: () => rootRoute, path: "/tenants/new", component: () => <Hidden op="createTenant"><NewTenant /></Hidden> });
+const tenantRoute = createRoute({
+  getParentRoute: () => rootRoute, path: "/tenants/$id", validateSearch: savedSearch, component: () => <Hidden op="createTenant"><TenantScreen /></Hidden>,
 });
 
 export const routeTree = rootRoute.addChildren([
@@ -127,10 +171,14 @@ export const routeTree = rootRoute.addChildren([
   upstreamsRoute,
   newUpstreamRoute,
   upstreamRoute,
-  placeholder("/consumers", "Consumers & keys", "consumers-keys"),
+  consumersRoute,
+  newConsumerRoute,
   consumerRoute,
-  placeholder("/access-lists", "Access lists", "consumers-keys"),
-  placeholder("/tenants", "Tenants", "consumers-keys"),
+  accessListsRoute,
+  plansRoute,
+  tenantsRoute,
+  newTenantRoute,
+  tenantRoute,
   placeholder("/replicas", "Replicas", "replicas-history"),
   placeholder("/history", "History", "replicas-history"),
   placeholder("/history/$version", "Config version", "replicas-history"),

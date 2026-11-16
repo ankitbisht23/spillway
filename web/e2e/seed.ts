@@ -9,7 +9,7 @@
 // is cleaned by the next one. No token or key is ever printed.
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { request, type APIRequestContext, type APIResponse } from "@playwright/test";
@@ -18,6 +18,7 @@ import { APP, DEV_PASSWORD, TOKEN_ENDPOINT } from "./env";
 
 export const RUN_PREFIX = "e2e-";
 const REPO = fileURLToPath(new URL("../..", import.meta.url));
+const ENV_LOCAL = fileURLToPath(new URL("../../.env.local", import.meta.url));
 const FIXTURE = fileURLToPath(new URL("fixtures/e2e.yaml", import.meta.url));
 
 /** What setup made, for the specs (through the environment, which workers inherit). */
@@ -77,6 +78,30 @@ function psql(sql: string) {
   execFileSync("docker", ["compose", "exec", "-T", "postgres", "psql", "-q", "-U", "spillway", "-d", "spillway", "-v", "ON_ERROR_STOP=1", "-c", sql], {
     cwd: REPO, stdio: ["ignore", "ignore", "inherit"],
   });
+}
+
+/**
+ * docker compose as make dev runs it (the Makefile's COMPOSE): the dev
+ * env file, then .env.local when it exists, which is passed on, never
+ * read here. Its output is shown only when it fails.
+ */
+function compose(args: string[], env: NodeJS.ProcessEnv) {
+  const files = ["--env-file", ".env.example", ...(existsSync(ENV_LOCAL) ? ["--env-file", ".env.local"] : [])];
+  execFileSync("docker", ["compose", ...files, ...args], { cwd: REPO, env, stdio: ["ignore", "ignore", "pipe"] });
+}
+
+const MANAGED = ["SPILLWAY_GATEWAY_CONFIG", "SPILLWAY_GATEWAY_IDENTITY", "SPILLWAY_GATEWAY_CONTROL_PLANE"];
+
+/**
+ * Recreates gateway-1 in managed mode, so it runs the control plane's
+ * published config and identity (keys included), as make verify-m5 does
+ * (ADR-0042, ADR-0052), or back in make dev's static mode. Waits until it
+ * is healthy, at most 120 s.
+ */
+export function gatewayMode(mode: "managed" | "static") {
+  const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !MANAGED.includes(k)));
+  if (mode === "managed") Object.assign(env, { SPILLWAY_GATEWAY_CONFIG: "", SPILLWAY_GATEWAY_IDENTITY: "", SPILLWAY_GATEWAY_CONTROL_PLANE: "controlplane:9090" });
+  compose(["up", "-d", "--no-deps", "--force-recreate", "--wait", "--wait-timeout", "120", "gateway-1"], env);
 }
 
 /** Removes every e2e- tenant with what it holds, and the inserted heavy-hitter windows. */
