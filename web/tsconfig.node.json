@@ -18,5 +18,5 @@
     "checkJs": true,
     "types": ["node"]
   },
-  "include": ["vite.config.ts", "playwright.config.ts", "scripts", "e2e", "eslint.config.js"]
+  "include": ["vite.config.ts", "playwright.config.ts", "playwright.m6.config.ts", "scripts", "e2e", "eslint.config.js"]
 }
