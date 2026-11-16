@@ -29,6 +29,11 @@ const (
 	// shadowQueryTimeout bounds the report's Prometheus queries, as the
 	// stream bounds its evaluations (ADR-0059).
 	shadowQueryTimeout = 4 * time.Second
+	// shadowConcurrency is how many reports query Prometheus at once,
+	// whoever asks: a flood of reports waits for a slot, within
+	// shadowQueryTimeout, and leaves Prometheus to the live screens
+	// (ADR-0059).
+	shadowConcurrency = 4
 )
 
 // WithPrometheus makes s answer the shadow report's counts from prom and
@@ -36,6 +41,7 @@ const (
 // says Prometheus is not configured.
 func (s *Server) WithPrometheus(prom *live.Prometheus) *Server {
 	s.prometheus = prom
+	s.shadowSlots = make(chan struct{}, shadowConcurrency)
 	return s
 }
 
@@ -104,11 +110,19 @@ func (s *Server) shadowCounts(ctx context.Context, r *apiv1.ShadowReport, policy
 	}
 	ctx, cancel := context.WithTimeout(ctx, shadowQueryTimeout)
 	defer cancel()
-	d, err := s.prometheus.Decisions(ctx, policy, window, r.Until)
+	var d live.Decisions
 	var oldest time.Time
 	var ok bool
-	if err == nil {
-		oldest, ok, err = s.prometheus.OldestSample(ctx, r.Until)
+	var err error
+	select {
+	case s.shadowSlots <- struct{}{}:
+		d, err = s.prometheus.Decisions(ctx, policy, window, r.Until)
+		if err == nil {
+			oldest, ok, err = s.prometheus.OldestSample(ctx, r.Until)
+		}
+		<-s.shadowSlots
+	case <-ctx.Done():
+		err = fmt.Errorf("waiting for one of %d report slots: %w", shadowConcurrency, ctx.Err())
 	}
 	if err != nil {
 		e := apiv1.QueryFailed
