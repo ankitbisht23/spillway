@@ -201,8 +201,9 @@ func compilePolicies(c *configpb.Config, routes []Route, replicas int64, managed
 // than maxCallLimits limits: the Redis limits of every tenant-, consumer-
 // and route-level policy that matches it, each counted at the most one
 // request can check (ADR-0021); with extra, policy extra counts n limits
-// if that is more, as an override of it would (ADR-0041).
-func checkCallLimits(routes []Route, policies []Policy, extra *Policy, n int) error {
+// if that is more, as an override of it would (ADR-0041); reserve limits
+// are left for a consumer's quotas (ADR-0070).
+func checkCallLimits(routes []Route, policies []Policy, extra *Policy, n, reserve int) error {
 	for _, r := range routes {
 		sum := 0
 		for i := range policies {
@@ -214,6 +215,9 @@ func checkCallLimits(routes []Route, policies []Policy, extra *Policy, n int) er
 				}
 				sum += m
 			}
+		}
+		if reserve > 0 && sum > maxCallLimits-reserve {
+			return fmt.Errorf("route %q would carry %d Redis limits in one call; at most %d, beside the %d a consumer's quotas take (RL-10)", r.Name, sum, maxCallLimits-reserve, reserve)
 		}
 		if sum > maxCallLimits {
 			return fmt.Errorf("route %q would carry %d Redis limits in one call; at most %d", r.Name, sum, maxCallLimits)
@@ -538,7 +542,7 @@ func compilePlans(plans []*configpb.Plan, policies []Policy, routes []Route, rep
 }
 
 // compilePlan checks the rules of one plan that need no policy: its name,
-// and one entry per policy, each with limits.
+// one entry per policy, each with limits, and its quotas (RL-10).
 func compilePlan(p *configpb.Plan) error {
 	if !ValidName(p.GetName()) {
 		return errors.New("name must be 1-64 characters from A-Z, a-z, 0-9, '.', '_' and '-'")
@@ -555,7 +559,7 @@ func compilePlan(p *configpb.Plan) error {
 		}
 		seen[e.GetPolicy()] = true
 	}
-	return nil
+	return CheckQuotas(p.GetQuotas())
 }
 
 func notNameChar(c rune) bool {

@@ -298,6 +298,16 @@ message Plan {
   // Unique; 1-64 characters from [A-Za-z0-9._-].
   string name = 2;
   repeated PlanLimits default_limits = 3;
+  // Daily and monthly quotas of the plan's consumers (RL-10, ADR-0070);
+  // managed mode only.
+  Quotas quotas = 4;
+}
+
+// Quotas are cost units per UTC calendar day and month (RL-10, ADR-0070);
+// 0 or unset is no quota for that period.
+message Quotas {
+  int64 daily = 1;
+  int64 monthly = 2;
 }
 
 // PlanLimits replaces one policy's limits for a plan's consumers.
@@ -402,7 +412,9 @@ message AccessListEntry {
 }
 
 // Override replaces one policy's limits for one consumer, for a while
-// (a burst grant) or until removed (ADR-0041).
+// (a burst grant) or until removed (ADR-0041). With policy_id 0 it is a
+// quota override, which replaces the consumer's plan quotas instead
+// (RL-10, ADR-0070, ADR-0071).
 message Override {
   int64 id = 1;
   int64 consumer_id = 2;
@@ -411,4 +423,6 @@ message Override {
   // Unset: from the start; unset ends_at: no end.
   google.protobuf.Timestamp starts_at = 5;
   google.protobuf.Timestamp ends_at = 6;
+  // A quota override's quotas; unset for a policy override.
+  Quotas quotas = 7;
 }

@@ -1445,6 +1445,9 @@ type Plan struct {
 	// Unique; 1-64 characters from [A-Za-z0-9._-].
 	Name          string        `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	DefaultLimits []*PlanLimits `protobuf:"bytes,3,rep,name=default_limits,json=defaultLimits,proto3" json:"default_limits,omitempty"`
+	// Daily and monthly quotas of the plan's consumers (RL-10, ADR-0070);
+	// managed mode only.
+	Quotas        *Quotas `protobuf:"bytes,4,opt,name=quotas,proto3" json:"quotas,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1500,6 +1503,67 @@ func (x *Plan) GetDefaultLimits() []*PlanLimits {
 	return nil
 }
 
+func (x *Plan) GetQuotas() *Quotas {
+	if x != nil {
+		return x.Quotas
+	}
+	return nil
+}
+
+// Quotas are cost units per UTC calendar day and month (RL-10, ADR-0070);
+// 0 or unset is no quota for that period.
+type Quotas struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Daily         int64                  `protobuf:"varint,1,opt,name=daily,proto3" json:"daily,omitempty"`
+	Monthly       int64                  `protobuf:"varint,2,opt,name=monthly,proto3" json:"monthly,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Quotas) Reset() {
+	*x = Quotas{}
+	mi := &file_config_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Quotas) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Quotas) ProtoMessage() {}
+
+func (x *Quotas) ProtoReflect() protoreflect.Message {
+	mi := &file_config_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Quotas.ProtoReflect.Descriptor instead.
+func (*Quotas) Descriptor() ([]byte, []int) {
+	return file_config_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *Quotas) GetDaily() int64 {
+	if x != nil {
+		return x.Daily
+	}
+	return 0
+}
+
+func (x *Quotas) GetMonthly() int64 {
+	if x != nil {
+		return x.Monthly
+	}
+	return 0
+}
+
 // PlanLimits replaces one policy's limits for a plan's consumers.
 type PlanLimits struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -1512,7 +1576,7 @@ type PlanLimits struct {
 
 func (x *PlanLimits) Reset() {
 	*x = PlanLimits{}
-	mi := &file_config_proto_msgTypes[17]
+	mi := &file_config_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1524,7 +1588,7 @@ func (x *PlanLimits) String() string {
 func (*PlanLimits) ProtoMessage() {}
 
 func (x *PlanLimits) ProtoReflect() protoreflect.Message {
-	mi := &file_config_proto_msgTypes[17]
+	mi := &file_config_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1537,7 +1601,7 @@ func (x *PlanLimits) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PlanLimits.ProtoReflect.Descriptor instead.
 func (*PlanLimits) Descriptor() ([]byte, []int) {
-	return file_config_proto_rawDescGZIP(), []int{17}
+	return file_config_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *PlanLimits) GetPolicy() string {
@@ -1567,7 +1631,7 @@ type PolicyMatch struct {
 
 func (x *PolicyMatch) Reset() {
 	*x = PolicyMatch{}
-	mi := &file_config_proto_msgTypes[18]
+	mi := &file_config_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1579,7 +1643,7 @@ func (x *PolicyMatch) String() string {
 func (*PolicyMatch) ProtoMessage() {}
 
 func (x *PolicyMatch) ProtoReflect() protoreflect.Message {
-	mi := &file_config_proto_msgTypes[18]
+	mi := &file_config_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1592,7 +1656,7 @@ func (x *PolicyMatch) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PolicyMatch.ProtoReflect.Descriptor instead.
 func (*PolicyMatch) Descriptor() ([]byte, []int) {
-	return file_config_proto_rawDescGZIP(), []int{18}
+	return file_config_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *PolicyMatch) GetRoutes() []string {
@@ -1626,7 +1690,7 @@ type Limit struct {
 
 func (x *Limit) Reset() {
 	*x = Limit{}
-	mi := &file_config_proto_msgTypes[19]
+	mi := &file_config_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1638,7 +1702,7 @@ func (x *Limit) String() string {
 func (*Limit) ProtoMessage() {}
 
 func (x *Limit) ProtoReflect() protoreflect.Message {
-	mi := &file_config_proto_msgTypes[19]
+	mi := &file_config_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1651,7 +1715,7 @@ func (x *Limit) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Limit.ProtoReflect.Descriptor instead.
 func (*Limit) Descriptor() ([]byte, []int) {
-	return file_config_proto_rawDescGZIP(), []int{19}
+	return file_config_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *Limit) GetRate() int64 {
@@ -1698,7 +1762,7 @@ type Identity struct {
 
 func (x *Identity) Reset() {
 	*x = Identity{}
-	mi := &file_config_proto_msgTypes[20]
+	mi := &file_config_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1710,7 +1774,7 @@ func (x *Identity) String() string {
 func (*Identity) ProtoMessage() {}
 
 func (x *Identity) ProtoReflect() protoreflect.Message {
-	mi := &file_config_proto_msgTypes[20]
+	mi := &file_config_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1723,7 +1787,7 @@ func (x *Identity) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Identity.ProtoReflect.Descriptor instead.
 func (*Identity) Descriptor() ([]byte, []int) {
-	return file_config_proto_rawDescGZIP(), []int{20}
+	return file_config_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *Identity) GetVersion() int64 {
@@ -1797,7 +1861,7 @@ type Consumer struct {
 
 func (x *Consumer) Reset() {
 	*x = Consumer{}
-	mi := &file_config_proto_msgTypes[21]
+	mi := &file_config_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1809,7 +1873,7 @@ func (x *Consumer) String() string {
 func (*Consumer) ProtoMessage() {}
 
 func (x *Consumer) ProtoReflect() protoreflect.Message {
-	mi := &file_config_proto_msgTypes[21]
+	mi := &file_config_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1822,7 +1886,7 @@ func (x *Consumer) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Consumer.ProtoReflect.Descriptor instead.
 func (*Consumer) Descriptor() ([]byte, []int) {
-	return file_config_proto_rawDescGZIP(), []int{21}
+	return file_config_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *Consumer) GetName() string {
@@ -1897,7 +1961,7 @@ type ApiKey struct {
 
 func (x *ApiKey) Reset() {
 	*x = ApiKey{}
-	mi := &file_config_proto_msgTypes[22]
+	mi := &file_config_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1909,7 +1973,7 @@ func (x *ApiKey) String() string {
 func (*ApiKey) ProtoMessage() {}
 
 func (x *ApiKey) ProtoReflect() protoreflect.Message {
-	mi := &file_config_proto_msgTypes[22]
+	mi := &file_config_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1922,7 +1986,7 @@ func (x *ApiKey) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApiKey.ProtoReflect.Descriptor instead.
 func (*ApiKey) Descriptor() ([]byte, []int) {
-	return file_config_proto_rawDescGZIP(), []int{22}
+	return file_config_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *ApiKey) GetPrefix() string {
@@ -1981,7 +2045,7 @@ type Tenant struct {
 
 func (x *Tenant) Reset() {
 	*x = Tenant{}
-	mi := &file_config_proto_msgTypes[23]
+	mi := &file_config_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1993,7 +2057,7 @@ func (x *Tenant) String() string {
 func (*Tenant) ProtoMessage() {}
 
 func (x *Tenant) ProtoReflect() protoreflect.Message {
-	mi := &file_config_proto_msgTypes[23]
+	mi := &file_config_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2006,7 +2070,7 @@ func (x *Tenant) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Tenant.ProtoReflect.Descriptor instead.
 func (*Tenant) Descriptor() ([]byte, []int) {
-	return file_config_proto_rawDescGZIP(), []int{23}
+	return file_config_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *Tenant) GetId() int64 {
@@ -2054,7 +2118,7 @@ type AccessListEntry struct {
 
 func (x *AccessListEntry) Reset() {
 	*x = AccessListEntry{}
-	mi := &file_config_proto_msgTypes[24]
+	mi := &file_config_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2066,7 +2130,7 @@ func (x *AccessListEntry) String() string {
 func (*AccessListEntry) ProtoMessage() {}
 
 func (x *AccessListEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_config_proto_msgTypes[24]
+	mi := &file_config_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2079,7 +2143,7 @@ func (x *AccessListEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AccessListEntry.ProtoReflect.Descriptor instead.
 func (*AccessListEntry) Descriptor() ([]byte, []int) {
-	return file_config_proto_rawDescGZIP(), []int{24}
+	return file_config_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *AccessListEntry) GetId() int64 {
@@ -2125,7 +2189,9 @@ func (x *AccessListEntry) GetCidr() string {
 }
 
 // Override replaces one policy's limits for one consumer, for a while
-// (a burst grant) or until removed (ADR-0041).
+// (a burst grant) or until removed (ADR-0041). With policy_id 0 it is a
+// quota override, which replaces the consumer's plan quotas instead
+// (RL-10, ADR-0070, ADR-0071).
 type Override struct {
 	state      protoimpl.MessageState `protogen:"open.v1"`
 	Id         int64                  `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -2133,15 +2199,17 @@ type Override struct {
 	PolicyId   int64                  `protobuf:"varint,3,opt,name=policy_id,json=policyId,proto3" json:"policy_id,omitempty"`
 	Limits     []*Limit               `protobuf:"bytes,4,rep,name=limits,proto3" json:"limits,omitempty"`
 	// Unset: from the start; unset ends_at: no end.
-	StartsAt      *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=starts_at,json=startsAt,proto3" json:"starts_at,omitempty"`
-	EndsAt        *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=ends_at,json=endsAt,proto3" json:"ends_at,omitempty"`
+	StartsAt *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=starts_at,json=startsAt,proto3" json:"starts_at,omitempty"`
+	EndsAt   *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=ends_at,json=endsAt,proto3" json:"ends_at,omitempty"`
+	// A quota override's quotas; unset for a policy override.
+	Quotas        *Quotas `protobuf:"bytes,7,opt,name=quotas,proto3" json:"quotas,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Override) Reset() {
 	*x = Override{}
-	mi := &file_config_proto_msgTypes[25]
+	mi := &file_config_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2153,7 +2221,7 @@ func (x *Override) String() string {
 func (*Override) ProtoMessage() {}
 
 func (x *Override) ProtoReflect() protoreflect.Message {
-	mi := &file_config_proto_msgTypes[25]
+	mi := &file_config_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2166,7 +2234,7 @@ func (x *Override) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Override.ProtoReflect.Descriptor instead.
 func (*Override) Descriptor() ([]byte, []int) {
-	return file_config_proto_rawDescGZIP(), []int{25}
+	return file_config_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *Override) GetId() int64 {
@@ -2207,6 +2275,13 @@ func (x *Override) GetStartsAt() *timestamppb.Timestamp {
 func (x *Override) GetEndsAt() *timestamppb.Timestamp {
 	if x != nil {
 		return x.EndsAt
+	}
+	return nil
+}
+
+func (x *Override) GetQuotas() *Quotas {
+	if x != nil {
+		return x.Quotas
 	}
 	return nil
 }
@@ -2325,11 +2400,15 @@ const file_config_proto_rawDesc = "" +
 	"\x02id\x18\n" +
 	" \x01(\x03R\x02id\x12\x1b\n" +
 	"\tfrom_plan\x18\v \x01(\bR\bfromPlan\x12\x17\n" +
-	"\alease_k\x18\f \x01(\x03R\x06leaseK\"q\n" +
+	"\alease_k\x18\f \x01(\x03R\x06leaseK\"\xa5\x01\n" +
 	"\x04Plan\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x03R\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12E\n" +
-	"\x0edefault_limits\x18\x03 \x03(\v2\x1e.spillway.config.v1.PlanLimitsR\rdefaultLimits\"W\n" +
+	"\x0edefault_limits\x18\x03 \x03(\v2\x1e.spillway.config.v1.PlanLimitsR\rdefaultLimits\x122\n" +
+	"\x06quotas\x18\x04 \x01(\v2\x1a.spillway.config.v1.QuotasR\x06quotas\"8\n" +
+	"\x06Quotas\x12\x14\n" +
+	"\x05daily\x18\x01 \x01(\x03R\x05daily\x12\x18\n" +
+	"\amonthly\x18\x02 \x01(\x03R\amonthly\"W\n" +
 	"\n" +
 	"PlanLimits\x12\x16\n" +
 	"\x06policy\x18\x01 \x01(\tR\x06policy\x121\n" +
@@ -2381,7 +2460,7 @@ const file_config_proto_rawDesc = "" +
 	"api_key_id\x18\x04 \x01(\x03R\bapiKeyId\x12\x1f\n" +
 	"\vconsumer_id\x18\x05 \x01(\x03R\n" +
 	"consumerId\x12\x12\n" +
-	"\x04cidr\x18\x06 \x01(\tR\x04cidr\"\xf9\x01\n" +
+	"\x04cidr\x18\x06 \x01(\tR\x04cidr\"\xad\x02\n" +
 	"\bOverride\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x03R\x02id\x12\x1f\n" +
 	"\vconsumer_id\x18\x02 \x01(\x03R\n" +
@@ -2389,7 +2468,8 @@ const file_config_proto_rawDesc = "" +
 	"\tpolicy_id\x18\x03 \x01(\x03R\bpolicyId\x121\n" +
 	"\x06limits\x18\x04 \x03(\v2\x19.spillway.config.v1.LimitR\x06limits\x127\n" +
 	"\tstarts_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\bstartsAt\x123\n" +
-	"\aends_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\x06endsAtB8Z6github.com/ankitbisht23/spillway/internal/gen/configpbb\x06proto3"
+	"\aends_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\x06endsAt\x122\n" +
+	"\x06quotas\x18\a \x01(\v2\x1a.spillway.config.v1.QuotasR\x06quotasB8Z6github.com/ankitbisht23/spillway/internal/gen/configpbb\x06proto3"
 
 var (
 	file_config_proto_rawDescOnce sync.Once
@@ -2403,7 +2483,7 @@ func file_config_proto_rawDescGZIP() []byte {
 	return file_config_proto_rawDescData
 }
 
-var file_config_proto_msgTypes = make([]protoimpl.MessageInfo, 26)
+var file_config_proto_msgTypes = make([]protoimpl.MessageInfo, 27)
 var file_config_proto_goTypes = []any{
 	(*Config)(nil),                // 0: spillway.config.v1.Config
 	(*Upstream)(nil),              // 1: spillway.config.v1.Upstream
@@ -2422,16 +2502,17 @@ var file_config_proto_goTypes = []any{
 	(*RateLimitSettings)(nil),     // 14: spillway.config.v1.RateLimitSettings
 	(*Policy)(nil),                // 15: spillway.config.v1.Policy
 	(*Plan)(nil),                  // 16: spillway.config.v1.Plan
-	(*PlanLimits)(nil),            // 17: spillway.config.v1.PlanLimits
-	(*PolicyMatch)(nil),           // 18: spillway.config.v1.PolicyMatch
-	(*Limit)(nil),                 // 19: spillway.config.v1.Limit
-	(*Identity)(nil),              // 20: spillway.config.v1.Identity
-	(*Consumer)(nil),              // 21: spillway.config.v1.Consumer
-	(*ApiKey)(nil),                // 22: spillway.config.v1.ApiKey
-	(*Tenant)(nil),                // 23: spillway.config.v1.Tenant
-	(*AccessListEntry)(nil),       // 24: spillway.config.v1.AccessListEntry
-	(*Override)(nil),              // 25: spillway.config.v1.Override
-	(*timestamppb.Timestamp)(nil), // 26: google.protobuf.Timestamp
+	(*Quotas)(nil),                // 17: spillway.config.v1.Quotas
+	(*PlanLimits)(nil),            // 18: spillway.config.v1.PlanLimits
+	(*PolicyMatch)(nil),           // 19: spillway.config.v1.PolicyMatch
+	(*Limit)(nil),                 // 20: spillway.config.v1.Limit
+	(*Identity)(nil),              // 21: spillway.config.v1.Identity
+	(*Consumer)(nil),              // 22: spillway.config.v1.Consumer
+	(*ApiKey)(nil),                // 23: spillway.config.v1.ApiKey
+	(*Tenant)(nil),                // 24: spillway.config.v1.Tenant
+	(*AccessListEntry)(nil),       // 25: spillway.config.v1.AccessListEntry
+	(*Override)(nil),              // 26: spillway.config.v1.Override
+	(*timestamppb.Timestamp)(nil), // 27: google.protobuf.Timestamp
 }
 var file_config_proto_depIdxs = []int32{
 	1,  // 0: spillway.config.v1.Config.upstreams:type_name -> spillway.config.v1.Upstream
@@ -2452,24 +2533,26 @@ var file_config_proto_depIdxs = []int32{
 	10, // 15: spillway.config.v1.HeaderTransform.set:type_name -> spillway.config.v1.HeaderValue
 	10, // 16: spillway.config.v1.HeaderTransform.add:type_name -> spillway.config.v1.HeaderValue
 	13, // 17: spillway.config.v1.RouteMatch.headers:type_name -> spillway.config.v1.HeaderMatch
-	18, // 18: spillway.config.v1.Policy.match:type_name -> spillway.config.v1.PolicyMatch
-	19, // 19: spillway.config.v1.Policy.limits:type_name -> spillway.config.v1.Limit
-	17, // 20: spillway.config.v1.Plan.default_limits:type_name -> spillway.config.v1.PlanLimits
-	19, // 21: spillway.config.v1.PlanLimits.limits:type_name -> spillway.config.v1.Limit
-	21, // 22: spillway.config.v1.Identity.consumers:type_name -> spillway.config.v1.Consumer
-	22, // 23: spillway.config.v1.Identity.api_keys:type_name -> spillway.config.v1.ApiKey
-	23, // 24: spillway.config.v1.Identity.tenants:type_name -> spillway.config.v1.Tenant
-	24, // 25: spillway.config.v1.Identity.access_lists:type_name -> spillway.config.v1.AccessListEntry
-	25, // 26: spillway.config.v1.Identity.overrides:type_name -> spillway.config.v1.Override
-	26, // 27: spillway.config.v1.ApiKey.expires_at:type_name -> google.protobuf.Timestamp
-	19, // 28: spillway.config.v1.Override.limits:type_name -> spillway.config.v1.Limit
-	26, // 29: spillway.config.v1.Override.starts_at:type_name -> google.protobuf.Timestamp
-	26, // 30: spillway.config.v1.Override.ends_at:type_name -> google.protobuf.Timestamp
-	31, // [31:31] is the sub-list for method output_type
-	31, // [31:31] is the sub-list for method input_type
-	31, // [31:31] is the sub-list for extension type_name
-	31, // [31:31] is the sub-list for extension extendee
-	0,  // [0:31] is the sub-list for field type_name
+	19, // 18: spillway.config.v1.Policy.match:type_name -> spillway.config.v1.PolicyMatch
+	20, // 19: spillway.config.v1.Policy.limits:type_name -> spillway.config.v1.Limit
+	18, // 20: spillway.config.v1.Plan.default_limits:type_name -> spillway.config.v1.PlanLimits
+	17, // 21: spillway.config.v1.Plan.quotas:type_name -> spillway.config.v1.Quotas
+	20, // 22: spillway.config.v1.PlanLimits.limits:type_name -> spillway.config.v1.Limit
+	22, // 23: spillway.config.v1.Identity.consumers:type_name -> spillway.config.v1.Consumer
+	23, // 24: spillway.config.v1.Identity.api_keys:type_name -> spillway.config.v1.ApiKey
+	24, // 25: spillway.config.v1.Identity.tenants:type_name -> spillway.config.v1.Tenant
+	25, // 26: spillway.config.v1.Identity.access_lists:type_name -> spillway.config.v1.AccessListEntry
+	26, // 27: spillway.config.v1.Identity.overrides:type_name -> spillway.config.v1.Override
+	27, // 28: spillway.config.v1.ApiKey.expires_at:type_name -> google.protobuf.Timestamp
+	20, // 29: spillway.config.v1.Override.limits:type_name -> spillway.config.v1.Limit
+	27, // 30: spillway.config.v1.Override.starts_at:type_name -> google.protobuf.Timestamp
+	27, // 31: spillway.config.v1.Override.ends_at:type_name -> google.protobuf.Timestamp
+	17, // 32: spillway.config.v1.Override.quotas:type_name -> spillway.config.v1.Quotas
+	33, // [33:33] is the sub-list for method output_type
+	33, // [33:33] is the sub-list for method input_type
+	33, // [33:33] is the sub-list for extension type_name
+	33, // [33:33] is the sub-list for extension extendee
+	0,  // [0:33] is the sub-list for field type_name
 }
 
 func init() { file_config_proto_init() }
@@ -2483,7 +2566,7 @@ func file_config_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_config_proto_rawDesc), len(file_config_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   26,
+			NumMessages:   27,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

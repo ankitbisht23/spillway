@@ -45,8 +45,14 @@ type Snapshot struct {
 	// RedisBudget is ratelimit.redis_budget: one Redis time budget per
 	// request (RL-22, ADR-0021).
 	RedisBudget time.Duration
-	router      *router.Router
-	seq         uint64 // see Seq
+	// PlanQuotas are the quotas of each plan that has any, by plan ID
+	// (RL-10, ADR-0070); managed mode only.
+	PlanQuotas map[int64]Quotas
+	router     *router.Router
+	seq        uint64 // see Seq
+	// reserve is how many limits of a tenant-slot call the policies leave
+	// for a consumer's quotas: quotaLimits in managed mode, else 0.
+	reserve int
 }
 
 // Route is a compiled route.
@@ -152,7 +158,10 @@ func compile(c *configpb.Config, managed bool) (*Snapshot, error) {
 	if err := compilePlans(c.GetPlans(), s.Policies, s.Routes, s.Replicas); err != nil {
 		return nil, err
 	}
-	if err := checkCallLimits(s.Routes, s.Policies, nil, 0); err != nil {
+	if err := s.compileQuotas(c.GetPlans(), managed); err != nil {
+		return nil, err
+	}
+	if err := checkCallLimits(s.Routes, s.Policies, nil, 0, s.reserve); err != nil {
 		return nil, err
 	}
 	return s, nil
@@ -176,7 +185,33 @@ func (s *Snapshot) CheckOverride(policyID int64, limits []*configpb.Limit) error
 	if _, err := p.limitsFor(limits, s.Replicas, s.Routes); err != nil {
 		return fmt.Errorf("policy %q: %w", p.Name, err)
 	}
-	return checkCallLimits(s.Routes, s.Policies, p, len(limits))
+	return checkCallLimits(s.Routes, s.Policies, p, len(limits), s.reserve)
+}
+
+// compileQuotas keeps the plans' quotas by plan ID (RL-10, ADR-0070). Static
+// mode has no quotas, and managed mode leaves room in every tenant-slot call
+// for a consumer's two quota limits, which a quota override can give any
+// consumer.
+func (s *Snapshot) compileQuotas(plans []*configpb.Plan, managed bool) error {
+	if managed {
+		s.reserve = quotaLimits
+	}
+	for _, p := range plans {
+		q := QuotasOf(p.GetQuotas())
+		if !q.Any() {
+			continue
+		}
+		if !managed {
+			return fmt.Errorf("plan %q: %w", p.GetName(), errQuotasNeedManaged)
+		}
+		if p.GetId() > 0 {
+			if s.PlanQuotas == nil {
+				s.PlanQuotas = map[int64]Quotas{}
+			}
+			s.PlanQuotas[p.GetId()] = q
+		}
+	}
+	return nil
 }
 
 // compileRoute checks the rules of r that concern r alone, everything but
