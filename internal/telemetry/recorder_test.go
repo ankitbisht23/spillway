@@ -80,7 +80,7 @@ func TestAccessLog(t *testing.T) {
 		ID: "req-1", TraceID: "4bf92f3577b34da6a3ce929d0e0e4736", Route: "orders", Method: "POST", Status: 201,
 		Origin: OriginUpstream, Reason: ReasonNone, Tenant: NoTenant, Upstream: "orders-svc", Attempts: 2,
 		Latency: 1500 * time.Microsecond, BytesIn: 5, BytesOut: 42, KeyHash: "64571644321b",
-		Decisions: []Decision{{"per-ip", "allow", "enforce"}, {"per-agent", "deny", "shadow"}},
+		Decisions: []Decision{{"per-ip", "allow", "enforce", false}, {"per-agent", "deny", "shadow", false}, {"global", "deny", "enforce", true}},
 	})
 	if n := strings.Count(buf.String(), "\n"); n != 1 {
 		t.Fatalf("%d lines, want 1:\n%s", n, buf)
@@ -96,6 +96,7 @@ func TestAccessLog(t *testing.T) {
 		"decisions": []any{
 			map[string]any{"policy": "per-ip", "decision": "allow", "mode": "enforce"},
 			map[string]any{"policy": "per-agent", "decision": "deny", "mode": "shadow"},
+			map[string]any{"policy": "global", "decision": "deny", "mode": "enforce", "cached": true}, // from the deny cache (RL-19)
 		},
 	}
 	delete(line, "time")
@@ -193,9 +194,9 @@ func TestMetricLabels(t *testing.T) {
 		{Route: "orders", Method: "GET", Status: 799, Origin: OriginUpstream, Reason: ReasonNone, Upstream: "orders"},
 		{Route: "orders", Method: "DELETE", Status: 504, Origin: OriginGateway, Reason: ReasonUpstream, Upstream: "orders"},
 		{Route: NoRoute, Method: "GET", Status: 404, Origin: OriginGateway, Reason: ReasonNone},
-		{Route: "orders", Method: "GET", Status: 429, Origin: OriginGateway, Reason: ReasonRateLimited, Decisions: []Decision{{"per-ip", "deny", "enforce"}, {"per-agent", "deny", "shadow"}}},
-		{Route: "orders", Method: "POST", Status: 201, Origin: OriginUpstream, Reason: ReasonNone, Decisions: []Decision{{"per-ip", "allow", "enforce"}, {"per-agent", "deny", "shadow"}}},
-		{Route: "orders", Method: "POST", Status: 503, Origin: OriginGateway, Reason: ReasonFailClosed, Decisions: []Decision{{"global", "fail_closed", "enforce"}, {"tenant", "fail_open", "enforce"}}},
+		{Route: "orders", Method: "GET", Status: 429, Origin: OriginGateway, Reason: ReasonRateLimited, Decisions: []Decision{{"per-ip", "deny", "enforce", false}, {"per-agent", "deny", "shadow", false}}},
+		{Route: "orders", Method: "POST", Status: 201, Origin: OriginUpstream, Reason: ReasonNone, Decisions: []Decision{{"per-ip", "allow", "enforce", false}, {"per-agent", "deny", "shadow", false}}},
+		{Route: "orders", Method: "POST", Status: 503, Origin: OriginGateway, Reason: ReasonFailClosed, Decisions: []Decision{{"global", "fail_closed", "enforce", false}, {"tenant", "fail_open", "enforce", false}}},
 	} {
 		q.ID, q.Tenant, q.Latency = "x", NoTenant, 3*time.Millisecond
 		rec.Request(t.Context(), &q)

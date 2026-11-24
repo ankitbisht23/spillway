@@ -370,10 +370,13 @@ func TestRedisGlobalAfterTenant(t *testing.T) {
 	}
 
 	// A tenant-slot deny ends the request before the global call, and
-	// needs no Redis refund: a denied call writes nothing.
+	// needs no Redis refund: a denied call writes nothing. First global's
+	// deny cache entry expires (the fake's retry-after is 1 s, RL-19), and
+	// per-ip refills, so with its unit refunded it is full.
+	g.clock.Advance(time.Second)
 	f.setUsed(tenantKey, 3)
 	got := g.send(t, http.MethodGet, "/", alice("global-3"))
-	if got.status != http.StatusTooManyRequests || got.header.Get("RateLimit") != `"per-ip";r=8;t=1, "tenant";r=0;t=2` ||
+	if got.status != http.StatusTooManyRequests || got.header.Get("RateLimit") != `"per-ip";r=10;t=0, "tenant";r=0;t=2` ||
 		got.header.Get("RateLimit-Policy") != `"per-ip";q=10;w=1, "tenant";q=3;w=1` {
 		t.Errorf("tenant deny: %d\n%s", got.status, rateLimitFields(got.header))
 	}
@@ -482,7 +485,8 @@ policies:
 			{"allowed", alice, func() {}, http.StatusOK, "1002000"},
 			// The tenant-slot call denies and is the last that ran.
 			{"denied", alice, func() { f.setUsed(tenantKey, 2) }, http.StatusTooManyRequests, "1003000"},
-			{"failed call", alice, func() { f.setUsed(tenantKey, 0); f.setFail("{t:acme}", true) }, http.StatusOK, ""},
+			// After the deny cache's entry expires (RL-19).
+			{"failed call", alice, func() { g.clock.Advance(time.Second); f.setUsed(tenantKey, 0); f.setFail("{t:acme}", true) }, http.StatusOK, ""},
 			// Anonymous: no tenant, and {route} fills, so only global runs.
 			{"one call", nil, func() { f.setFail("{t:acme}", false) }, http.StatusOK, "1005000"},
 		} {

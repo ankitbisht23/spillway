@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -41,6 +42,10 @@ const (
 // redisErrorKinds are the label values of gw_redis_errors_total{kind}: the
 // limiter's error kinds (ADR-0021).
 var redisErrorKinds = []string{"timeout", "conn", "script"}
+
+// denyCacheResults are the label values of
+// gw_ratelimit_deny_cache_total{result} (RL-19, ADR-0069).
+var denyCacheResults = []string{"hit", "insert", "full"}
 
 // maxTenants is how many tenants keep their own tenant label (OB-01).
 const maxTenants = 50
@@ -81,6 +86,9 @@ type Decision struct {
 	Policy   string `json:"policy"`
 	Decision string `json:"decision"` // "allow", or "deny" if any of the policy's limits denied
 	Mode     string `json:"mode"`     // "enforce" or "shadow"
+	// Cached: the deny came from the replica's deny cache, without a
+	// Redis call (RL-19, ADR-0069).
+	Cached bool `json:"cached,omitempty"`
 }
 
 // Recorder writes the access log (OB-03) and the request metrics (OB-01).
@@ -97,8 +105,11 @@ type Recorder struct {
 	refunds    prometheus.Counter
 	keyCap     *prometheus.CounterVec
 
-	mu      sync.Mutex // a tenant rotation never runs between labelling and observing
-	tenants *tenantCapper
+	denyCache *prometheus.CounterVec
+	// denyEntries counts the deny cache's entries; nil until set.
+	denyEntries atomic.Pointer[func() int64]
+	mu          sync.Mutex // a tenant rotation never runs between labelling and observing
+	tenants     *tenantCapper
 }
 
 // NewRecorder registers the request metrics with reg. The access log goes to
@@ -146,12 +157,28 @@ func NewRecorder(reg prometheus.Registerer, log *slog.Logger, sampleRate float64
 			Name: "gw_ratelimit_key_cap_skips_total",
 			Help: "Limits of in-memory limiters skipped for a request because its key was new and the limiter held its cap of keys.",
 		}, []string{"policy"}),
+		denyCache: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "gw_ratelimit_deny_cache_total",
+			Help: "Deny cache outcomes (RL-19): hit (a request denied locally, without a Redis call), insert (an enforce deny cached), full (not cached: its shard was full of live entries).",
+		}, []string{"result"}),
 		tenants: newTenantCapper(maxTenants),
 	}
 	for _, k := range redisErrorKinds {
 		rec.redis.WithLabelValues(k) // every kind is exported from the start, at 0
 	}
-	reg.MustRegister(rec.requests, rec.duration, rec.upstream, rec.retries, rec.decisions, rec.checks, rec.redis, rec.refunds, rec.keyCap)
+	for _, r := range denyCacheResults {
+		rec.denyCache.WithLabelValues(r)
+	}
+	entries := prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+		Name: "gw_ratelimit_deny_cache_entries",
+		Help: "Entries in the deny cache (RL-19), expired ones not yet removed included.",
+	}, func() float64 {
+		if f := rec.denyEntries.Load(); f != nil {
+			return float64((*f)())
+		}
+		return 0
+	})
+	reg.MustRegister(rec.requests, rec.duration, rec.upstream, rec.retries, rec.decisions, rec.checks, rec.redis, rec.refunds, rec.keyCap, rec.denyCache, entries)
 	return rec
 }
 
@@ -218,6 +245,17 @@ func (rec *Recorder) RedisError(kind string) {
 // RefundFailure records a Redis refund that failed (ADR-0021).
 func (rec *Recorder) RefundFailure() {
 	rec.refunds.Inc()
+}
+
+// DenyCache records a deny cache outcome: one of hit, insert or full
+// (RL-19, ADR-0069).
+func (rec *Recorder) DenyCache(result string) {
+	rec.denyCache.WithLabelValues(result).Inc()
+}
+
+// DenyCacheEntries makes gw_ratelimit_deny_cache_entries report entries().
+func (rec *Recorder) DenyCacheEntries(entries func() int64) {
+	rec.denyEntries.Store(&entries)
 }
 
 // KeyCapSkip records a limit of policy that a request skipped because its
