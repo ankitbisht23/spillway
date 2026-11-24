@@ -6,7 +6,7 @@
 
 ## Context
 
-ADR-0070 settles quotas and the flusher; building them left a handful of choices it does not make: how many limits a tenant-slot call may carry once quotas join it, which compile the control plane validates with, the script's exact reply and writes, what a request gets when its quotas are unseeded but a policy denies it anyway, how quickly a tenant that has just got its first quota is seeded, and whether quota denies feed the heavy hitters. None changes ADR-0070's decisions; each is recorded so later tasks build on the same reading.
+ADR-0070 settles quotas and the flusher; building them left a handful of choices it does not make: how many limits a tenant-slot call may carry once quotas join it, which compile the control plane validates with, the script's exact reply and writes, what a request gets when its quotas are unseeded but a policy denies it anyway, how quickly a tenant that has just got its first quota is seeded, whether quota denies feed the heavy hitters, and where a consumer's page shows its quota overrides. Only the last departs from ADR-0070, in layout only; none changes its behaviour. Each is recorded so later tasks build on the same reading.
 
 ## Decision
 
@@ -17,6 +17,7 @@ ADR-0070 settles quotas and the flusher; building them left a handful of choices
 - **Heavy hitters.** The `quota/daily` and `quota/monthly` stand-in policies have no control-plane ID, so their denies are not reported in heartbeats' `top_keys` (RL-21 names policies); the 429 rate and the decisions metric still count them.
 - **Seeding a new quota tenant.** The flusher's 1 s check reads the config and identity versions first and, when either changed since the last flush, flushes at once instead of checking epochs. A tenant that gets its first quota (a new consumer, a plan change, a publish, a quota override) is seeded within about a second, so its unseeded window is no longer than after a Redis data loss.
 - **Flusher details.** The flusher's cluster client has `MaxRetries` −1 (none) and 2 s dial, read and write timeouts; the epoch value's replica name is the host name; `flushed_at` is Redis's `TIME`; counters are read with `MGET` in chunks of 1,000 keys and seeded in chunks of 500, the epoch with the last chunk; a row of a consumer deleted during the flush is dropped, not an error; `/quota-usage` uses the control plane's clock for the current day and month and answers the consumers that exist, in the order asked, once each.
+- **Quota overrides on a consumer's page.** ADR-0070 lists them in the Overrides section; they get a "Quota overrides" section of their own beside it instead (rows "Quota override": quotas, start, end, state, note; create, edit with `If-Match`, delete for key-admin and admin), since they come from their own resource with its own pages and have no policy column. The Plans page stays read-only and gains a Quotas column.
 
 ## Consequences
 
