@@ -69,10 +69,19 @@ Decisions that shape Spillway and are not obvious from the code or from docs/des
 | [0058](0058-admin-ui-session-and-roles.md) | Admin UI: session and roles | Accepted | 2026-11-15 |
 | [0059](0059-live-data-the-sse-stream-and-named-queries.md) | Live data: the SSE stream and named queries | Accepted | 2026-11-15 |
 | [0060](0060-admin-ui-screens-states-and-api-additions.md) | Admin UI: screens, states and API additions | Accepted | 2026-11-15 |
-| [0061](0061-admin-ui-tests-and-make-verify-m6.md) | Admin UI tests and make verify-m6 | Accepted | 2026-11-15 |
+| [0061](0061-admin-ui-tests-and-make-verify-m6.md) | Admin UI tests and make verify-m6 | Accepted; the verify-m6 policy name superseded by 0072 | 2026-11-15 |
 | [0062](0062-live-screens-details.md) | Live screens: details | Accepted | 2026-11-16 |
 | [0063](0063-policies-and-publish-details.md) | Policies and publish: details | Accepted | 2026-11-16 |
 | [0064](0064-routes-and-upstreams-details.md) | Routes and upstreams: details | Accepted | 2026-11-16 |
 | [0065](0065-consumers-keys-and-access-lists-details.md) | Consumers, keys and access lists: details | Accepted | 2026-11-16 |
 | [0066](0066-replicas-history-and-audit-details.md) | Replicas, History and the audit log: details | Accepted | 2026-11-16 |
 | [0067](0067-m1-m6-review-fixes.md) | M1–M6 review fixes | Accepted | 2026-11-16 |
+| [0068](0068-m7-performance-and-hardening-plan-and-decisions.md) | M7 performance and hardening: plan and decisions | Accepted | 2026-11-24 |
+| [0069](0069-deny-cache-and-token-leasing.md) | Deny cache and token leasing | Accepted | 2026-11-24 |
+| [0070](0070-quotas-and-the-flusher.md) | Quotas and the flusher | Accepted | 2026-11-24 |
+| [0071](0071-hardening-carry-over.md) | Hardening carry-over | Accepted | 2026-11-24 |
+| [0072](0072-verify-m6-per-run-policy-name.md) | A per-run policy name in make verify-m6 | Accepted | 2026-11-24 |
+| [0073](0073-performance-pass-nfr-01-and-the-bench-gate.md) | Performance pass, NFR-01 measurement and the benchmark gate | Accepted | 2026-11-24 |
+| [0074](0074-nfr-load-chaos-suite-and-make-verify-m7.md) | NFR load tests, the chaos suite and make verify-m7 | Accepted | 2026-11-24 |
+| [0075](0075-kind-cluster-helm-chart-and-observability-as-code.md) | kind cluster, Helm chart and observability as code | Accepted | 2026-11-24 |
+| [0076](0076-release-and-supply-chain.md) | Release v1.0.0 and the supply chain | Accepted | 2026-11-24 |

@@ -1,6 +1,6 @@
 # 0061. Admin UI tests and make verify-m6
 
-- **Status:** Accepted
+- **Status:** Accepted; the verify-m6 policy name (`m6-limit`) superseded by [ADR-0072](0072-verify-m6-per-run-policy-name.md)
 - **Date:** 2026-11-15
 - **Requirement IDs:** UI-01 – UI-06, UI-08, UI-09, NFR-08, CP-02, CP-04, CP-09, RL-26, SEC-08, SEC-10
 
