@@ -566,3 +566,18 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 		}
 	}
 }
+
+// TestCheckRedisQuotas: a managed snapshot whose plans have quotas needs
+// Redis, where they are counted (RL-10, ADR-0070).
+func TestCheckRedisQuotas(t *testing.T) {
+	snap := &config.Snapshot{PlanQuotas: map[int64]config.Quotas{21: {Daily: 5}}}
+	if err := checkRedis(snap, false); err == nil || !strings.Contains(err.Error(), "plans have quotas, which are counted in Redis (RL-10), but SPILLWAY_GATEWAY_REDIS_ADDRS is not set") {
+		t.Errorf("quotas without Redis: %v", err)
+	}
+	if err := checkRedis(snap, true); err != nil {
+		t.Errorf("quotas with Redis: %v", err)
+	}
+	if err := checkRedis(&config.Snapshot{}, false); err != nil {
+		t.Errorf("no quotas, no Redis: %v", err)
+	}
+}

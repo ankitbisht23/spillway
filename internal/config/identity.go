@@ -62,10 +62,11 @@ type access struct {
 }
 
 // override is an override or burst grant of one policy's limits for one
-// consumer (RL-08, ADR-0041).
+// consumer (RL-08, ADR-0041), or of its quotas (policy 0, RL-10, ADR-0070).
 type override struct {
 	id           int64
 	limits       []*configpb.Limit
+	quotas       Quotas    // a quota override's
 	starts, ends time.Time // zero: from the start, and no end
 }
 
@@ -179,7 +180,7 @@ func (id *Identity) Access(c *Consumer, keyID int64) (deny, allow bool) {
 // among grants, the latest start wins (none counting as earliest), then
 // the highest ID.
 func (id *Identity) Override(consumer, policy int64, t time.Time) ([]*configpb.Limit, bool) {
-	if id == nil {
+	if id == nil || policy <= 0 { // policy 0: quota overrides (QuotaOverride)
 		return nil, false
 	}
 	for i, os := 0, id.overrides[[2]int64{consumer, policy}]; i < len(os); i++ {
@@ -396,15 +397,27 @@ func setOf(m map[int64]bool, id int64) map[int64]bool {
 // (none counting as earliest), then highest ID; standing overrides last
 // (ADR-0041). Their limits are checked against the policy at each request
 // (config.Policy.OverrideLimits), since identity does not know the config.
+// A quota override (policy_id 0, RL-10, ADR-0071) has quotas and no limits;
+// it is kept under policy 0.
 func (id *Identity) addOverrides(os []*configpb.Override, consumers map[int64]*Consumer) error {
 	for _, o := range os {
 		if consumers[o.GetConsumerId()] == nil {
 			return fmt.Errorf("override %d: consumer %d is not defined", o.GetId(), o.GetConsumerId())
 		}
-		if o.GetPolicyId() <= 0 {
-			return fmt.Errorf("override %d: policy_id is required", o.GetId())
-		}
 		ov := override{id: o.GetId(), limits: o.GetLimits()}
+		switch {
+		case o.GetPolicyId() < 0, o.GetPolicyId() == 0 && o.GetQuotas() == nil:
+			return fmt.Errorf("override %d: policy_id is required, or quotas for a quota override", o.GetId())
+		case o.GetPolicyId() > 0 && o.GetQuotas() != nil:
+			return fmt.Errorf("override %d: a policy override has no quotas", o.GetId())
+		case o.GetPolicyId() == 0 && len(o.GetLimits()) > 0:
+			return fmt.Errorf("override %d: a quota override has no limits", o.GetId())
+		case o.GetPolicyId() == 0:
+			if err := CheckQuotas(o.GetQuotas()); err != nil {
+				return fmt.Errorf("override %d: %w", o.GetId(), err)
+			}
+			ov.quotas = QuotasOf(o.GetQuotas())
+		}
 		if o.GetStartsAt() != nil {
 			ov.starts = o.GetStartsAt().AsTime()
 		}

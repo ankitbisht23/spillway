@@ -104,7 +104,7 @@ func (s *Server) validateConfig(ctx context.Context, c *configpb.Config, refs []
 	}
 	// The gateway's own compile: the routing table, regexes, burst and cost
 	// rules (RL-03), names, call limits.
-	snap, err := config.Compile(c)
+	snap, err := config.CompileManaged(c)
 	if err != nil {
 		add("config", 0, "", "", err.Error())
 		return errs

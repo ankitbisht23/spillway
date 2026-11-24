@@ -19,7 +19,9 @@ import (
 // the cost units it holds out of its limit's capacity (burst for GCRA, rate
 // for a sliding window), with no time; calls follow the script's write rule
 // (docs/design.md "Limiter script contract"), a lease group writing its
-// grant, min(lease_k, what is left on each of its limits) (ADR-0069).
+// grant, min(lease_k, what is left on each of its limits) (ADR-0069). A
+// quota limit counts against its rate, its quota, and is skipped, with
+// QuotaUnseeded, in a hash tag set unseeded (ADR-0070).
 type fakeRedis struct {
 	mu          sync.Mutex
 	used        map[string]int64
@@ -28,13 +30,15 @@ type fakeRedis struct {
 	fail        map[string]struct{}      // hash tags whose calls fail as conn
 	slow        map[string]time.Duration // hash tags whose calls answer this late, or time out at their deadline
 	failRefunds bool                     // every Refund fails as conn
+	unseeded    map[string]bool          // hash tags whose quota epoch is missing
+	clock       func() time.Time         // Redis TIME, for a quota's retry-after; time.Now if nil
 	deadlines   []time.Time              // of each Call's context
 	arrivals    []time.Time              // when each Call arrived
 	now         int64
 }
 
 func newFakeRedis() *fakeRedis {
-	return &fakeRedis{used: map[string]int64{}, fail: map[string]struct{}{}, slow: map[string]time.Duration{}, now: 1_000_000}
+	return &fakeRedis{used: map[string]int64{}, fail: map[string]struct{}{}, slow: map[string]time.Duration{}, unseeded: map[string]bool{}, now: 1_000_000}
 }
 
 // tagged returns m's value for the hash tag key has, if any.
@@ -67,6 +71,9 @@ func (f *fakeRedis) Call(ctx context.Context, cost int64, limits []rlredis.Limit
 		if l.LeaseK > 0 {
 			line += fmt.Sprintf(" lease %d", l.LeaseK)
 		}
+		if l.Algorithm == rlredis.Quota {
+			line += fmt.Sprintf(" [%s, %s) epoch %s", l.PeriodStart.Format(time.RFC3339), l.PeriodEnd.Format(time.RFC3339), l.Epoch)
+		}
 	}
 	f.calls = append(f.calls, line)
 	deadline, _ := ctx.Deadline()
@@ -90,7 +97,12 @@ func (f *fakeRedis) Call(ctx context.Context, cost int64, limits []rlredis.Limit
 	}
 	f.now += 1000
 	res := rlredis.Result{Allowed: true, DenyingLimit: -1, NowUS: f.now, Limits: make([]ratelimit.Decision, len(limits)), Granted: make([]int64, len(limits))}
+	skip := make([]bool, len(limits))
 	for i, l := range limits {
+		if l.Algorithm == rlredis.Quota && f.unseeded[tagOf(l.Key)] {
+			skip[i], res.QuotaUnseeded, res.Limits[i].Allowed = true, true, true
+			continue
+		}
 		ok := f.used[l.Key]+cost <= capacity(l)
 		res.Limits[i].Allowed = ok
 		if !ok && l.Enforce {
@@ -112,7 +124,7 @@ func (f *fakeRedis) Call(ctx context.Context, cost int64, limits []rlredis.Limit
 			}
 		}
 		for x := i; x < j; x++ {
-			if res.Limits[x].Allowed {
+			if res.Limits[x].Allowed && !skip[x] {
 				f.used[limits[x].Key] += units
 				res.Granted[x] = units
 			}
@@ -124,9 +136,31 @@ func (f *fakeRedis) Call(ctx context.Context, cost int64, limits []rlredis.Limit
 		f.state(l, d)
 		if !d.Allowed {
 			d.RetryAfter = l.Period
+			if l.Algorithm == rlredis.Quota {
+				d.RetryAfter = l.PeriodEnd.Sub(f.time())
+				if i == res.DenyingLimit {
+					res.RetryAfter = d.RetryAfter
+				}
+			}
 		}
 	}
 	return res, nil
+}
+
+func (f *fakeRedis) time() time.Time {
+	if f.clock != nil {
+		return f.clock()
+	}
+	return time.Now()
+}
+
+// tagOf is the hash tag of a key, such as "{t:1}".
+func tagOf(key string) string {
+	i, j := strings.Index(key, "{"), strings.Index(key, "}")
+	if i < 0 || j < i {
+		return ""
+	}
+	return key[i : j+1]
 }
 
 // state fills d's remaining and reset from l's count: for GCRA, a reset of
@@ -134,6 +168,9 @@ func (f *fakeRedis) Call(ctx context.Context, cost int64, limits []rlredis.Limit
 func (f *fakeRedis) state(l rlredis.Limit, d *ratelimit.Decision) {
 	d.Remaining = capacity(l) - f.used[l.Key]
 	d.ResetAfter = l.Period
+	if l.Algorithm == rlredis.Quota {
+		d.ResetAfter = l.PeriodEnd.Sub(f.time())
+	}
 	if l.Algorithm == config.GCRA {
 		d.ResetAfter = time.Duration(f.used[l.Key]*(l.Period.Microseconds()+l.Rate-1)/l.Rate) * time.Microsecond
 	}

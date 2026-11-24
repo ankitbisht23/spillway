@@ -16,6 +16,7 @@ import (
 
 	"github.com/ankitbisht23/spillway/internal/config"
 	"github.com/ankitbisht23/spillway/internal/heavyhitters"
+	"github.com/ankitbisht23/spillway/internal/quota"
 	"github.com/ankitbisht23/spillway/internal/ratelimit"
 	"github.com/ankitbisht23/spillway/internal/ratelimit/local"
 	rlredis "github.com/ankitbisht23/spillway/internal/ratelimit/redis"
@@ -34,6 +35,7 @@ type Redis interface {
 // Redis ones (ADR-0021). It writes what they decided into the response
 // headers (RL-25, ADR-0018) and q (RL-27).
 type limits struct {
+	snap     *config.Snapshot // the request's: its plans' quotas (RL-10)
 	policies []config.Policy
 	registry *local.Registry
 	redis    Redis         // nil without Redis: the gateway then has no Redis policies
@@ -109,7 +111,7 @@ type redisCall struct {
 	conf     []config.Limit   // of each limit
 	windows  []int            // of each limit: its policy's limits for this request
 	keys     []string         // of each limit: its policy's filled key template's ratelimit.Key
-	checks   []int            // index in limits.checks of each limit, once answered
+	checks   []int            // index in limits.checks of each limit, once answered; -1 for a quota the script skipped
 	nowUS    int64            // the call's Redis TIME, which its refund names
 	slot     string           // the hash slot's kind, for its span: "tenant", "key" or "global"
 }
@@ -130,7 +132,7 @@ type refunder interface {
 // hitters, if not nil, counts their denies.
 func newLimits(s *config.Snapshot, route *config.Route, registry *local.Registry, redis Redis, tracer trace.Tracer, hitters *heavyhitters.Sketch, rec *telemetry.Recorder, log *slog.Logger, r *http.Request, q *telemetry.Request, ip netip.Addr) *limits {
 	l := &limits{
-		policies: s.Policies, registry: registry, redis: redis, budget: s.RedisBudget, replicas: s.Replicas, tracer: tracer, hitters: hitters, rec: rec, log: log, r: r, q: q, cost: route.Cost,
+		snap: s, policies: s.Policies, registry: registry, redis: redis, budget: s.RedisBudget, replicas: s.Replicas, tracer: tracer, hitters: hitters, rec: rec, log: log, r: r, q: q, cost: route.Cost,
 		// Upper-cased: many upstreams take "post" for POST, so it must not
 		// skip POST policies or get a {method} bucket of its own (ADR-0020).
 		values: config.KeyValues{Route: route.Name, Method: strings.ToUpper(r.Method), Header: r.Header},
@@ -321,6 +323,10 @@ func (l *limits) checkRedis() bool {
 		c.nowUS = res.NowUS
 		l.calls = append(l.calls, c)
 		for i, lim := range c.limits {
+			if lim.Algorithm == rlredis.Quota && res.QuotaUnseeded {
+				c.checks = append(c.checks, -1) // skipped by the script: not checked
+				continue
+			}
 			c.checks = append(c.checks, len(l.checks))
 			// Written: enforce limits of an allowed call, and its shadow
 			// limits that would allow (the script's write rule). A lease
@@ -336,12 +342,26 @@ func (l *limits) checkRedis() bool {
 			}
 			l.checks = append(l.checks, check{policy: c.policies[i], limit: c.conf[i], windows: c.windows[i], d: d, held: written})
 		}
+		closed := res.QuotaUnseeded && res.Allowed && failClosed(c)
 		l.decide(c, func(i int) string {
-			if res.Limits[i].Allowed {
+			switch {
+			case c.limits[i].Algorithm == rlredis.Quota && res.QuotaUnseeded && closed:
+				return "fail_closed"
+			case c.limits[i].Algorithm == rlredis.Quota && res.QuotaUnseeded:
+				return "fail_open"
+			case res.Limits[i].Allowed:
 				return "allow"
 			}
 			return "deny"
 		})
+		if closed {
+			// The tenant's quotas are unseeded and an enforce fail_closed
+			// policy shares the call: 503, as if the call had failed
+			// (ADR-0070).
+			l.unavailable = true
+			l.refund()
+			return false
+		}
 		if !res.Allowed {
 			if l.deny != nil {
 				l.cacheDeny(c, res, sent)
@@ -544,9 +564,7 @@ func (l *limits) failed(c *redisCall, err error) bool {
 	// Debug: during an outage every request fails; the metric and the
 	// breaker's transition logs carry it.
 	l.log.Debug("redis limiter call failed; failure modes apply", "kind", kind, "node", node, "request_id", l.q.ID)
-	for _, p := range c.policies {
-		l.unavailable = l.unavailable || p.FailureMode == config.FailClosed && p.Mode == config.Enforce
-	}
+	l.unavailable = l.unavailable || failClosed(c)
 	at := l.registry.Now()
 	for i := 0; i < len(c.limits); {
 		p, decision, applied := c.policies[i], "allow", true
@@ -554,10 +572,15 @@ func (l *limits) failed(c *redisCall, err error) bool {
 		for j < len(c.limits) && c.policies[j] == p {
 			j++
 		}
-		switch p.FailureMode {
-		case config.FailOpen:
+		switch {
+		case p.Algorithm == rlredis.Quota: // the call's policies decide (failClosed)
 			decision = "fail_open"
-		case config.FailClosed:
+			if l.unavailable {
+				decision = "fail_closed"
+			}
+		case p.FailureMode == config.FailOpen:
+			decision = "fail_open"
+		case p.FailureMode == config.FailClosed:
 			decision = "fail_closed"
 		default: // config.Degraded
 			applied = false
@@ -599,6 +622,19 @@ func (l *limits) failed(c *redisCall, err error) bool {
 		return false
 	}
 	return true
+}
+
+// failClosed reports whether an enforce fail_closed policy is in c: then a
+// failure of c, or c's quotas unseeded, makes the request a 503 (RL-23,
+// ADR-0070). A quota has no failure mode of its own; it follows the
+// policies of its call, and is fail_open alone.
+func failClosed(c *redisCall) bool {
+	for _, p := range c.policies {
+		if p.FailureMode == config.FailClosed && p.Mode == config.Enforce {
+			return true
+		}
+	}
+	return false
 }
 
 // decisionTimeHeader carries, in dev mode, the Redis time of the call that
@@ -660,7 +696,7 @@ func (l *limits) decide(c *redisCall, decision func(i int) string) {
 // (RL-21, ADR-0041): once per policy and request, whatever the cost. A
 // failure mode's outcome is not a deny and is not counted.
 func (l *limits) throttled(p *config.Policy, key string) {
-	if l.hitters == nil {
+	if l.hitters == nil || p.ID == 0 { // a quota (ID 0) is not a policy the heavy hitters name
 		return
 	}
 	var consumer int64
@@ -729,7 +765,49 @@ func (l *limits) redisCalls() []*redisCall {
 			c.keys = append(c.keys, raw)
 		}
 	}
+	if q := l.snap.Quotas(l.consumer, l.identity, l.registry.Now()); q.Any() {
+		if len(slot) == 0 {
+			slot = append(slot, &redisCall{slot: "tenant"})
+		}
+		l.addQuotas(slot[0], q)
+	}
 	return append(slot, global...)
+}
+
+// The quota limits' stand-in policies (RL-10, ADR-0070): enforce, and
+// fail_open alone, since a quota follows the failure modes of the policies
+// in its call (failClosed). Their names are the RateLimit and metric names;
+// ID 0 keeps them out of the heavy hitters.
+var (
+	quotaDaily   = &config.Policy{Name: "quota/daily", Level: "consumer", Algorithm: rlredis.Quota, Mode: config.Enforce, FailureMode: config.FailOpen}
+	quotaMonthly = &config.Policy{Name: "quota/monthly", Level: "consumer", Algorithm: rlredis.Quota, Mode: config.Enforce, FailureMode: config.FailOpen}
+)
+
+// addQuotas adds the request's quotas q to c, its tenant-slot call (RL-10,
+// ADR-0070): one limit per period with a quota, for the UTC day and month
+// the gateway's clock is in; the script checks that Redis's TIME agrees.
+// They follow the policies, so a quota counts only requests every limit of
+// the call admits.
+func (l *limits) addQuotas(c *redisCall, q config.Quotas) {
+	now := l.registry.Now()
+	tenant, consumer := l.consumer.Tenant, l.consumer.Name
+	for _, x := range []struct {
+		policy *config.Policy
+		quota  int64
+		period quota.Period
+	}{{quotaDaily, q.Daily, quota.Day(now)}, {quotaMonthly, q.Monthly, quota.Month(now)}} {
+		if x.quota <= 0 {
+			continue
+		}
+		c.limits = append(c.limits, rlredis.Limit{
+			Key: rlredis.QuotaKey(tenant, consumer, x.period.ID), Level: "consumer", Enforce: true, Algorithm: rlredis.Quota, Rate: x.quota,
+			PeriodStart: x.period.Start, PeriodEnd: x.period.End, Epoch: rlredis.QuotaEpochKey(tenant),
+		})
+		c.policies = append(c.policies, x.policy)
+		c.conf = append(c.conf, config.Limit{Rate: x.quota, Period: time.Duration(x.period.Seconds()) * time.Second})
+		c.windows = append(c.windows, 1)
+		c.keys = append(c.keys, ratelimit.Key(consumer))
+	}
 }
 
 // refund gives back everything a denied request holds, shadow limits
@@ -754,6 +832,9 @@ func (l *limits) refund() {
 	for _, call := range l.calls {
 		var written []rlredis.Limit
 		for i, j := range call.checks {
+			if j < 0 {
+				continue
+			}
 			if c := &l.checks[j]; c.held {
 				written = append(written, call.limits[i])
 				c.d = refunded(call.limits[i], c.d, l.cost)
@@ -816,20 +897,23 @@ func (l *limits) release() {
 // (ADR-0018).
 func (l *limits) headers() (policy, limit string) {
 	var p, r strings.Builder
-	for _, c := range l.checks {
-		if c.policy.Mode != config.Enforce || c.policy.Algorithm == config.Concurrency {
-			continue
+	// Two passes: the quota items follow the policies' (ADR-0070).
+	for _, quotas := range [2]bool{false, true} {
+		for _, c := range l.checks {
+			if c.policy.Mode != config.Enforce || c.policy.Algorithm == config.Concurrency || (c.policy.Algorithm == rlredis.Quota) != quotas {
+				continue
+			}
+			if p.Len() > 0 {
+				p.WriteString(", ")
+				r.WriteString(", ")
+			}
+			name := c.policy.Name
+			if c.windows > 1 {
+				name += "/" + strconv.FormatInt(int64(c.limit.Period/time.Second), 10) + "s"
+			}
+			p.WriteString(`"` + name + `";q=` + strconv.FormatInt(c.limit.Rate, 10) + ";w=" + strconv.FormatInt(int64(c.limit.Period/time.Second), 10))
+			r.WriteString(`"` + name + `";r=` + strconv.FormatInt(c.d.Remaining, 10) + ";t=" + strconv.FormatInt(ceilSeconds(c.d.ResetAfter), 10))
 		}
-		if p.Len() > 0 {
-			p.WriteString(", ")
-			r.WriteString(", ")
-		}
-		name := c.policy.Name
-		if c.windows > 1 {
-			name += "/" + strconv.FormatInt(int64(c.limit.Period/time.Second), 10) + "s"
-		}
-		p.WriteString(`"` + name + `";q=` + strconv.FormatInt(c.limit.Rate, 10) + ";w=" + strconv.FormatInt(int64(c.limit.Period/time.Second), 10))
-		r.WriteString(`"` + name + `";r=` + strconv.FormatInt(c.d.Remaining, 10) + ";t=" + strconv.FormatInt(ceilSeconds(c.d.ResetAfter), 10))
 	}
 	return p.String(), r.String()
 }

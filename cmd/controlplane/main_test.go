@@ -71,6 +71,35 @@ func TestLoadSettings(t *testing.T) {
 	}
 }
 
+// TestRedisSettings: the quota flusher's Redis is optional (unset, the
+// flusher is off); its seeds, AUTH and the dev address map (RL-10,
+// ADR-0070, SEC-09).
+func TestRedisSettings(t *testing.T) {
+	kv := withOIDC(map[string]string{
+		"SPILLWAY_CP_DATABASE_URL":      "postgres://spillway_app@db:5432/spillway",
+		"SPILLWAY_CP_DATABASE_PASSWORD": secretValue,
+		"SPILLWAY_CP_ALLOWED_NETWORKS":  "172.29.0.0/16",
+	})
+	s, err := loadSettings(env(kv))
+	if err != nil || len(s.redis.Addrs) != 0 {
+		t.Fatalf("unset: %+v, %v", s.redis, err)
+	}
+	kv["SPILLWAY_CP_REDIS_ADDRS"] = "redis-0:6379, redis-1:6379,"
+	kv["SPILLWAY_CP_REDIS_USERNAME"] = "flusher"
+	kv["SPILLWAY_CP_REDIS_PASSWORD"] = secretValue
+	kv["SPILLWAY_REDIS_ADDR_MAP"] = "redis-0:6379=127.0.0.1:7000"
+	if s, err = loadSettings(env(kv)); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(s.redis.Addrs, ",") != "redis-0:6379,redis-1:6379" || s.redis.Username != "flusher" || s.redis.Password.Reveal() != secretValue ||
+		s.redis.AddrMap["redis-0:6379"] != "127.0.0.1:7000" {
+		t.Errorf("redis settings = %+v", s.redis)
+	}
+	if strings.Contains(fmt.Sprintf("%+v %v", s, s), secretValue) {
+		t.Error("a settings dump shows the Redis password")
+	}
+}
+
 // TestPrometheusURL: SPILLWAY_CP_PROMETHEUS_URL is optional; a value
 // that is not an http(s) URL with a host stops the start (ADR-0059).
 func TestPrometheusURL(t *testing.T) {
@@ -126,6 +155,13 @@ func TestSettingsErrors(t *testing.T) {
 		{"no JWKS URL", with("SPILLWAY_CP_OIDC_JWKS_URL", ""), "SPILLWAY_CP_OIDC_JWKS_URL: required"},
 		{"http:// without dev mode", with("SPILLWAY_CP_DEV_MODE", ""), "accepted only in dev mode (SEC-04)"},
 		{"dev mode not a bool", with("SPILLWAY_CP_DEV_MODE", "yes"), `SPILLWAY_CP_DEV_MODE: "yes" is not true or false`},
+		{"bad Redis address", with("SPILLWAY_CP_REDIS_ADDRS", "redis-0"), `SPILLWAY_CP_REDIS_ADDRS: "redis-0" is not host:port`},
+		{"Redis username without a password", with("SPILLWAY_CP_REDIS_USERNAME", "flusher"), "SPILLWAY_CP_REDIS_USERNAME: set with SPILLWAY_CP_REDIS_PASSWORD"},
+		{"Redis password and file", func() map[string]string {
+			m := with("SPILLWAY_CP_REDIS_PASSWORD_FILE", "/nope")
+			m["SPILLWAY_CP_REDIS_PASSWORD"] = secretValue
+			return m
+		}(), "not both"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := loadSettings(env(tt.env))

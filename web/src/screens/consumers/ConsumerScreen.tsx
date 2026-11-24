@@ -1,5 +1,5 @@
-// A consumer (UI-04, UI-06, CP-15 – CP-17, RL-08, RL-09): its settings,
-// keys, overrides and allow or deny entries. Every change is an identity
+// A consumer (UI-04, UI-06, CP-15 – CP-17, RL-08 – RL-10): its settings and
+// quota usage, keys, overrides, quota overrides and allow or deny entries. Every change is an identity
 // change that applies at once (CP-20), so there is nothing to publish.
 import { useQueryClient } from "@tanstack/react-query";
 import { getRouteApi, Link, useNavigate } from "@tanstack/react-router";
@@ -13,11 +13,13 @@ import { NotFound } from "../../components/states";
 import { DeleteDialog } from "../routes/common";
 import { EntityForm, useFormValues } from "../routes/EntityForm";
 import { AccessListDialog, type Prefill } from "./AccessLists";
-import { APPLIES_AT_ONCE, KEY_ADMIN, LatestConfigNote, useIdentityChoices } from "./common";
+import { APPLIES_AT_ONCE, KEY_ADMIN, LatestConfigNote, useIdentityChoices, when } from "./common";
 import { consumerFields } from "./fields";
 import { KeysSection } from "./Keys";
 import { OverridesSection } from "./Overrides";
-import { consumerKey, useConsumer, type Consumer } from "./queries";
+import { consumerKey, useConsumer, useQuotaUsage, type Consumer } from "./queries";
+import { QUOTA_NOTE, QuotaValue, type QuotaPeriod } from "./quota";
+import { QuotaOverridesSection } from "./QuotaOverrides";
 
 export function NewConsumer() {
   const qc = useQueryClient();
@@ -68,7 +70,7 @@ function ExistingConsumer({ id }: { id: number }) {
   const choices = useIdentityChoices();
   const [notice, setNotice] = useState(search.saved === true);
   const [entry, setEntry] = useState<Prefill | null>(null);
-  const page = (patch: { keys?: string; overrides?: string; override_policy?: undefined }, replace = false) =>
+  const page = (patch: { keys?: string; overrides?: string; quota_overrides?: string; override_policy?: undefined }, replace = false) =>
     void navigate({ to: "/consumers/$id", params: { id: String(id) }, search: { ...search, ...patch }, replace });
   // The settings form starts again from the server's consumer whenever
   // its ETag changes (after a save or a Reload); the sections below it
@@ -87,6 +89,7 @@ function ExistingConsumer({ id }: { id: number }) {
             prefillPolicy={search.override_policy}
             onPrefillDone={() => page({ override_policy: undefined }, true)}
           />
+          <QuotaOverridesSection consumerId={id} cursor={search.quota_overrides} onPage={(q) => page({ quota_overrides: q })} />
           <section aria-labelledby="access-heading">
             <h2 id="access-heading">Allow and deny</h2>
             <p className="muted">
@@ -127,9 +130,9 @@ function ConsumerSettings({ loaded, notice, onSaved, reload }: { loaded: { data:
         <dd>{choices.tenantName(c.tenant_id)}</dd>
         <dt>Plan</dt>
         <dd>{c.plan_id ? choices.planName(c.plan_id) : "The tenant's plan"}</dd>
-        <dt>Quota usage</dt>
-        <dd className="muted">Arrives with quotas in M7 (RL-10)</dd>
+        <QuotaFacts id={c.id} />
       </dl>
+      <p className="muted">{QUOTA_NOTE}</p>
       <div className="actions">
         <ActionButton className="danger" disabledReason={remove.reason} onClick={() => setConfirm(true)}>Delete</ActionButton>
       </div>
@@ -165,6 +168,28 @@ function ConsumerSettings({ loaded, notice, onSaved, reload }: { loaded: { data:
           onClose={() => setConfirm(false)}
         />
       )}
+    </>
+  );
+}
+
+/** Today's and this month's flushed usage against the effective quotas (RL-10). */
+function QuotaFacts({ id }: { id: number }) {
+  const usage = useQuotaUsage([id]);
+  const u = usage.data?.get(id);
+  const period = (label: string, p: QuotaPeriod | undefined) => (
+    <>
+      <dt>{label}</dt>
+      <dd>
+        {usage.isError ? <span className="muted">Unavailable</span>
+          : !p ? <span className="muted">…</span>
+          : <><QuotaValue period={p} label={label} />{p.quota > 0 && <span className="muted"> (flushed {p.flushed_at ? when(p.flushed_at) : "never"})</span>}</>}
+      </dd>
+    </>
+  );
+  return (
+    <>
+      {period("Quota today", u?.daily)}
+      {period("Quota this month", u?.monthly)}
     </>
   );
 }

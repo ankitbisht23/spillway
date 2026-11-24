@@ -4,13 +4,17 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/ankitbisht23/spillway/internal/auth"
 	"github.com/ankitbisht23/spillway/internal/controlplane/live"
+	"github.com/ankitbisht23/spillway/internal/controlplane/quotaflush"
 	"github.com/ankitbisht23/spillway/internal/mtls"
 	"github.com/ankitbisht23/spillway/internal/proxy"
+	"github.com/ankitbisht23/spillway/internal/ratelimit/redis"
 	"github.com/ankitbisht23/spillway/internal/secret"
 )
 
@@ -42,6 +46,13 @@ type settings struct {
 	// stream still serves the Postgres-backed ones; the report's counts
 	// are null.
 	prometheusURL *url.URL
+
+	// The quota flusher's Redis Cluster (RL-10, ADR-0070):
+	// SPILLWAY_CP_REDIS_ADDRS, comma-separated host:port seeds, none
+	// disables the flusher; SPILLWAY_CP_REDIS_USERNAME, and
+	// SPILLWAY_CP_REDIS_PASSWORD or _FILE (SEC-09); SPILLWAY_REDIS_ADDR_MAP,
+	// dev and tests only (ADR-0004).
+	redis quotaflush.Redis
 }
 
 // migrateSettings are what `controlplane migrate` needs (CP-19).
@@ -98,7 +109,31 @@ func loadSettings(getenv func(string) string) (settings, error) {
 			return s, fmt.Errorf("SPILLWAY_CP_PROMETHEUS_URL: %w", err)
 		}
 	}
-	return s, nil
+	return s, s.loadRedis(getenv)
+}
+
+func (s *settings) loadRedis(getenv func(string) string) error {
+	for _, a := range strings.Split(getenv("SPILLWAY_CP_REDIS_ADDRS"), ",") {
+		if a = strings.TrimSpace(a); a == "" {
+			continue
+		}
+		if host, port, err := net.SplitHostPort(a); err != nil || host == "" || port == "" {
+			return fmt.Errorf("SPILLWAY_CP_REDIS_ADDRS: %q is not host:port", a)
+		}
+		s.redis.Addrs = append(s.redis.Addrs, a)
+	}
+	var err error
+	if s.redis.AddrMap, err = redis.ParseAddrMap(getenv(redis.AddrMapEnv)); err != nil {
+		return err
+	}
+	s.redis.Username = getenv("SPILLWAY_CP_REDIS_USERNAME")
+	if s.redis.Password, err = secret.FromEnv(getenv, "SPILLWAY_CP_REDIS_PASSWORD"); err != nil {
+		return err
+	}
+	if s.redis.Username != "" && !s.redis.Password.IsSet() {
+		return errors.New("SPILLWAY_CP_REDIS_USERNAME: set with SPILLWAY_CP_REDIS_PASSWORD (or _FILE) only")
+	}
+	return nil
 }
 
 func loadMigrateSettings(getenv func(string) string) (migrateSettings, error) {

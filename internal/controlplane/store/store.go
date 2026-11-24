@@ -202,6 +202,7 @@ var constraintMessages = map[string]string{
 	"access_lists_consumer_id_fkey": "consumer_id: no such consumer",
 	"overrides_consumer_id_fkey":    "consumer_id: no such consumer",
 	"overrides_standing":            "the consumer has a standing override (no ends_at) for this policy",
+	"overrides_standing_quota":      "the consumer has a standing quota override (no ends_at)",
 }
 
 // writeError turns constraint violations from a create or update into

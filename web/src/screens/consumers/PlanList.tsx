@@ -9,6 +9,7 @@ import { Pager } from "../../components/Pager";
 import { QueryState } from "../../components/QueryState";
 import { Tabs, when } from "./common";
 import { usePlanList, type Plan } from "./queries";
+import { quotasText } from "./quota";
 
 const route = getRouteApi("/plans");
 
@@ -33,20 +34,21 @@ export function PlanList() {
       <Tabs />
       <p className="muted">
         Plans are config: they change with the working set and reach gateways with a publish. A policy with <code>from_plan</code> takes its
-        limits from the consumer's plan (RL-08). Quotas per plan arrive in M7 (RL-10).
+        limits from the consumer's plan (RL-08). Quotas are cost units per UTC day and month, counted per consumer (RL-10).
       </p>
       <QueryState query={list} isEmpty={(d) => d.items.length === 0 && !search.cursor} empty="No plans in the working set.">
         {(d) => (
           <>
             <table className="table">
               <thead>
-                <tr><th scope="col">Name</th><th scope="col">Default limits by policy</th><th scope="col">Updated</th></tr>
+                <tr><th scope="col">Name</th><th scope="col">Default limits by policy</th><th scope="col">Quotas</th><th scope="col">Updated</th></tr>
               </thead>
               <tbody>
                 {d.items.map((p) => (
                   <tr key={p.id}>
                     <th scope="row">{p.name}</th>
                     <td>{defaultLimitsText(p)}</td>
+                    <td>{quotasText(p.quotas)}</td>
                     <td>{when(p.updated_at)}</td>
                   </tr>
                 ))}

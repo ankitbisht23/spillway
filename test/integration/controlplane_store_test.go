@@ -218,6 +218,7 @@ func TestControlPlaneQueriesUseIndexes(t *testing.T) {
 		"DeleteAllRoutes":     "a rollback replaces the working tables",
 		"DeleteAllPolicies":   "a rollback replaces the working tables",
 		"DeleteAllPlans":      "a rollback replaces the working tables",
+		"QuotaConsumers":      "the quota flusher reads every consumer on a plan with quotas or with a quota override, one query every 10 s (ADR-0070)",
 	}
 	queries := sqlcQueries(t)
 	if len(queries) < 40 {

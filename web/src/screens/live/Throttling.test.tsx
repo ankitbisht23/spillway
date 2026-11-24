@@ -135,6 +135,8 @@ describe("Throttling (UI-03, RL-21)", () => {
         http.get("/api/v1/consumers/12", () => HttpResponse.json({ id: 12, tenant_id: 1, name: "c12", status: "active", version: 1, created_at: t, updated_at: t }, { headers: { ETag: '"1"' } })),
         http.get("/api/v1/consumers/12/keys", () => HttpResponse.json({ items: [], next_cursor: null })),
         http.get("/api/v1/overrides", () => HttpResponse.json({ items: [], next_cursor: null })),
+        http.get("/api/v1/quota-overrides", () => HttpResponse.json({ items: [], next_cursor: null })),
+        http.get("/api/v1/quota-usage", () => HttpResponse.json({ items: [] })),
       );
       const { router } = await open(["key-admin"]);
       const actions = await select("AAAAAAAAAAAAAAAAAAAAAA");

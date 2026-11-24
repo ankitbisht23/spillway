@@ -387,6 +387,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/quota-overrides": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List quota overrides (overrides with no policy, RL-10), by id ascending */
+        get: operations["listQuotaOverrides"];
+        put?: never;
+        /** Create a quota override; applies at once with a new identity version (CP-20) */
+        post: operations["createQuotaOverride"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/quota-overrides/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The entity's ID. */
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /** Read a quota override */
+        get: operations["getQuotaOverride"];
+        /** Replace a quota override; applies at once with a new identity version (CP-20) */
+        put: operations["updateQuotaOverride"];
+        post?: never;
+        /** Delete a quota override; applies at once with a new identity version (CP-20) */
+        delete: operations["deleteQuotaOverride"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/quota-usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Flushed daily and monthly quota usage and the effective quotas of up to 50 consumers (RL-10)
+         * @description Usage is what the control plane's flusher last wrote to Postgres, so up to one flush interval (10 s) behind the gateways; the periods are the UTC day and month now. quota is the consumer's effective quota now (its quota override that applies, else its plan's in the latest published config), 0 for none.
+         */
+        get: operations["getQuotaUsage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/access-lists": {
         parameters: {
             query?: never;
@@ -936,12 +996,20 @@ export interface components {
             /** @description Unique; 1-64 characters from [A-Za-z0-9._-]. */
             name: string;
             default_limits?: components["schemas"]["PlanLimits"][];
+            quotas?: components["schemas"]["Quotas"];
             /** Format: int64 */
             readonly version: number;
             /** Format: date-time */
             readonly created_at: string;
             /** Format: date-time */
             readonly updated_at: string;
+        };
+        /** @description Cost units per UTC calendar day and month (RL-10); 0 or absent is no quota for that period. Managed mode only. */
+        Quotas: {
+            /** Format: int64 */
+            daily?: number;
+            /** Format: int64 */
+            monthly?: number;
         };
         PlanLimits: {
             /** @description The policy's name. */
@@ -1041,6 +1109,53 @@ export interface components {
             readonly created_at: string;
             /** Format: date-time */
             readonly updated_at: string;
+        };
+        /** @description Replaces both of a consumer's plan quotas while it applies (RL-10); at most one standing (no ends_at) per consumer. */
+        QuotaOverride: {
+            /** Format: int64 */
+            readonly id: number;
+            /** Format: int64 */
+            consumer_id: number;
+            quotas: components["schemas"]["Quotas"];
+            /** Format: date-time */
+            starts_at?: string | null;
+            /**
+             * Format: date-time
+             * @description Set for a burst grant.
+             */
+            ends_at?: string | null;
+            note?: string | null;
+            /** Format: int64 */
+            readonly version: number;
+            /** Format: date-time */
+            readonly created_at: string;
+            /** Format: date-time */
+            readonly updated_at: string;
+        };
+        QuotaUsagePeriod: {
+            /** @description d<YYYYMMDD> or m<YYYYMM>, UTC. */
+            period: string;
+            /**
+             * Format: int64
+             * @description Cost units flushed; 0 without a flush.
+             */
+            used: number;
+            /**
+             * Format: int64
+             * @description The effective quota now; 0 for none.
+             */
+            quota: number;
+            /**
+             * Format: date-time
+             * @description Null without a flush.
+             */
+            flushed_at: string | null;
+        };
+        QuotaUsage: {
+            /** Format: int64 */
+            consumer_id: number;
+            daily: components["schemas"]["QuotaUsagePeriod"];
+            monthly: components["schemas"]["QuotaUsagePeriod"];
         };
         AccessListEntry: {
             /** Format: int64 */
@@ -1507,6 +1622,13 @@ export interface components {
         OverrideList: {
             items: components["schemas"]["Override"][];
             next_cursor: string | null;
+        };
+        QuotaOverrideList: {
+            items: components["schemas"]["QuotaOverride"][];
+            next_cursor: string | null;
+        };
+        QuotaUsageList: {
+            items: components["schemas"]["QuotaUsage"][];
         };
         AccessListEntryList: {
             items: components["schemas"]["AccessListEntry"][];
@@ -3052,6 +3174,187 @@ export interface operations {
             409: components["responses"]["Conflict"];
             412: components["responses"]["PreconditionFailed"];
             428: components["responses"]["PreconditionRequired"];
+            default: components["responses"]["Error"];
+        };
+    };
+    listQuotaOverrides: {
+        parameters: {
+            query?: {
+                /** @description Page size. */
+                limit?: components["parameters"]["PageLimit"];
+                /** @description The next_cursor of the previous page; opaque. */
+                cursor?: components["parameters"]["PageCursor"];
+                /** @description Only this consumer's overrides. */
+                consumer_id?: components["parameters"]["ConsumerIdFilter"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of quota overrides */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QuotaOverrideList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            default: components["responses"]["Error"];
+        };
+    };
+    createQuotaOverride: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["QuotaOverride"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    ETag: components["headers"]["ETag"];
+                    Location: components["headers"]["Location"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QuotaOverride"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            422: components["responses"]["ValidationFailed"];
+            default: components["responses"]["Error"];
+        };
+    };
+    getQuotaOverride: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The entity's ID. */
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The quota override */
+            200: {
+                headers: {
+                    ETag: components["headers"]["ETag"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QuotaOverride"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Error"];
+        };
+    };
+    updateQuotaOverride: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The entity's ETag, as its GET answered it (CP-14). Missing is 428; any other value than the current one is 412. */
+                "If-Match": components["parameters"]["IfMatch"];
+            };
+            path: {
+                /** @description The entity's ID. */
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["QuotaOverride"];
+            };
+        };
+        responses: {
+            /** @description The replaced quota override */
+            200: {
+                headers: {
+                    ETag: components["headers"]["ETag"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QuotaOverride"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            412: components["responses"]["PreconditionFailed"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            422: components["responses"]["ValidationFailed"];
+            428: components["responses"]["PreconditionRequired"];
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteQuotaOverride: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The entity's ETag, as its GET answered it (CP-14). Missing is 428; any other value than the current one is 412. */
+                "If-Match": components["parameters"]["IfMatch"];
+            };
+            path: {
+                /** @description The entity's ID. */
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            412: components["responses"]["PreconditionFailed"];
+            428: components["responses"]["PreconditionRequired"];
+            default: components["responses"]["Error"];
+        };
+    };
+    getQuotaUsage: {
+        parameters: {
+            query: {
+                /** @description The consumers, 1 to 50; repeat the parameter for each. */
+                consumer_id: number[];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One item per consumer that exists, in the order asked */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QuotaUsageList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
             default: components["responses"]["Error"];
         };
     };

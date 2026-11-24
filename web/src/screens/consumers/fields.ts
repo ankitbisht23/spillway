@@ -54,6 +54,14 @@ export function overrideFields(policies: readonly PublishedPolicy[]): FieldSpec[
   ];
 }
 
+export const QUOTA_OVERRIDE_FIELDS: readonly FieldSpec[] = [
+  { path: "quotas.daily", label: "Daily quota", kind: "int", hint: "Cost units per UTC day; empty or 0: no daily quota. Replaces the plan's (RL-10)." },
+  { path: "quotas.monthly", label: "Monthly quota", kind: "int", hint: "Cost units per UTC month; empty or 0: no monthly quota. Replaces the plan's (RL-10)." },
+  { path: "starts_at", label: "Starts", kind: "datetime", hint: "Your local time; empty: at once." },
+  { path: "ends_at", label: "Ends", kind: "datetime", hint: "Set for a time-boxed burst grant; empty: no end (one standing quota override per consumer)." },
+  { path: "note", label: "Note", kind: "text" },
+];
+
 export const ACCESS_LIST_FIELDS: readonly FieldSpec[] = [
   { path: "action", label: "Action", kind: "select", required: true, options: ["allow", "deny"], emptyLabel: "Choose allow or deny" },
   { path: "subject_type", label: "Subject type", kind: "select", required: true, options: ["key", "consumer", "cidr"], emptyLabel: "Choose key, consumer or CIDR" },

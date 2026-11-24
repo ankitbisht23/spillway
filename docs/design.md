@@ -110,7 +110,7 @@ Gateways keep serving on their last good snapshot if the control plane is down; 
 5. Authenticate (API key or JWT); resolve consumer, tenant and plan.
 6. Apply key and consumer allow and deny lists (RL-09).
 7. Evaluate the other local limiters (concurrency, local-only policies).
-8. Evaluate global limiters in Redis: the tenant-slot script (tenant → consumer → route levels), then the global level only if that allows (RL-14); multi-window, cost-weighted.
+8. Evaluate global limiters: the deny cache and token leases first (RL-19, RL-18), then in Redis the tenant-slot script (tenant → consumer → route levels and the consumer's quotas, RL-10), then the global level only if that allows (RL-14); multi-window, cost-weighted.
 9. Check the upstream circuit breaker; pick an endpoint via the load balancer.
 10. Proxy with per-try timeout; retries within the upstream’s retry budget.
 11. Add RateLimit headers; record metrics, span and access log.
@@ -201,7 +201,7 @@ Limits are enforced per policy across all replicas through atomic Redis scripts;
 - **RL-07** (M3) Cost-based limiting: a route declares a cost (default 1) deducted per request.
 - **RL-08** (M5) Plans (free, pro, enterprise) set default limits per policy (`default_limits` keyed by policy); a policy with `from_plan: true` (in place of `limits`) takes the consumer’s plan limits for that policy. Per-consumer overrides and time-boxed burst grants (overrides with an end time) take precedence; overrides are keyed by (consumer, policy) and allowed on consumer- and route-level policies only.
 - **RL-09** (M5) Allowlists and denylists (`access_lists`) by key, consumer or CIDR, evaluated before limits: the CIDR denylist runs before authentication, key and consumer lists right after it (Request pipeline). Changes are identity changes (CP-20).
-- **RL-10** (M7) Quotas (daily, monthly; UTC calendar days and months) are set per plan (`quotas: { daily, monthly }`, counted in route cost units), with per-consumer overrides, and counted in Redis per consumer and period. A control-plane flusher, one at a time under a Postgres advisory lock, reads the counters every 10 s and writes absolute values (`used = GREATEST(used, $n)`), so a repeated or late flush never double-counts. A per-tenant epoch marker detects lost Redis data: when it is missing, the flusher re-seeds that tenant’s counters from Postgres before counting resumes, and until then its quota checks follow the policy’s failure mode. Maximum under-count = one flush interval.
+- **RL-10** (M7) Quotas (daily, monthly; UTC calendar days and months) are set per plan (`quotas: { daily, monthly }`, counted in route cost units), with per-consumer overrides, and counted in Redis per consumer and period. A control-plane flusher, one at a time under a Postgres advisory lock, reads the counters every 10 s and writes absolute values (`used = GREATEST(used, $n)`), so a repeated or late flush never double-counts. A per-tenant epoch marker detects lost Redis data: when it is missing, the flusher re-seeds that tenant’s counters from Postgres before counting resumes, and until then its quota checks follow the failure modes of the policies checked in the same tenant-slot call (fail-closed if any enforce policy there is, otherwise not enforced; fail-open when there is none). Counts lost with Redis are at most one flush interval's.
 
 ### Distributed correctness
 
@@ -284,7 +284,7 @@ A React + TypeScript single-page app over the admin API covers operating (traffi
 | Throttling | Top throttled keys (heavy hitters, RL-21), deny rate per policy | Add override, block key, open policy |
 | Policies | Policies with level, mode, match, limits | Create and edit with validation, diff vs current, shadow report, promote shadow → enforce |
 | Routes & upstreams | Route table, endpoints, health, ejections, circuit state | Edit routes, drain an endpoint |
-| Consumers & keys | Tenants, consumers, plans, keys (prefix, created, expires, revoked); quota-usage column arrives with RL-10 in M7 | Issue, rotate, revoke keys; set overrides; edit allow and deny lists |
+| Consumers & keys | Tenants, consumers, plans, keys (prefix, created, expires, revoked); quota usage today and this month (RL-10) | Issue, rotate, revoke keys; set overrides; edit allow and deny lists |
 | Replicas | Gateway replicas, applied config and identity versions, staleness, last heartbeat | View only |
 | History | Config versions, diffs, audit log | Roll back to a version |
 | Playground (demo mode) | Allowed vs denied per tenant, `RateLimit` headers, token-bucket visual, live over SSE | Pick tenant and rate, fire traffic (generated server-side, UI-07), run a scenario |
@@ -365,7 +365,7 @@ Four contracts carry the design: the Redis key and script contract, the Postgres
 | Sliding window | `rl:v1:{t:<tenant_id>}:<policy_id>:<period_ms>:<digest>` | hash `{w, cur, prev}` (window start, current and previous counts), rotated in the script using `TIME` | 2 × window |
 | Global level | `rl:v1:{g:<policy_id>}:<period_ms>:<digest>` | as above, by algorithm | as above |
 | No tenant on the request | `rl:v1:{k:<digest>}:<policy_id>:<period_ms>` | as above, by algorithm | as above |
-| Quota | `q:v1:{t:<tenant_id>}:<consumer_id>:<period>` | count; `<period>` is the UTC day or month | period + 1 day |
+| Quota | `q:v1:{t:<tenant_id>}:<consumer_id>:<period>` | count of cost units; `<period>` is `d<YYYYMMDD>` or `m<YYYYMM>` (UTC) | the rest of the period + 1 day, set on every write |
 | Quota epoch | `q:v1:{t:<tenant_id>}:epoch` | seed epoch, set when the flusher seeds the tenant’s counters; quota checks count only while it exists (RL-10) | longest quota period + 1 day, refreshed on every flush |
 
 `<digest>` is base64url (unpadded, 22 characters) of the first 16 bytes of SHA-256 of the filled key template: fixed length, and raw API keys or header values never appear in key names. Keys use `policy_id`, so renaming a policy keeps its counters. In static mode (before M5) `policy_id` is the policy name; from M5 the control plane assigns stable IDs, so counters reset once when a deployment moves from static to managed config. Sliding-window state rotates inside its hash, so no limiter key name is derived from time.
@@ -373,13 +373,16 @@ Four contracts carry the design: the Redis key and script contract, the Postgres
 ### Limiter script contract
 
 ```
-KEYS:    one key per limit in this slot
-ARGV:    cost, then per limit: level, mode, algorithm, rate, period_ms, burst (0 unless GCRA)
+KEYS:    one key per limit in this slot, then the quota epoch key when the call has quota limits (ADR-0070)
+ARGV:    cost, then per limit: level, mode, algorithm, rate, period_ms, burst (0 unless GCRA),
+         lease_k (0 = strict), group (1-based index of the limit's policy within the call),
+         period_start_ms, period_end_ms (UTC bounds of a quota limit's period; 0 otherwise, ADR-0070)
 RETURNS: allowed (0|1), denying_level, denying_limit, remaining, reset_after_ms,
-         retry_after_ms, shadow_would_deny (bitmask per limit), now_us
+         retry_after_ms, shadow_would_deny (bitmask per limit), now_us,
+         granted (per limit: units written), quota_unseeded (0|1, ADR-0070)
 ```
 
-The decision is the AND of the enforce limits. Within one call every limit is checked before any is written: enforce limits are written only if the request is allowed, and a shadow limit only if the request is allowed and that shadow limit would allow it, so an in-slot deny never needs a refund. A refund (RL-14) is the same script called with negative `cost`: it makes no decision and reverses only the limits the original call wrote, shadow limits included. `now_us` is the `TIME` the script used; the accuracy harness slides its windows over it. The tenant-slot call carries the tenant, consumer and route levels; the global level is a second call to the same script in its own slot (RL-14). GCRA and sliding-window maths, with t from Redis `TIME`:
+The decision is the AND of the enforce limits. Within one call every limit is checked before any is written: enforce limits are written only if the request is allowed, and a shadow limit only if the request is allowed and that shadow limit would allow it, so an in-slot deny never needs a refund. A lease group writes its grant g = min(k, available) instead of the cost; quota limits (algorithm `quota`) count cost units against the period's quota and are skipped, with `quota_unseeded` = 1, when the tenant's epoch is missing or `TIME` is outside the period. A refund (RL-14) is the same script called with negative `cost`: it makes no decision and reverses only the limits the original call wrote, shadow limits included. `now_us` is the `TIME` the script used; the accuracy harness slides its windows over it. The tenant-slot call carries the tenant, consumer and route levels; the global level is a second call to the same script in its own slot (RL-14). GCRA and sliding-window maths, with t from Redis `TIME`:
 
 ```latex
 \begin{aligned}
@@ -404,8 +407,8 @@ T &= \text{period} / \text{rate}, \qquad \tau = T \cdot \text{burst} \\
 | `tenants` / `consumers` | id, name, plan\_id, status, version / id, tenant\_id, name, plan\_id (null = the tenant’s plan), status, version |
 | `api_keys` | id, consumer\_id, prefix, hash, created\_at, expires\_at, revoked\_at, rotated\_from, version |
 | `access_lists` | id, action (allow, deny), subject\_type (key, consumer, cidr), subject, note, created\_at, version |
-| `overrides` | id, consumer\_id, policy\_id (null for a quota override), limits, quotas, starts\_at, ends\_at (a burst grant has an end), version |
-| `quota_usage` | consumer\_id, period, used (written as `GREATEST(used, $n)`), flushed\_at |
+| `overrides` | id, consumer\_id, policy\_id (null for a quota override, which has quotas and empty limits), limits, quotas, starts\_at, ends\_at (a burst grant has an end), version |
+| `quota_usage` | consumer\_id, period (`d<YYYYMMDD>` or `m<YYYYMM>`, UTC), used (written as `GREATEST(used, $n)`), flushed\_at |
 | `replicas` | id, config\_version, identity\_version, schema version, watch\_connected, last\_heartbeat\_at, last\_synced\_at, rejected\_config\_version, rejected\_reason |
 | `replica_versions` | replica\_id, stream, version, first\_reported\_at |
 | `heavy_hitters` | window\_start, policy\_id, key\_digest, consumer\_id, api\_key\_id, denied, shadow\_denied (pruned after 7 days) |
@@ -471,6 +474,9 @@ plans:
 | --- | --- | --- |
 | GET, POST | `/api/v1/{routes,upstreams,policies,plans,tenants,consumers,overrides,access-lists}` | List, create |
 | GET, PUT, DELETE | `/api/v1/<entity>/{id}` | Read, update (`If-Match`), delete |
+| GET, POST | `/api/v1/quota-overrides` | List, create quota overrides (overrides with no policy) |
+| GET, PUT, DELETE | `/api/v1/quota-overrides/{id}` | Read, update (`If-Match`), delete |
+| GET | `/api/v1/quota-usage?consumer_id=` | Flushed daily and monthly quota usage and the effective quotas, up to 50 consumers |
 | GET | `/api/v1/consumers/{id}/keys` | List keys: prefix, created, expires, revoked; never the key |
 | POST | `/api/v1/consumers/{id}/keys` | Issue a key (returned once) |
 | POST | `/api/v1/keys/{id}/rotate`, `/revoke` | Rotate, revoke |
@@ -702,7 +708,7 @@ Exit (`make verify-m6`): a new policy goes shadow → reviewed → enforced → 
 ### M7 Performance and hardening · est. 3 weeks
 
 - [x] Token leasing; deny cache in enforce mode only, holding entries for min(retry-after, 10 s) and cleared on any config or identity version change (RL-18, RL-19)
-- [ ] Quotas with the control-plane flusher: advisory lock, absolute writes, epoch marker and re-seed, UTC days and months; quota-usage column on Consumers & keys (RL-10)
+- [x] Quotas with the control-plane flusher: advisory lock, absolute writes, epoch marker and re-seed, UTC days and months; quota-usage column on Consumers & keys (RL-10)
 - [ ] pprof-driven pass to cut hot-path allocations
 - [ ] Nightly schedule and regression gate for `bench.yml`, against the same-arch baseline and the last release’s baseline, same CPU model only (NFR-05)
 - [ ] Load tests against every NFR row (scaling on the CI runner, tenant isolation from loadgen’s per-tenant histograms); chaos suite; noisy-neighbour test (NFR-02, NFR-07, NFR-10, NFR-11, NFR-14, NFR-15)
@@ -814,7 +820,7 @@ The largest risks are Redis on the hot path and scope spread across three system
 
 - [x] Project name and Go module path → `spillway`, `github.com/ankitbisht23/spillway` (ADR-0001)
 - [ ] Concurrency limits: local per replica only, or also a global variant with leased slots in Redis?
-- [ ] Quotas: is up to 10 s of under-count after a Redis loss acceptable?
+- [x] Quotas: is up to 10 s of under-count after a Redis loss acceptable? → yes: lost counts are bounded by one 10 s flush interval; the ~1 s unseeded window follows the failure mode (ADR-0070)
 - [ ] Should the Envoy-compatible rate-limit service move from stretch into M7?
 - [ ] Is an always-on hosted demo worth AWS or Google Cloud credits, or are tunnel + video enough?
 

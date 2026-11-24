@@ -1,6 +1,7 @@
 // Consumers (UI-06, D9): 50 a page by cursor, filtered by tenant or an
-// exact name (ADR-0036), each with its tenant, plan and status. Quota
-// usage arrives with quotas in M7 (RL-10).
+// exact name (ADR-0036), each with its tenant, plan, status and quota
+// usage today and this month, from one quota-usage call per page (RL-10,
+// ADR-0070).
 import { getRouteApi, Link, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 
@@ -9,7 +10,8 @@ import { ActionButton } from "../../components/ActionButton";
 import { Pager } from "../../components/Pager";
 import { QueryState } from "../../components/QueryState";
 import { Tabs, useIdentityChoices } from "./common";
-import { useConsumerList } from "./queries";
+import { useConsumerList, useQuotaUsage, type Consumer } from "./queries";
+import { QUOTA_NOTE, QuotaValue } from "./quota";
 
 const route = getRouteApi("/consumers");
 
@@ -50,7 +52,7 @@ export function ConsumerList() {
           <button type="submit" className="secondary">Find</button>
         </form>
       </div>
-      <p className="muted">Identity changes apply at once. Quota usage arrives with quotas in M7 (RL-10).</p>
+      <p className="muted">Identity changes apply at once. {QUOTA_NOTE}</p>
       <QueryState
         query={list}
         isEmpty={(d) => d.items.length === 0 && !search.cursor}
@@ -63,25 +65,40 @@ export function ConsumerList() {
             <table className="table">
               <thead>
                 <tr>
-                  <th scope="col">Name</th><th scope="col">Tenant</th><th scope="col">Plan</th><th scope="col">Status</th><th scope="col">JWT subject</th>
+                  <th scope="col">Name</th><th scope="col">Tenant</th><th scope="col">Plan</th><th scope="col">Status</th>
+                  <th scope="col">Quota (today · month)</th><th scope="col">JWT subject</th>
                 </tr>
               </thead>
-              <tbody>
-                {d.items.map((c) => (
-                  <tr key={c.id}>
-                    <th scope="row"><Link to="/consumers/$id" params={{ id: String(c.id) }}>{c.name}</Link></th>
-                    <td>{choices.tenantName(c.tenant_id)}</td>
-                    <td>{c.plan_id ? choices.planName(c.plan_id) : <span className="muted">The tenant's plan</span>}</td>
-                    <td>{c.status}</td>
-                    <td>{c.jwt_subject ? <code>{c.jwt_subject}</code> : "–"}</td>
-                  </tr>
-                ))}
-              </tbody>
+              <ConsumerRows items={d.items} choices={choices} />
             </table>
             <Pager cursor={search.cursor} nextCursor={d.next_cursor} onNavigate={(c) => void navigate({ to: "/consumers", search: { ...search, cursor: c } })} />
           </>
         )}
       </QueryState>
     </section>
+  );
+}
+
+function ConsumerRows({ items, choices }: { items: readonly Consumer[]; choices: ReturnType<typeof useIdentityChoices> }) {
+  const usage = useQuotaUsage(items.map((c) => c.id));
+  const quota = (id: number) => {
+    if (usage.isError) return <span className="muted">Unavailable</span>;
+    const u = usage.data?.get(id);
+    if (!u) return <span className="muted">…</span>;
+    return <><QuotaValue period={u.daily} label="Today" /> · <QuotaValue period={u.monthly} label="This month" /></>;
+  };
+  return (
+    <tbody>
+      {items.map((c) => (
+        <tr key={c.id}>
+          <th scope="row"><Link to="/consumers/$id" params={{ id: String(c.id) }}>{c.name}</Link></th>
+          <td>{choices.tenantName(c.tenant_id)}</td>
+          <td>{c.plan_id ? choices.planName(c.plan_id) : <span className="muted">The tenant's plan</span>}</td>
+          <td>{c.status}</td>
+          <td>{quota(c.id)}</td>
+          <td>{c.jwt_subject ? <code>{c.jwt_subject}</code> : "–"}</td>
+        </tr>
+      ))}
+    </tbody>
   );
 }

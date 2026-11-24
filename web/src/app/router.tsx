@@ -108,15 +108,15 @@ const consumersRoute = createRoute({
 });
 const newConsumerRoute = createRoute({ getParentRoute: () => rootRoute, path: "/consumers/new", component: NewConsumer });
 /**
- * A consumer: keys and overrides each have their page's cursor; saved
+ * A consumer: keys, overrides and quota overrides each have their page's cursor; saved
  * marks one the form just created. Throttling's Add override opens it
  * with override_policy, the policy to prefill an override for.
  */
 const consumerRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/consumers/$id",
-  validateSearch: (s: Record<string, unknown>): { override_policy?: number; keys?: string; overrides?: string; saved?: true } => ({
-    override_policy: id(s.override_policy), keys: str(s.keys), overrides: str(s.overrides), ...savedSearch(s),
+  validateSearch: (s: Record<string, unknown>): { override_policy?: number; keys?: string; overrides?: string; quota_overrides?: string; saved?: true } => ({
+    override_policy: id(s.override_policy), keys: str(s.keys), overrides: str(s.overrides), quota_overrides: str(s.quota_overrides), ...savedSearch(s),
   }),
   component: ConsumerScreen,
 });

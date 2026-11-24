@@ -19,6 +19,8 @@ export type Plan = components["schemas"]["Plan"];
 export type ApiKey = components["schemas"]["ApiKey"];
 export type Override = components["schemas"]["Override"];
 export type AccessListEntry = components["schemas"]["AccessListEntry"];
+export type QuotaOverride = components["schemas"]["QuotaOverride"];
+export type QuotaUsage = components["schemas"]["QuotaUsage"];
 
 /** A new key as the dialogs see it: everything but the key itself. */
 export type NewKey = Omit<components["schemas"]["IssuedApiKey"], "key">;
@@ -28,6 +30,7 @@ export const keysKey = (consumerId: number) => ["consumers", consumerId, "keys"]
 export const tenantKey = (id: number) => ["tenants", id] as const;
 export const overrideKey = (id: number) => ["overrides", id] as const;
 export const accessListKey = (id: number) => ["access-lists", id] as const;
+export const quotaOverrideKey = (id: number) => ["quota-overrides", id] as const;
 
 export interface Page {
   cursor?: string;
@@ -88,6 +91,32 @@ export function useOverrides(consumerId: number, cursor?: string) {
 
 export function useOverride(id: number) {
   return useQuery({ queryKey: overrideKey(id), queryFn: () => call(api.GET("/overrides/{id}", { params: { path: { id } } })) });
+}
+
+export function useQuotaOverrides(consumerId: number, cursor?: string) {
+  return useQuery({
+    queryKey: ["quota-overrides", "list", consumerId, cursor ?? ""],
+    queryFn: async () => (await call(api.GET("/quota-overrides", { params: { query: { limit: LIMIT, cursor, consumer_id: consumerId } } }))).data,
+  });
+}
+
+export function useQuotaOverride(id: number) {
+  return useQuery({ queryKey: quotaOverrideKey(id), queryFn: () => call(api.GET("/quota-overrides/{id}", { params: { path: { id } } })) });
+}
+
+/**
+ * The flushed quota usage and effective quotas of up to 50 consumers, by
+ * consumer ID (RL-10): one request for a page of the consumer list.
+ */
+export function useQuotaUsage(ids: readonly number[]) {
+  return useQuery({
+    queryKey: ["quota-usage", ...ids],
+    enabled: ids.length > 0,
+    queryFn: async () => {
+      const items = (await call(api.GET("/quota-usage", { params: { query: { consumer_id: [...ids] } } }))).data.items;
+      return new Map(items.map((u) => [u.consumer_id, u]));
+    },
+  });
 }
 
 export type AccessAction = AccessListEntry["action"];

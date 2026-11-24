@@ -6,7 +6,7 @@ import { http, HttpResponse } from "msw";
 
 import { mockConfig } from "../../test/live";
 import { server } from "../../test/server";
-import type { AccessListEntry, ApiKey, Consumer, Override } from "./queries";
+import type { AccessListEntry, ApiKey, Consumer, Override, QuotaOverride, QuotaUsage } from "./queries";
 
 /** A key in the real format, made at run time (.gitleaks.toml): never a real key. */
 const fakeKey = (prefix: string, fill: string) => `spw_${prefix}_${fill.repeat(43)}`;
@@ -29,6 +29,28 @@ export const override = (over: Partial<Override> = {}): Override => ({
   id: 30, consumer_id: 7, policy_id: 4, limits: [{ rate: 500, period: "1m" }], starts_at: null, ends_at: null, note: null, version: 2,
   created_at: T0, updated_at: T0, ...over,
 });
+
+export const quotaOverride = (over: Partial<QuotaOverride> = {}): QuotaOverride => ({
+  id: 50, consumer_id: 7, quotas: { daily: 1000, monthly: 0 }, starts_at: null, ends_at: null, note: null, version: 3, created_at: T0, updated_at: T0, ...over,
+});
+
+/** Consumer id's usage: daily and monthly used of their quotas (0: none), flushed at T0 when used. */
+export const usage = (id: number, daily: [number, number], monthly: [number, number]): QuotaUsage => ({
+  consumer_id: id,
+  daily: { period: "d20261116", used: daily[0], quota: daily[1], flushed_at: daily[0] > 0 ? T0 : null },
+  monthly: { period: "m202611", used: monthly[0], quota: monthly[1], flushed_at: monthly[0] > 0 ? T0 : null },
+});
+
+/** Serves /quota-usage from items, recording each request's consumer_id values. */
+export function mockUsage(items: QuotaUsage[]): string[][] {
+  const asked: string[][] = [];
+  server.use(http.get("/api/v1/quota-usage", ({ request }) => {
+    const ids = new URL(request.url).searchParams.getAll("consumer_id");
+    asked.push(ids);
+    return HttpResponse.json({ items: items.filter((u) => ids.includes(String(u.consumer_id))) });
+  }));
+  return asked;
+}
 
 export const entry = (over: Partial<AccessListEntry> = {}): AccessListEntry => ({
   id: 40, action: "deny", subject_type: "cidr", cidr: "203.0.113.0/24", api_key_id: null, consumer_id: null, note: null, version: 3,
@@ -60,11 +82,15 @@ const json = async (r: Request): Promise<unknown> => {
 
 /**
  * Serves consumer 7 (ETag "<version>"), its keys (issue, rotate and revoke
- * change them) and overrides, tenant acme and the latest config. answer, if
+ * change them), overrides, quota overrides and quota usage (120 of a daily
+ * 1,000, no monthly quota), tenant acme and the latest config. answer, if
  * set, answers every write instead.
  */
-export function mockConsumer({ keys = [apiKey()], overrides = [] as Override[], answer }: { keys?: ApiKey[]; overrides?: Override[]; answer?: () => Response } = {}) {
+export function mockConsumer({ keys = [apiKey()], overrides = [] as Override[], quotaOverrides = [] as QuotaOverride[], answer }: {
+  keys?: ApiKey[]; overrides?: Override[]; quotaOverrides?: QuotaOverride[]; answer?: () => Response;
+} = {}) {
   mockConfig(SNAPSHOT, ["acme", "globex"]);
+  mockUsage([usage(7, [120, 1000], [0, 0])]);
   const sent: Sent[] = [];
   let now = consumer();
   let list = keys;
@@ -106,6 +132,11 @@ export function mockConsumer({ keys = [apiKey()], overrides = [] as Override[], 
       return HttpResponse.json(revoked);
     }),
     http.get("/api/v1/overrides", () => HttpResponse.json({ items: overrides, next_cursor: null })),
+    http.get("/api/v1/quota-overrides", () => HttpResponse.json({ items: quotaOverrides, next_cursor: null })),
+    http.get("/api/v1/quota-overrides/:id", ({ params }) => {
+      const o = quotaOverrides.find((x) => x.id === Number(params.id));
+      return o ? HttpResponse.json(o, { headers: { ETag: `"${o.version}"` } }) : HttpResponse.json({ code: "not_found", error: "no such quota override" }, { status: 404 });
+    }),
   );
   return { sent };
 }

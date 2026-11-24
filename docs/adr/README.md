@@ -85,3 +85,4 @@ Decisions that shape Spillway and are not obvious from the code or from docs/des
 | [0074](0074-nfr-load-chaos-suite-and-make-verify-m7.md) | NFR load tests, the chaos suite and make verify-m7 | Accepted | 2026-11-24 |
 | [0075](0075-kind-cluster-helm-chart-and-observability-as-code.md) | kind cluster, Helm chart and observability as code | Accepted | 2026-11-24 |
 | [0076](0076-release-and-supply-chain.md) | Release v1.0.0 and the supply chain | Accepted | 2026-11-24 |
+| [0077](0077-quotas-implementation-details.md) | Quotas: implementation details | Accepted | 2026-11-25 |
