@@ -131,6 +131,9 @@ services:
       # Prometheus (UI-03, ADR-0059). Not a secret; while Prometheus is
       # down, those subscriptions get error events.
       SPILLWAY_CP_PROMETHEUS_URL: http://prometheus:9090
+      # The quota flusher's Redis Cluster, the gateways' (RL-10, ADR-0070);
+      # the active replica flushes counters and re-seeds lost ones.
+      SPILLWAY_CP_REDIS_ADDRS: redis-0:6379,redis-1:6379,redis-2:6379,redis-3:6379,redis-4:6379,redis-5:6379
     # REST, admin and gRPC on all interfaces inside the network, so
     # gateways and Prometheus reach them; published on 127.0.0.1 only
     # (SEC-02, docs/ports.md).
@@ -138,6 +141,7 @@ services:
     volumes: ["./deploy/stream-certs/controlplane:/etc/spillway-stream:ro"]
     depends_on:
       migrate: { condition: service_completed_successfully }
+      redis-init: { condition: service_completed_successfully } # start order only; the flusher retries every round
       # Not needed to start (readiness never waits for the keys), but its
       # first key fetch then succeeds instead of being retried 30 s later.
       keycloak: { condition: service_healthy }

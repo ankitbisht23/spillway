@@ -216,9 +216,10 @@ func noSecretsLogged(t *testing.T, p **proc) {
 
 // startCP runs a control plane on database db with its gRPC listener at
 // grpcAddr (mTLS with a certificate of the stream CA for 127.0.0.1) and
-// bearer tokens from iss; it waits until it is ready. Its database
+// bearer tokens from iss, with extra settings (NAME=value) if any; it waits
+// until it is ready. Its database
 // password comes from a file (SEC-09).
-func startCP(t *testing.T, name, db, grpcAddr string, iss *testIssuer) *hostCP {
+func startCP(t *testing.T, name, db, grpcAddr string, iss *testIssuer, extra ...string) *hostCP {
 	t.Helper()
 	httpAddr, admin := freeAddr(t), freeAddr(t)
 	certs := issueStream(t, testcert.Leaf{DNSNames: []string{"localhost"}, IPs: []net.IP{net.IPv4(127, 0, 0, 1)}})
@@ -228,7 +229,7 @@ func startCP(t *testing.T, name, db, grpcAddr string, iss *testIssuer) *hostCP {
 	}
 	var p *proc
 	noSecretsLogged(t, &p)
-	p = start(t, name, binary(t, "controlplane"), admin, []string{
+	p = start(t, name, binary(t, "controlplane"), admin, append([]string{
 		"SPILLWAY_CP_DATABASE_URL=" + pgURL(t, "spillway_app", db),
 		"SPILLWAY_CP_DATABASE_PASSWORD_FILE=" + pw,
 		"SPILLWAY_CP_HEAVY_HITTER_SECRET=" + hitterSecret,
@@ -242,7 +243,7 @@ func startCP(t *testing.T, name, db, grpcAddr string, iss *testIssuer) *hostCP {
 		"SPILLWAY_CP_OIDC_ISSUER=" + testIssuerURL,
 		"SPILLWAY_CP_OIDC_JWKS_URL=" + iss.jwks.URL,
 		"SPILLWAY_CP_DEV_MODE=true",
-	})
+	}, extra...))
 	eventually(t, name+" ready", func() bool { return status(p.admin+"/readyz") == 200 })
 	return &hostCP{proc: p, rest: cpClient{t: t, base: "http://" + httpAddr, token: iss.token(t, "admin-1", "test-admin", "admin")}}
 }

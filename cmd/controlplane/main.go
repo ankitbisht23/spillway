@@ -8,6 +8,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -25,6 +27,7 @@ import (
 	"github.com/ankitbisht23/spillway/internal/auth"
 	"github.com/ankitbisht23/spillway/internal/controlplane/api"
 	"github.com/ankitbisht23/spillway/internal/controlplane/live"
+	"github.com/ankitbisht23/spillway/internal/controlplane/quotaflush"
 	"github.com/ankitbisht23/spillway/internal/controlplane/store"
 	"github.com/ankitbisht23/spillway/internal/controlplane/stream"
 	"github.com/ankitbisht23/spillway/internal/controlplane/webui"
@@ -182,6 +185,17 @@ func serve(log *slog.Logger, getenv func(string) string) error {
 
 	// The election runs until shutdown starts, then steps down: streams
 	// close, the gRPC listener closes and the lock is released.
+	// The quota flusher runs on the active replica only (RL-10, CP-22,
+	// ADR-0070), with its own Redis client.
+	var flusher *quotaflush.Flusher
+	if len(s.redis.Addrs) > 0 {
+		rdb := quotaflush.NewClient(s.redis)
+		defer func() { _ = rdb.Close() }()
+		host, _ := os.Hostname()
+		flusher = quotaflush.New(st, rdb, cmp.Or(host, "controlplane"), reg, log)
+	} else {
+		log.Warn("SPILLWAY_CP_REDIS_ADDRS is not set: the quota flusher is off, so quota usage is not flushed and lost Redis data is not re-seeded")
+	}
 	ectx, stopElection := context.WithCancel(context.Background())
 	elected := make(chan struct{})
 	go func() {
@@ -189,6 +203,12 @@ func serve(log *slog.Logger, getenv func(string) string) error {
 		(&stream.Elector{
 			Open: func(ctx context.Context) (stream.Lock, error) { return st.OpenLockSession(ctx) },
 			Active: func(ctx context.Context) {
+				var flushing sync.WaitGroup
+				if flusher != nil {
+					fctx, stopFlusher := context.WithCancel(ctx)
+					defer func() { stopFlusher(); flushing.Wait() }()
+					flushing.Go(func() { flusher.Run(fctx) })
+				}
 				if err := stream.Serve(ctx, s.grpcAddr, streamCerts.ServerConfig(), st, st, log, func(d int) { streams.Add(float64(d)) }); err != nil {
 					log.Error("config stream failed", "err", err)
 				}
