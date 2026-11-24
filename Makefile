@@ -294,12 +294,15 @@ verify-m5: dev
 verify-m6: dev
 	@test/verify/m6.sh
 
-# Accuracy harness v1 (NFR-06, ADR-0021): gateway-1 … gateway-$(REPLICAS)
-# (1 to 5) run test/accuracy/gateway.yaml and cmd/accuracy drives them from
-# the compose network for about 3 minutes. Prints its JSON report.
+# Accuracy harness v1 (NFR-06, NFR-07, ADR-0021, ADR-0069): gateway-1 …
+# gateway-$(REPLICAS) (1 to 5) run test/accuracy/gateway.yaml, or with
+# MODE=batched test/accuracy/batched.yaml (lease_k 10, over-admission up to
+# REPLICAS x 10 allowed), and cmd/accuracy drives them from the compose
+# network for about 3 minutes. Prints its JSON report.
 REPLICAS ?= 3
+MODE ?= strict
 accuracy: dev
-	@test/accuracy/run.sh $(REPLICAS)
+	@test/accuracy/run.sh $(REPLICAS) $(MODE)
 
 # Redis chaos tests (NFR-13, ADR-0021): all six nodes paused under load, and
 # the primary owning slot 0 killed under load. Each prints its checks with

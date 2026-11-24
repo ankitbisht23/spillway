@@ -4,10 +4,13 @@
 // patterns one after another (open model, like loadgen), and checks every
 // admission at the Spillway-Decision-Time the gateway echoed against GCRA's
 // bound: per key, admitted in any closed window w ≤ burst + w·rate/period.
-// It prints its report as JSON on stdout and one summary line per pattern on
+// In batched mode (-lease-k k, NFR-07, ADR-0069) the gateways run the
+// policy with lease_k k and a window may hold up to replicas × k more. It
+// prints its report as JSON on stdout and one summary line per pattern on
 // stderr, and exits 0 on PASS, 1 on FAIL and 2 on bad flags.
 //
 //	accuracy -replicas 3
+//	accuracy -replicas 3 -lease-k 10 -config-version 32
 package main
 
 import (
@@ -57,6 +60,8 @@ type options struct {
 	duration      time.Duration
 	configVersion int
 	timeout       time.Duration
+	leaseK        int64 // the policy's lease_k: 0 strict, else batched
+
 	// Set by tests; from replicas and every pattern otherwise.
 	gateways []gateway
 	patterns []string
@@ -71,6 +76,7 @@ func parseFlags(args []string, stderr io.Writer) (options, error) {
 	fs.DurationVar(&o.duration, "duration", time.Minute, "length of each pattern's run, whole seconds")
 	fs.IntVar(&o.configVersion, "config-version", 31, "version of test/accuracy/gateway.yaml, which every gateway must run first")
 	fs.DurationVar(&o.timeout, "timeout", 10*time.Second, "per-request timeout")
+	fs.Int64Var(&o.leaseK, "lease-k", 0, "the policy's lease_k in the gateways' config: 0 strict; k > 0 batched, which allows replicas × k over the bound")
 	if err := fs.Parse(args); err != nil {
 		return o, err // printed by fs, with the usage
 	}
@@ -86,6 +92,8 @@ func parseFlags(args []string, stderr io.Writer) (options, error) {
 		err = errors.New("-duration: must be whole seconds, at least 1s")
 	case o.timeout <= 0:
 		err = errors.New("-timeout: must be positive")
+	case o.leaseK < 0:
+		err = errors.New("-lease-k: must not be negative")
 	}
 	if err != nil {
 		_, _ = fmt.Fprintln(stderr, "accuracy:", err)
@@ -124,28 +132,30 @@ func runWith(ctx context.Context, o options, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stderr, "accuracy:", err)
 		return 1
 	}
-	r := report{Replicas: len(o.gateways), Keys: o.keys, DurationS: o.duration.Seconds(), Pass: true}
-	r.Policy.Algorithm, r.Policy.Rate, r.Policy.PeriodMS, r.Policy.Burst = "gcra", policy.rate, policy.period.Milliseconds(), policy.burst
+	r := report{Replicas: len(o.gateways), Keys: o.keys, DurationS: o.duration.Seconds(), Mode: "strict", Pass: true}
+	r.Policy.Algorithm, r.Policy.Rate, r.Policy.PeriodMS, r.Policy.Burst, r.Policy.LeaseK = "gcra", policy.rate, policy.period.Milliseconds(), policy.burst, o.leaseK
+	if o.leaseK > 0 {
+		r.Mode = "batched"
+	}
+	r.AllowedOverAdmission = int64(len(o.gateways)) * o.leaseK // NFR-07: over-admission ≤ replicas × k
 	for _, p := range o.patterns {
 		keys := make([]string, o.keys)
 		for k := range keys {
 			keys[k] = fmt.Sprintf("%s-%s-%d", p, runID, k) // fresh keys: no state carries over
 		}
-		before, err := h.redisErrors(ctx)
+		before, err := h.counters(ctx)
 		if err != nil {
 			_, _ = fmt.Fprintln(stderr, "accuracy:", err)
 			return 1
 		}
 		arrivals := schedule(p, o.keys, o.duration)
-		res := summarize(p, keys, arrivals, h.drive(ctx, arrivals, keys), o.duration)
-		after, err := h.redisErrors(ctx)
+		res := summarize(p, keys, arrivals, h.drive(ctx, arrivals, keys), o.duration, r.AllowedOverAdmission)
+		after, err := h.counters(ctx)
 		if err != nil {
 			_, _ = fmt.Fprintln(stderr, "accuracy:", err)
 			return 1
 		}
-		for kind, n := range after {
-			res.RedisErrors[kind] = n - before[kind]
-		}
+		res.counted(before, after, o.leaseK > 0)
 		_, _ = fmt.Fprintln(stderr, res.summary())
 		r.Patterns = append(r.Patterns, res)
 		r.Pass = r.Pass && res.Pass
@@ -298,19 +308,37 @@ func (h *harness) waitReady(ctx context.Context, runID string, timeout time.Dura
 	return nil
 }
 
-// redisErrors is gw_redis_errors_total by kind, summed over the gateways.
-func (h *harness) redisErrors(ctx context.Context) (map[string]int64, error) {
-	sum := map[string]int64{}
+// counts are the gateways' counters a pattern reports the increase of,
+// summed over the gateways.
+type counts struct {
+	redisErrors map[string]int64 // gw_redis_errors_total by kind
+	leases      map[string]int64 // gw_ratelimit_lease_total by result (ADR-0069)
+	redisChecks int64            // gw_ratelimit_check_duration_seconds_count{backend="redis"}: requests that called Redis
+}
+
+// counters reads counts from every gateway.
+func (h *harness) counters(ctx context.Context) (counts, error) {
+	c := counts{redisErrors: map[string]int64{}, leases: map[string]int64{}}
 	for _, g := range h.gateways {
-		v, err := h.scrape(ctx, g.metrics, "gw_redis_errors_total")
+		for _, m := range []struct {
+			name, label string
+			into        map[string]int64
+		}{{"gw_redis_errors_total", "kind", c.redisErrors}, {"gw_ratelimit_lease_total", "result", c.leases}} {
+			v, err := h.scrape(ctx, g.metrics, m.name)
+			if err != nil {
+				return c, err
+			}
+			for labels, n := range v {
+				m.into[strings.TrimSuffix(strings.TrimPrefix(labels, "{"+m.label+`="`), `"}`)] += n
+			}
+		}
+		v, err := h.scrape(ctx, g.metrics, "gw_ratelimit_check_duration_seconds_count")
 		if err != nil {
-			return nil, err
+			return c, err
 		}
-		for labels, n := range v {
-			sum[strings.TrimSuffix(strings.TrimPrefix(labels, `{kind="`), `"}`)] += n
-		}
+		c.redisChecks += v[`{backend="redis"}`]
 	}
-	return sum, nil
+	return c, nil
 }
 
 // scrape returns the samples of the metric name at url, by their label set
@@ -353,15 +381,20 @@ type report struct {
 	Replicas  int     `json:"replicas"`
 	Keys      int     `json:"keys"`
 	DurationS float64 `json:"duration_s"`
+	Mode      string  `json:"mode"` // strict, or batched (lease_k > 0)
 	Policy    struct {
 		Algorithm string `json:"algorithm"`
 		Rate      int64  `json:"rate"` // cluster-wide
 		PeriodMS  int64  `json:"period_ms"`
 		Burst     int64  `json:"burst"`
+		LeaseK    int64  `json:"lease_k"`
 	} `json:"policy"`
-	Patterns []patternResult `json:"patterns"`
-	Pass     bool            `json:"pass"`
-	Hardware hardware.Info   `json:"hardware"`
+	// AllowedOverAdmission is the most admissions a window may hold above
+	// the bound: 0 strict (NFR-06), replicas × lease_k batched (NFR-07).
+	AllowedOverAdmission int64           `json:"allowed_over_admission"`
+	Patterns             []patternResult `json:"patterns"`
+	Pass                 bool            `json:"pass"`
+	Hardware             hardware.Info   `json:"hardware"`
 }
 
 type patternResult struct {
@@ -373,11 +406,39 @@ type patternResult struct {
 	// any case not by Redis, so the bound cannot be checked on them.
 	FailureModeAdmissions int64            `json:"failure_mode_admissions"`
 	MaxOverAdmission      overAdmitted     `json:"max_over_admission"`
+	AllowedOverAdmission  int64            `json:"allowed_over_admission"`    // as the report's
 	MeanAdmittedRPS       float64          `json:"mean_admitted_rps_per_key"` // 2xx per key per second
 	LimitRPS              float64          `json:"limit_rps"`
 	P99LatencyUS          int64            `json:"p99_decision_latency_us"` // of every answer, from its due time
 	RedisErrors           map[string]int64 `json:"redis_errors"`            // gw_redis_errors_total's increase over every gateway
+	// Leases is gw_ratelimit_lease_total's increase over every gateway by
+	// result (ADR-0069); RedisCalls is the Redis calls the policy cost:
+	// batched, the lease results other than local; strict, the requests
+	// that called Redis (one call each, the config having one policy).
+	Leases                map[string]int64 `json:"leases"`
+	RedisCalls            int64            `json:"redis_calls"`
+	RedisCallsPerAdmitted float64          `json:"redis_calls_per_admitted"`
 	Pass                  bool             `json:"pass"`
+}
+
+// counted fills in r's counter increases from before to after.
+func (r *patternResult) counted(before, after counts, batched bool) {
+	for kind, n := range after.redisErrors {
+		r.RedisErrors[kind] = n - before.redisErrors[kind]
+	}
+	r.RedisCalls = after.redisChecks - before.redisChecks
+	if batched {
+		r.RedisCalls = 0
+		for result, n := range after.leases {
+			r.Leases[result] = n - before.leases[result]
+			if result != "local" {
+				r.RedisCalls += n - before.leases[result]
+			}
+		}
+	}
+	if r.Status.OK > 0 {
+		r.RedisCallsPerAdmitted = float64(r.RedisCalls) / float64(r.Status.OK)
+	}
 }
 
 type requestCounts struct {
@@ -402,12 +463,13 @@ type overAdmitted struct {
 }
 
 // summarize checks one pattern's outcomes. It passes when no key's
-// admissions exceed the bound, at least 99% of the scheduled requests were
+// admissions exceed the bound by more than allowed (0 strict, replicas × k
+// batched), at least 99% of the scheduled requests were
 // sent, every 2xx carried a decision time (ADR-0021), and every sent request
 // got a 2xx, 429 or 503: one with no answer or another status may have been
 // admitted unseen (ADR-0028). 503s are reported, not judged.
-func summarize(pattern string, keys []string, arrivals []arrival, out []outcome, d time.Duration) patternResult {
-	r := patternResult{Pattern: pattern, Keys: len(keys), LimitRPS: float64(policy.rate) / policy.period.Seconds(), RedisErrors: map[string]int64{}}
+func summarize(pattern string, keys []string, arrivals []arrival, out []outcome, d time.Duration, allowed int64) patternResult {
+	r := patternResult{Pattern: pattern, Keys: len(keys), LimitRPS: float64(policy.rate) / policy.period.Seconds(), RedisErrors: map[string]int64{}, Leases: map[string]int64{}, AllowedOverAdmission: allowed}
 	admitted := make([][]int64, len(keys))
 	var latencies []int64
 	for i, o := range out {
@@ -449,7 +511,7 @@ func summarize(pattern string, keys []string, arrivals []arrival, out []outcome,
 		slices.Sort(latencies)
 		r.P99LatencyUS = latencies[(len(latencies)*99+99)/100-1]
 	}
-	r.Pass = r.MaxOverAdmission.Count == 0 && r.Requests.Sent*100 >= r.Requests.Scheduled*99 && r.FailureModeAdmissions == 0 &&
+	r.Pass = r.MaxOverAdmission.Count <= allowed && r.Requests.Sent*100 >= r.Requests.Scheduled*99 && r.FailureModeAdmissions == 0 &&
 		r.Status.Other == 0 && r.Status.NoAnswer == 0
 	return r
 }
@@ -463,11 +525,14 @@ func (r patternResult) summary() string {
 	if m := r.MaxOverAdmission; m.Count > 0 {
 		over = fmt.Sprintf("%d (key %s, %d ms window from %d µs)", m.Count, m.Key, m.WindowMS, m.AtUS)
 	}
+	if r.AllowedOverAdmission > 0 {
+		over += fmt.Sprintf(" of %d allowed", r.AllowedOverAdmission)
+	}
 	var redis []string
 	for _, kind := range slices.Sorted(maps.Keys(r.RedisErrors)) {
 		redis = append(redis, fmt.Sprintf("%s %d", kind, r.RedisErrors[kind]))
 	}
-	return fmt.Sprintf("%-8s %s  %d/%d sent; 2xx %d (%d failure-mode), 429 %d, 503 %d, other %d, no answer %d; max over-admission %s; %.1f/s admitted per key, limit %.0f/s; p99 %.1f ms; redis errors: %s",
+	return fmt.Sprintf("%-8s %s  %d/%d sent; 2xx %d (%d failure-mode), 429 %d, 503 %d, other %d, no answer %d; max over-admission %s; %.1f/s admitted per key, limit %.0f/s; p99 %.1f ms; %.3f Redis calls per admitted; redis errors: %s",
 		r.Pattern, verdict, r.Requests.Sent, r.Requests.Scheduled, r.Status.OK, r.FailureModeAdmissions, r.Status.Limited, r.Status.Unavailable, r.Status.Other, r.Status.NoAnswer,
-		over, r.MeanAdmittedRPS, r.LimitRPS, float64(r.P99LatencyUS)/1000, strings.Join(redis, ", "))
+		over, r.MeanAdmittedRPS, r.LimitRPS, float64(r.P99LatencyUS)/1000, r.RedisCallsPerAdmitted, strings.Join(redis, ", "))
 }
