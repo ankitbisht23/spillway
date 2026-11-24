@@ -64,12 +64,17 @@ func (e *Error) Unwrap() error { return e.Err }
 // errOldRedis fails calls to a node older than Redis 7 (RL-30).
 var errOldRedis = errors.New("node runs Redis older than 7")
 
+// Quota is the algorithm of a quota limit (RL-10, ADR-0070): a count of cost
+// units against Rate, the quota, for the UTC period [PeriodStart,
+// PeriodEnd); always enforce, with Period, Burst and LeaseK 0.
+const Quota = "quota"
+
 // Limit is one limit in a call. All Keys of one call share a hash slot.
 type Limit struct {
 	Key       string        // full Redis key (keys.go)
 	Level     string        // global | tenant | consumer | route
 	Enforce   bool          // false: shadow
-	Algorithm string        // config.GCRA or config.SlidingWindow
+	Algorithm string        // config.GCRA, config.SlidingWindow or Quota
 	Rate      int64         // configured, cluster-wide
 	Period    time.Duration // whole seconds
 	Burst     int64         // GCRA only, after its default
@@ -82,6 +87,10 @@ type Limit struct {
 	// same non-zero Group are one group in the script, sharing LeaseK; a
 	// limit with Group 0 is a group of its own.
 	Group int
+	// A quota limit's period, UTC, and its tenant's quota epoch key
+	// (QuotaEpochKey); the call's quota limits share the epoch.
+	PeriodStart, PeriodEnd time.Time
+	Epoch                  string
 }
 
 // Result is a call's reply.
@@ -96,6 +105,10 @@ type Result struct {
 	NowUS           int64                // Redis TIME the script used, µs since the Unix epoch
 	Limits          []ratelimit.Decision // per limit, in call order
 	Granted         []int64              // per limit: the units written; 0 for none
+	// QuotaUnseeded: the call's quota limits were skipped, neither deciding
+	// nor written, because the tenant's quota epoch is missing or Redis's
+	// TIME is outside their period (ADR-0070).
+	QuotaUnseeded bool
 }
 
 // Client runs the limiter script on Redis Cluster.
@@ -335,7 +348,7 @@ func (c *Client) Refund(ctx context.Context, cost, admittedUS int64, limits []Li
 // fields and its group's 1-based index in the call. A refund (negative
 // cost) is always strict.
 func encode(cost int64, limits []Limit) []any {
-	args := make([]any, 0, 1+8*len(limits)+1)
+	args := make([]any, 0, 1+10*len(limits)+1)
 	args = append(args, cost)
 	group, prev := 0, 0
 	for i, l := range limits {
@@ -353,7 +366,11 @@ func encode(cost int64, limits []Limit) []any {
 			group++
 		}
 		prev = l.Group
-		args = append(args, l.Level, mode, l.Algorithm, l.Rate, l.Period.Milliseconds(), burst, lease, group)
+		var start, end int64
+		if l.Algorithm == Quota {
+			start, end = l.PeriodStart.UnixMilli(), l.PeriodEnd.UnixMilli()
+		}
+		args = append(args, l.Level, mode, l.Algorithm, l.Rate, l.Period.Milliseconds(), burst, lease, group, start, end)
 	}
 	return args
 }
@@ -362,9 +379,16 @@ func (c *Client) run(ctx context.Context, args []any, limits []Limit) (Result, e
 	if len(limits) == 0 || len(limits) > MaxLimits {
 		return Result{}, &Error{Kind: KindScript, Err: fmt.Errorf("a call carries 1 to %d limits, not %d", MaxLimits, len(limits))}
 	}
-	keys := make([]string, len(limits))
+	keys := make([]string, len(limits), len(limits)+1)
+	epoch := ""
 	for i, l := range limits {
 		keys[i] = l.Key
+		if l.Algorithm == Quota {
+			epoch = l.Epoch
+		}
+	}
+	if epoch != "" {
+		keys = append(keys, epoch)
 	}
 	node, err := c.rdb.MasterForKey(ctx, keys[0])
 	if err != nil {
@@ -531,11 +555,15 @@ func redisVersion(info string) (string, int, error) {
 	return "", 0, errors.New("INFO server: no redis_version")
 }
 
+// replyHead is how many fields of the script's reply come before the
+// per-limit ones.
+const replyHead = 9
+
 // decode reads the script's reply for a call of n limits.
 func decode(v any, n int) (Result, error) {
 	reply, ok := v.([]any)
-	if !ok || len(reply) != 8+5*n {
-		return Result{}, fmt.Errorf("limiter reply: want an array of %d, got %T of %d", 8+5*n, v, len(reply))
+	if !ok || len(reply) != replyHead+5*n {
+		return Result{}, fmt.Errorf("limiter reply: want an array of %d, got %T of %d", replyHead+5*n, v, len(reply))
 	}
 	ints := make([]int64, len(reply))
 	for i, x := range reply {
@@ -562,11 +590,12 @@ func decode(v any, n int) (Result, error) {
 		RetryAfter:      ms(ints[5]),
 		ShadowWouldDeny: uint32(ints[6]), //nolint:gosec // G115: checked < 2^n ≤ 2^32 above
 		NowUS:           ints[7],
+		QuotaUnseeded:   ints[8] == 1,
 		Limits:          make([]ratelimit.Decision, n),
 		Granted:         make([]int64, n),
 	}
 	for i := range res.Limits {
-		f := ints[8+5*i:]
+		f := ints[replyHead+5*i:]
 		res.Limits[i] = ratelimit.Decision{Allowed: f[0] == 1, Remaining: f[1], ResetAfter: ms(f[2]), RetryAfter: ms(f[3])}
 		res.Granted[i] = f[4]
 	}

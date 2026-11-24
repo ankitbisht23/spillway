@@ -4,11 +4,14 @@
 -- writes per the write rule; a negative cost refunds. The maths and the state
 -- layout are part of v1: changing either is a v2 script and key prefix (RL-29).
 --
--- ARGV: cost, then per key: level, mode, algorithm, rate, period_ms, burst,
--- lease_k, group; refunds add admitted_us (0: the current window and time).
+-- KEYS: one per limit, then the tenant's quota epoch key when a limit is a
+-- quota (ADR-0070).
+-- ARGV: cost, then per limit: level, mode, algorithm, rate, period_ms, burst,
+-- lease_k, group, period_start_ms, period_end_ms; refunds add admitted_us
+-- (0: the current window and time).
 -- Reply: allowed, denying_level, denying_limit, remaining, reset_after_ms,
--- retry_after_ms, shadow_would_deny, now_us, then per key: allowed_i,
--- remaining_i, reset_after_ms_i, retry_after_ms_i, granted_i.
+-- retry_after_ms, shadow_would_deny, now_us, quota_unseeded, then per limit:
+-- allowed_i, remaining_i, reset_after_ms_i, retry_after_ms_i, granted_i.
 --
 -- group is the 1-based index of the limit's policy in the call: a policy's
 -- limits are adjacent and share it and lease_k. A group with lease_k = k > 0
@@ -17,6 +20,16 @@
 -- g = min(k, available on each of its limits) instead of cost; granted_i is
 -- what was written to each limit (0 when nothing was). Refunds carry
 -- lease_k 0: a grant stays with the gateway's lease.
+--
+-- A quota limit (algorithm quota, RL-10, ADR-0070) counts cost units in a
+-- plain integer against rate, its quota, for the UTC period
+-- [period_start_ms, period_end_ms) the gateway chose; it is enforce, with
+-- period_ms, burst and lease_k 0. While the epoch key is missing (Redis lost
+-- the tenant's counters and the flusher has not re-seeded them) or TIME is
+-- outside the period (the gateway's clock and Redis disagree near a UTC
+-- boundary), every quota limit is skipped: it neither decides nor is
+-- written, and quota_unseeded is 1. A refund skips them only while the epoch
+-- is missing.
 
 -- Every number written goes through fmt: Lua's default %.14g would cut a
 -- 16-digit µs timestamp.
@@ -38,35 +51,37 @@ end
 
 local LEVELS = { global = true, tenant = true, consumer = true, route = true }
 
-local n = #KEYS
 local cost = int(ARGV[1])
 if not cost or cost == 0 then
   return fail('cost must be a non-zero integer')
 end
 local refund = cost < 0
-local per = 8 -- arguments per key
-local nargs = 1 + per * n
+local per = 10 -- arguments per limit
+local extra = 0
 if refund then
-  nargs = nargs + 1
+  extra = 1
 end
-if n < 1 or n > 32 or #ARGV ~= nargs then
-  return fail('want 1 to 32 keys and ' .. nargs .. ' arguments, got ' .. n .. ' keys and ' .. #ARGV)
+local n = (#ARGV - 1 - extra) / per
+if n ~= math.floor(n) or n < 1 or n > 32 then
+  return fail('want 1 to 32 limits of ' .. per .. ' arguments, got ' .. #ARGV .. ' arguments')
 end
 local admitted = 0
 if refund then
-  admitted = int(ARGV[nargs])
+  admitted = int(ARGV[#ARGV])
   if not admitted or admitted < 0 then
     return fail('admitted_us must be an integer >= 0')
   end
 end
 
 local lim = {}
+local quotas = false -- a limit is a quota
 for i = 1, n do
   local a = 1 + per * (i - 1)
   local l = {
     key = KEYS[i], level = ARGV[a + 1], mode = ARGV[a + 2], alg = ARGV[a + 3],
     rate = int(ARGV[a + 4]), period = int(ARGV[a + 5]), burst = int(ARGV[a + 6]),
     k = int(ARGV[a + 7]), group = int(ARGV[a + 8]),
+    ps = int(ARGV[a + 9]), pe = int(ARGV[a + 10]),
   }
   if not LEVELS[l.level] then
     return fail('limit ' .. i .. ': level ' .. tostring(l.level))
@@ -74,10 +89,17 @@ for i = 1, n do
   if l.mode ~= 'enforce' and l.mode ~= 'shadow' then
     return fail('limit ' .. i .. ': mode ' .. tostring(l.mode))
   end
-  if not l.rate or l.rate < 1 or not l.period or l.period < 1 then
-    return fail('limit ' .. i .. ': rate and period_ms must be integers >= 1')
+  if not l.rate or l.rate < 1 or not l.period or not l.burst or not l.ps or not l.pe then
+    return fail('limit ' .. i .. ': rate must be an integer >= 1, and period_ms, burst and the period bounds integers')
   end
-  if l.alg == 'gcra' then
+  if l.alg == 'quota' then
+    if l.mode ~= 'enforce' or l.period ~= 0 or l.burst ~= 0 or l.k ~= 0 or l.ps < 0 or l.pe <= l.ps then
+      return fail('limit ' .. i .. ': a quota is enforce, with period_ms, burst and lease_k 0 and period_start_ms < period_end_ms')
+    end
+    quotas = true
+  elseif l.period < 1 or l.ps ~= 0 or l.pe ~= 0 then
+    return fail('limit ' .. i .. ': period_ms must be >= 1 and the period bounds 0')
+  elseif l.alg == 'gcra' then
     if not l.burst or l.burst < 1 then
       return fail('limit ' .. i .. ': gcra burst must be an integer >= 1')
     end
@@ -111,12 +133,46 @@ for i = 1, n do
   lim[i] = l
 end
 
+local want = n
+if quotas then
+  want = n + 1
+end
+if #KEYS ~= want then
+  return fail('want ' .. want .. ' keys for ' .. n .. ' limits, got ' .. #KEYS)
+end
+
 local tm = redis.call('TIME')
 local now = tonumber(tm[1]) * 1000000 + tonumber(tm[2])
+
+-- Quota limits count only while the tenant's epoch exists and TIME is in
+-- their period (refunds: while the epoch exists).
+local unseeded = 0
+if quotas then
+  local seeded = redis.call('EXISTS', KEYS[n + 1]) == 1
+  local now_ms = math.floor(now / 1000)
+  for _, l in ipairs(lim) do
+    if l.alg == 'quota' then
+      l.skip = not seeded or not refund and (now_ms < l.ps or now_ms >= l.pe)
+      if l.skip then
+        unseeded = 1
+      end
+    end
+  end
+end
 
 -- read loads l's state. A key holding the other algorithm's type (a policy
 -- whose algorithm changed) reads as empty and is replaced when written.
 local function read(l)
+  if l.alg == 'quota' then
+    local v = redis.pcall('GET', l.key)
+    if type(v) == 'table' then
+      l.wrong = true -- another type: replaced when written
+      v = false
+    end
+    l.exists = v ~= false
+    l.count = tonumber(v) or 0
+    return
+  end
   if l.alg == 'gcra' then
     local v = redis.pcall('GET', l.key)
     if type(v) == 'table' then
@@ -151,6 +207,13 @@ end
 -- check decides whether l alone admits c > 0, without writing.
 local function check(l, c)
   l.retry = 0
+  if l.alg == 'quota' then
+    l.ok = l.skip or l.count + c <= l.rate
+    if not l.ok then
+      l.retry = l.pe * 1000 - now -- until the period ends
+    end
+    return
+  end
   if l.alg == 'gcra' then
     l.s = math.max(l.tat or 0, now)
     l.next = l.s + c * l.t
@@ -204,7 +267,15 @@ end
 
 -- write takes c > 0 from l, which admits at least c (check, or available).
 local function write(l, c)
+  if l.skip then
+    return
+  end
   l.granted = c
+  if l.alg == 'quota' then
+    l.count = l.count + c
+    redis.call('SET', l.key, fmt(l.count), 'PX', fmt(l.pe - math.floor(now / 1000) + 86400000))
+    return
+  end
   if l.alg == 'gcra' then
     save_gcra(l, l.s + c * l.t)
     return
@@ -221,6 +292,13 @@ end
 -- since may have used that much of its room (ADR-0028).
 local function give_back(l, c)
   l.ok, l.retry = true, 0
+  if l.alg == 'quota' then
+    if not l.skip and l.exists and not l.wrong then
+      l.count = math.max(0, l.count - c)
+      redis.call('SET', l.key, fmt(l.count), 'KEEPTTL')
+    end
+    return
+  end
   if l.alg == 'gcra' then
     l.s = now
     if l.tat then
@@ -302,7 +380,10 @@ end
 
 -- State after the call: remaining and reset_after (µs) per limit.
 for _, l in ipairs(lim) do
-  if l.alg == 'gcra' then
+  if l.alg == 'quota' then
+    l.reset = math.max(0, l.pe * 1000 - now)
+    l.rem = math.max(0, l.rate - l.count)
+  elseif l.alg == 'gcra' then
     l.reset = l.s - now
     l.rem = math.max(0, math.floor((l.tau - l.reset) / l.t))
   else
@@ -316,11 +397,11 @@ local function ms(us)
 end
 
 -- The summary limit: the denying one, else the enforce limit with the least
--- remaining (first on a tie), else limit 1.
+-- remaining (first on a tie; skipped quotas aside), else limit 1.
 local pick = deny
 if pick == 0 then
   for i, l in ipairs(lim) do
-    if l.mode == 'enforce' and (pick == 0 or l.rem < lim[pick].rem) then
+    if l.mode == 'enforce' and not l.skip and (pick == 0 or l.rem < lim[pick].rem) then
       pick = i
     end
   end
@@ -333,7 +414,7 @@ local level, retry = '', 0
 if deny > 0 then
   level, retry = lim[deny].level, ms(lim[deny].retry)
 end
-local out = { allowed, level, deny, lim[pick].rem, ms(lim[pick].reset), retry, mask, now }
+local out = { allowed, level, deny, lim[pick].rem, ms(lim[pick].reset), retry, mask, now, unseeded }
 for _, l in ipairs(lim) do
   local ok = 0
   if l.ok then

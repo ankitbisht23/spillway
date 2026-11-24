@@ -45,3 +45,16 @@ func NoTenantKey(digest, policy string, period time.Duration) string {
 func periodMS(d time.Duration) string {
 	return strconv.FormatInt(d.Milliseconds(), 10)
 }
+
+// QuotaKey is a consumer's quota counter for one UTC period (RL-10,
+// ADR-0070): q:v1:{t:<tenant>}:<consumer>:<period>, period d<YYYYMMDD> or
+// m<YYYYMM>. The tenant's hash tag puts it in its tenant-slot call.
+func QuotaKey(tenant, consumer, period string) string {
+	return "q:v1:{t:" + tenant + "}:" + consumer + ":" + period
+}
+
+// QuotaEpochKey is a tenant's quota epoch: the tenant's quota counters
+// count only while it exists (RL-10, ADR-0070).
+func QuotaEpochKey(tenant string) string {
+	return "q:v1:{t:" + tenant + "}:epoch"
+}

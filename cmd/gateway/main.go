@@ -374,13 +374,19 @@ func serve(ctx context.Context, s settings, log *slog.Logger, tracer trace.Trace
 	return nil
 }
 
-// checkRedis rejects a snapshot with a Redis policy when the gateway has no
-// Redis (ADR-0021).
+// checkRedis rejects a snapshot with a Redis policy, or a plan with quotas,
+// when the gateway has no Redis (ADR-0021, ADR-0070).
 func checkRedis(snap *config.Snapshot, haveRedis bool) error {
+	if haveRedis {
+		return nil
+	}
 	for _, p := range snap.Policies {
-		if !p.Local && !haveRedis {
+		if !p.Local {
 			return fmt.Errorf("policy %q runs in Redis (local is not true), but SPILLWAY_GATEWAY_REDIS_ADDRS is not set", p.Name)
 		}
+	}
+	if len(snap.PlanQuotas) > 0 {
+		return errors.New("plans have quotas, which are counted in Redis (RL-10), but SPILLWAY_GATEWAY_REDIS_ADDRS is not set")
 	}
 	return nil
 }

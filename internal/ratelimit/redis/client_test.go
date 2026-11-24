@@ -65,21 +65,24 @@ func TestEncode(t *testing.T) {
 		{Key: "b", Level: "consumer", Algorithm: config.SlidingWindow, Rate: 1000, Period: time.Minute, Burst: 7},
 		{Key: "c", Level: "consumer", Algorithm: config.SlidingWindow, Rate: 1000, Period: time.Hour},
 		{Key: "d", Level: "route", Enforce: true, Algorithm: config.GCRA, Rate: 1, Period: time.Second, Burst: 1, Group: 7},
+		{Key: "q", Level: "consumer", Enforce: true, Algorithm: Quota, Rate: 5, Epoch: "e",
+			PeriodStart: time.UnixMilli(1764028800000), PeriodEnd: time.UnixMilli(1764115200000)},
 	}
 	// Groups by adjacency: Group 0 is a group of its own, and a Group seen
 	// before another one starts a new group.
 	want := []any{int64(5),
-		"tenant", "enforce", "gcra", int64(100), int64(1000), int64(200), int64(10), 1,
-		"tenant", "enforce", "gcra", int64(1000), int64(3600000), int64(50), int64(10), 1,
-		"consumer", "shadow", "sliding_window", int64(1000), int64(60000), int64(0), int64(0), 2,
-		"consumer", "shadow", "sliding_window", int64(1000), int64(3600000), int64(0), int64(0), 3,
-		"route", "enforce", "gcra", int64(1), int64(1000), int64(1), int64(0), 4,
+		"tenant", "enforce", "gcra", int64(100), int64(1000), int64(200), int64(10), 1, int64(0), int64(0),
+		"tenant", "enforce", "gcra", int64(1000), int64(3600000), int64(50), int64(10), 1, int64(0), int64(0),
+		"consumer", "shadow", "sliding_window", int64(1000), int64(60000), int64(0), int64(0), 2, int64(0), int64(0),
+		"consumer", "shadow", "sliding_window", int64(1000), int64(3600000), int64(0), int64(0), 3, int64(0), int64(0),
+		"route", "enforce", "gcra", int64(1), int64(1000), int64(1), int64(0), 4, int64(0), int64(0),
+		"consumer", "enforce", "quota", int64(5), int64(0), int64(0), int64(0), 5, int64(1764028800000), int64(1764115200000),
 	}
 	if got := encode(5, limits); !reflect.DeepEqual(got, want) {
 		t.Errorf("encode = %v, want %v", got, want)
 	}
 	// A refund is strict.
-	if got := encode(-5, limits[:1]); !reflect.DeepEqual(got, []any{int64(-5), "tenant", "enforce", "gcra", int64(100), int64(1000), int64(200), int64(0), 1}) {
+	if got := encode(-5, limits[:1]); !reflect.DeepEqual(got, []any{int64(-5), "tenant", "enforce", "gcra", int64(100), int64(1000), int64(200), int64(0), 1, int64(0), int64(0)}) {
 		t.Errorf("refund encode = %v", got)
 	}
 	cmd := scriptCmd(context.Background(), "evalsha", scriptSHA, []string{"a", "b"}, encode(5, limits))
@@ -95,7 +98,7 @@ func TestEncode(t *testing.T) {
 }
 
 func TestDecode(t *testing.T) {
-	reply := []any{int64(0), "consumer", int64(2), int64(0), int64(1500), int64(250), int64(4), int64(1700000000123456),
+	reply := []any{int64(0), "consumer", int64(2), int64(0), int64(1500), int64(250), int64(4), int64(1700000000123456), int64(1),
 		int64(1), int64(7), int64(100), int64(0), int64(0),
 		int64(0), int64(0), int64(1500), int64(250), int64(0),
 		int64(0), int64(0), int64(3), int64(2), int64(0)}
@@ -112,6 +115,7 @@ func TestDecode(t *testing.T) {
 		RetryAfter:      250 * time.Millisecond,
 		ShadowWouldDeny: 4,
 		NowUS:           1700000000123456,
+		QuotaUnseeded:   true,
 		Limits: []ratelimit.Decision{
 			{Allowed: true, Remaining: 7, ResetAfter: 100 * time.Millisecond},
 			{ResetAfter: 1500 * time.Millisecond, RetryAfter: 250 * time.Millisecond},
@@ -123,8 +127,8 @@ func TestDecode(t *testing.T) {
 		t.Errorf("decode =\n%+v, want\n%+v", got, want)
 	}
 
-	allowed := []any{int64(1), "", int64(0), int64(9), int64(10), int64(0), int64(0), int64(1), int64(1), int64(9), int64(10), int64(0), int64(4)}
-	if got, err := decode(allowed, 1); err != nil || !got.Allowed || got.DenyingLimit != -1 || got.DenyingLevel != "" || !reflect.DeepEqual(got.Granted, []int64{4}) {
+	allowed := []any{int64(1), "", int64(0), int64(9), int64(10), int64(0), int64(0), int64(1), int64(0), int64(1), int64(9), int64(10), int64(0), int64(4)}
+	if got, err := decode(allowed, 1); err != nil || !got.Allowed || got.QuotaUnseeded || got.DenyingLimit != -1 || got.DenyingLevel != "" || !reflect.DeepEqual(got.Granted, []int64{4}) {
 		t.Errorf("decode(allowed) = %+v, %v", got, err)
 	}
 
@@ -373,7 +377,7 @@ func readCommand(r *bufio.Reader) ([]string, error) {
 var oneLimit = []Limit{{Key: GlobalKey("p", time.Second, Digest("k")), Level: "global", Enforce: true, Algorithm: config.GCRA, Rate: 10, Period: time.Second, Burst: 10}}
 
 // allowedReply is the script's reply for one limit that allowed.
-const allowedReply = "*13\r\n:1\r\n$0\r\n\r\n:0\r\n:9\r\n:100\r\n:0\r\n:0\r\n:1700000000000000\r\n:1\r\n:9\r\n:100\r\n:0\r\n:1\r\n"
+const allowedReply = "*14\r\n:1\r\n$0\r\n\r\n:0\r\n:9\r\n:100\r\n:0\r\n:0\r\n:1700000000000000\r\n:0\r\n:1\r\n:9\r\n:100\r\n:0\r\n:1\r\n"
 
 func callFake(t *testing.T, c *Client) (Result, error) {
 	t.Helper()

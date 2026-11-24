@@ -141,7 +141,7 @@ func TestScriptLeaseRejects(t *testing.T) {
 	p := scriptName("lease-rejects")
 	keys := []string{redis.GlobalKey(p, time.Hour, redis.Digest("a")), redis.GlobalKey(p, 2*time.Hour, redis.Digest("a"))}
 	limit := func(mode string, k, group int) []any {
-		return []any{"global", mode, "gcra", 100, 3600000, 50, k, group}
+		return []any{"global", mode, "gcra", 100, 3600000, 50, k, group, 0, 0}
 	}
 	args := func(cost int, limits ...[]any) []any {
 		a := []any{cost}
@@ -164,7 +164,8 @@ func TestScriptLeaseRejects(t *testing.T) {
 		{"group skipped", 2, args(1, limit("enforce", 0, 1), limit("enforce", 0, 3)), "limit 2: group must be"},
 		{"group going back", 2, args(1, limit("enforce", 0, 1), limit("enforce", 0, 0)), "limit 2: group must be"},
 		{"k differs in a group", 2, args(1, limit("enforce", 5, 1), limit("enforce", 6, 1)), "lease_k differs within group 1"},
-		{"six arguments per key", 1, []any{1, "global", "enforce", "gcra", 100, 3600000, 50}, "want 1 to 32 keys and 9 arguments"},
+		{"six arguments per key", 1, []any{1, "global", "enforce", "gcra", 100, 3600000, 50}, "want 1 to 32 limits of 10 arguments, got 7 arguments"},
+		{"no period bounds", 1, []any{1, "global", "enforce", "gcra", 100, 3600000, 50, 0, 1}, "want 1 to 32 limits of 10 arguments, got 9 arguments"},
 	} {
 		err := rdb.Eval(context.Background(), string(src), keys[:tt.keys], tt.args...).Err()
 		if err == nil || !strings.Contains(err.Error(), tt.want) {
