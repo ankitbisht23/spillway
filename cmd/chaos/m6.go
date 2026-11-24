@@ -20,10 +20,16 @@ import (
 
 // make verify-m6's names (ADR-0061, test/verify/m6.yaml).
 const (
-	m6Policy      = "m6-limit"                // the policy the exit spec creates; its RateLimit item
 	m6ProbeHeader = "X-Spillway-Probe-Client" // its key template is {header:X-Spillway-Probe-Client}
 	m6ProbePath   = "/status/200"             // route m6-probe
 )
+
+// m6Policy is the policy the exit spec creates in run runID, and its
+// RateLimit item: a name of its own each run, so that counts by policy
+// name are this run's only (O2, ADR-0072).
+func m6Policy(runID string) string {
+	return "m6-limit-" + runID
+}
 
 // m6Options are "chaos m6"'s flags.
 type m6Options struct {
@@ -188,7 +194,7 @@ type probeRecord struct {
 	heavy     bool
 	status    int    // 0: no answer
 	fail      string // "dropped", "timeout", "transport" or ""
-	limitOK   bool   // a 429 whose RateLimit has "m6-limit" with r=0 and whose Retry-After is >= 1
+	limitOK   bool   // a 429 whose RateLimit has "m6-limit-<run>" with r=0 and whose Retry-After is >= 1
 }
 
 type probe struct {
@@ -468,7 +474,7 @@ func (p *probe) send(ctx context.Context, g int, client string, due time.Time) {
 	rec.status = resp.StatusCode
 	if resp.StatusCode == http.StatusTooManyRequests {
 		ra, raErr := strconv.Atoi(resp.Header.Get("Retry-After"))
-		rec.limitOK = rateLimitExhausted(resp.Header.Values("RateLimit"), m6Policy) && raErr == nil && ra >= 1
+		rec.limitOK = rateLimitExhausted(resp.Header.Values("RateLimit"), m6Policy(p.o.runID)) && raErr == nil && ra >= 1
 	}
 }
 
@@ -479,7 +485,7 @@ func (p *probe) record(r probeRecord) {
 }
 
 // rateLimitExhausted reports whether the RateLimit fields hold the item
-// name with r=0, as in `"m6-limit";r=0;t=1`.
+// name with r=0, as in `"m6-limit-1764000000";r=0;t=1`.
 func rateLimitExhausted(fields []string, name string) bool {
 	for _, f := range fields {
 		for item := range strings.SplitSeq(f, ",") {
@@ -669,12 +675,11 @@ func judgeM6(rep *m6Report, o m6Options, in m6Inputs, versions map[int64]publish
 		if rv.WouldDeny != nil {
 			wd = *rv.WouldDeny
 		}
-		// would_deny counts by policy name over 15 min, so it can include
-		// an earlier run's; the key rows, by this run's policy ID, are the
-		// per-run evidence, in the API and in the UI.
+		// would_deny counts by policy name, which is this run's own
+		// (ADR-0072); the key rows are by this run's policy ID.
 		ok := rv.UIShowed && wd >= 1 && rv.HeavyDigest != "" && heavy != nil && *heavy >= 1 && (light == nil || *light == 0) &&
 			rv.UIHeavy != nil && *rv.UIHeavy >= 1
-		add(ok, "(b2) reviewed: would-denies reported", fmt.Sprintf("would_deny %s of %s shadow decisions (share %s; by policy name over 15 min, may include earlier runs); "+
+		add(ok, "(b2) reviewed: would-denies reported", fmt.Sprintf("would_deny %s of %s shadow decisions (share %s); "+
 			"%d key rows; heavy key %s, light key %s; UI showed %q, heavy key %s",
 			optNum(rv.WouldDeny), optNum(rv.Evaluated), optPercent(rv.Share), len(rv.Keys), keyCount(heavy), keyCount(light), rv.UIWouldDeny, keyCount(rv.UIHeavy)))
 	}
@@ -692,7 +697,7 @@ func judgeM6(rep *m6Report, o m6Options, in m6Inputs, versions map[int64]publish
 			st.Counts["light/200"] == st.Counts["light/all"] && st.Counts["light/all"] > 0 &&
 			st.Gateways["heavy"] == n && st.Gateways["light"] == n
 		add(ok, "(c) enforced: heavy 429s", fmt.Sprintf("heavy 429 share %.1f %% (at least %.0f %%); %s; 429s without %q r=0 or Retry-After >= 1: %d",
-			share*100, o.minHeavyShare*100, st.describe(n), m6Policy, st.BadLimit))
+			share*100, o.minHeavyShare*100, st.describe(n), m6Policy(o.runID), st.BadLimit))
 	}
 
 	// (d) rolled back.
