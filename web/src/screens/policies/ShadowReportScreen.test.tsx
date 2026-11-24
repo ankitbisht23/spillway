@@ -69,6 +69,12 @@ describe("the shadow report (UI-01)", () => {
     await open();
     expect(screen.getByLabelText("Counts")).toHaveTextContent("Would deny (shadow)250Share of its shadow decisions25.0 %Shadow decisions1,000");
     expect(screen.getByText(/Counts are by its published name/)).toBeInTheDocument();
+    // O1 (ADR-0071): a reused name's counts, and keys by ID.
+    expect(
+      screen.getByText(
+        "Would-deny counts come from Prometheus by policy name. A policy that reuses the name of a deleted policy shows that policy's counts until they leave the window. The top keys come from heavy-hitter windows by policy ID and are this policy's only.",
+      ),
+    ).toBeInTheDocument();
     const rows = screen.getAllByRole("row").slice(1);
     expect(rows[0]).toHaveTextContent("AAAAAAAAAAAAAAAAAAAAAA12342000");
     expect(within(rows[0] as HTMLElement).getByRole("link", { name: "12" })).toHaveAttribute("href", "/consumers/12");
