@@ -19,8 +19,12 @@ This file is the source of truth for every host port the stack uses; `compose.ya
 | Toxiproxy | 8474 | API only; proxied ports stay internal |
 | Demo proxy (M8) | 8888 | Caddy; the only port a tunnel points at |
 | kind gateway edge (M7) | 443 | No ingress controller: `extraPortMappings` in `deploy/kind/cluster.yaml` (`listenAddress: 127.0.0.1`) map it to the gateway's NodePort Service |
+| Grafana on kind (M7) | 13000 | `make kind-grafana`: a `kubectl port-forward` on `127.0.0.1` while the kind cluster runs (ADR-0075) |
+| Prometheus on kind (M7) | 19091 | `make kind-prometheus`: a `kubectl port-forward` on `127.0.0.1` while the kind cluster runs (ADR-0075) |
 
 The gateway ports belong to `gateway-1`. Multi-replica runs add `gateway-2` … `gateway-5` (compose profile `replicas`), which publish no host ports. Processes run on the host reach the Redis nodes through the address map in [ADR-0004](adr/0004-dev-networking.md).
+
+Inside the kind cluster (M7, ADR-0075), the gateway's NodePort is **30443**, the node-side end of the 443 mapping; it is a port on the kind node container, not on the host, and nothing else in the cluster is published on the host. kind and the compose stack are not run together (memory), so the kind port-forwards use their own ports rather than compose's 3000 and 9091.
 
 ## Before `make dev`
 
@@ -29,13 +33,13 @@ On macOS, turn off AirPlay Receiver (System Settings → General → AirDrop & H
 Check that every port is free (macOS/Linux). The command prints nothing when all are free; any line it prints names the process holding a port:
 
 ```bash
-lsof -nP -iTCP -sTCP:LISTEN | grep -E ':(443|3000|3100|3200|4317|4318|5173|5432|700[0-5]|8000|8001|8080|8081|8180|8443|8474|8888|9090|9091|910[1-3]) '
+lsof -nP -iTCP -sTCP:LISTEN | grep -E ':(443|3000|3100|3200|4317|4318|5173|5432|700[0-5]|8000|8001|8080|8081|8180|8443|8474|8888|9090|9091|910[1-3]|13000|19091) '
 ```
 
 On Linux, run it with `sudo` (without root, lsof lists only your own processes), or use `ss`, which needs no root:
 
 ```bash
-ss -Hltn | awk '{print $4}' | grep -E ':(443|3000|3100|3200|4317|4318|5173|5432|700[0-5]|8000|8001|8080|8081|8180|8443|8474|8888|9090|9091|910[1-3])$'
+ss -Hltn | awk '{print $4}' | grep -E ':(443|3000|3100|3200|4317|4318|5173|5432|700[0-5]|8000|8001|8080|8081|8180|8443|8474|8888|9090|9091|910[1-3]|13000|19091)$'
 ```
 
 ## Changing a port
