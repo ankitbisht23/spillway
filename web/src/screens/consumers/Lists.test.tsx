@@ -8,7 +8,7 @@ import { setSession } from "../../auth/session";
 import { mockConfig, startSession } from "../../test/live";
 import { renderApp } from "../../test/render";
 import { server } from "../../test/server";
-import { consumer, entry, SNAPSHOT, T0, type Sent } from "./testing";
+import { consumer, entry, mockUsage, SNAPSHOT, T0, type Sent, usage } from "./testing";
 
 beforeEach(() => startSession());
 afterEach(() => setSession(null));
@@ -27,6 +27,7 @@ function mockList(path: string, page: (q: URLSearchParams) => { items: unknown[]
 describe("consumers (UI-06, D9)", () => {
   it("lists 50 a page with tenant and plan names, pages by cursor and filters by tenant", async () => {
     mockConfig(SNAPSHOT, ["acme", "globex"]);
+    mockUsage([usage(7, [0, 0], [0, 0]), usage(9, [0, 0], [0, 0])]);
     const queries = mockList("/api/v1/consumers", (q) => (q.get("cursor") === "c2"
       ? { items: [consumer({ id: 9, name: "billing", tenant_id: 2 })], next_cursor: null }
       : { items: [consumer({ plan_id: 1, jwt_subject: "svc-checkout" })], next_cursor: "c2" }));
@@ -36,7 +37,7 @@ describe("consumers (UI-06, D9)", () => {
     await waitFor(() => expect(row.getByText("acme")).toBeInTheDocument());
     expect(row.getByText("free")).toBeInTheDocument();
     expect(row.getByText("svc-checkout")).toBeInTheDocument();
-    expect(screen.getByText(/Quota usage arrives with quotas in M7/)).toBeInTheDocument();
+    expect(screen.getByText(/Quota usage is what the control plane last flushed/)).toBeInTheDocument();
     expect(queries[0]?.get("limit")).toBe("50");
 
     await user.click(screen.getByRole("button", { name: "Next" }));
@@ -47,6 +48,34 @@ describe("consumers (UI-06, D9)", () => {
     await waitFor(() => expect(router.state.location.search).toEqual({ tenant_id: 2 }));
     await waitFor(() => expect(queries.at(-1)?.get("tenant_id")).toBe("2"));
     expect(queries.at(-1)?.has("cursor")).toBe(false);
+  });
+
+  it("shows each consumer's quota usage today and this month from one call per page, red at the quota (RL-10)", async () => {
+    mockConfig(SNAPSHOT, ["acme"]);
+    const asked = mockUsage([usage(7, [1200, 5000], [3000, 100000]), usage(8, [5000, 5000], [0, 0]), usage(9, [0, 0], [0, 0])]);
+    mockList("/api/v1/consumers", () => ({
+      items: [consumer(), consumer({ id: 8, name: "billing" }), consumer({ id: 9, name: "reports" })],
+      next_cursor: null,
+    }));
+    renderApp("/consumers", ["viewer"]);
+    expect(await screen.findByRole("columnheader", { name: "Quota (today · month)" })).toBeInTheDocument();
+    const row = (name: string) => within(screen.getByRole("row", { name: new RegExp(`^${name}`) }));
+    await waitFor(() => expect(row("checkout").getByLabelText("Today: 1,200 / 5,000")).toBeInTheDocument());
+    expect(row("checkout").getByLabelText("This month: 3,000 / 100,000")).toBeInTheDocument();
+    const full = row("billing").getByLabelText("Today: 5,000 / 5,000, at the quota");
+    expect(full).toHaveClass("quota-full");
+    expect(row("billing").getByLabelText("This month: —")).not.toHaveClass("quota-full");
+    expect(row("reports").getByLabelText("Today: —")).toBeInTheDocument();
+    expect(asked).toEqual([["7", "8", "9"]]);
+  });
+
+  it("says Unavailable in the quota column when the usage cannot be read", async () => {
+    mockConfig(SNAPSHOT, ["acme"]);
+    server.use(http.get("/api/v1/quota-usage", () => HttpResponse.json({ code: "internal", error: "boom" }, { status: 500 })));
+    mockList("/api/v1/consumers", () => ({ items: [consumer()], next_cursor: null }));
+    renderApp("/consumers", ["viewer"]);
+    const row = within(await screen.findByRole("row", { name: /^checkout/ }));
+    expect(await row.findByText("Unavailable")).toBeInTheDocument();
   });
 
   it("says why a viewer cannot create one, in the empty state and on the button", async () => {
@@ -149,14 +178,14 @@ describe("plans (RL-08)", () => {
   it("lists each plan's default limits, read-only", async () => {
     mockList("/api/v1/plans", () => ({
       items: [
-        { id: 1, name: "free", default_limits: [{ policy: "per-consumer", limits: [{ rate: 10, period: "1s" }, { rate: 1000, period: "1h" }] }], version: 1, created_at: T0, updated_at: T0 },
+        { id: 1, name: "free", default_limits: [{ policy: "per-consumer", limits: [{ rate: 10, period: "1s" }, { rate: 1000, period: "1h" }] }], quotas: { daily: 100000, monthly: 2000000 }, version: 1, created_at: T0, updated_at: T0 },
         { id: 2, name: "pro", version: 1, created_at: T0, updated_at: T0 },
       ],
       next_cursor: null,
     }));
     renderApp("/plans", ["viewer"]);
-    expect(await screen.findByRole("row", { name: /^free per-consumer: 10\/1s, 1000\/1h/ })).toBeInTheDocument();
-    expect(screen.getByRole("row", { name: /^pro None: the policies' own limits apply/ })).toBeInTheDocument();
+    expect(await screen.findByRole("row", { name: /^free per-consumer: 10\/1s, 1000\/1h 100,000 a day · 2,000,000 a month/ })).toBeInTheDocument();
+    expect(screen.getByRole("row", { name: /^pro None: the policies' own limits apply None/ })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /New|Edit|Delete/ })).not.toBeInTheDocument();
   });
 });

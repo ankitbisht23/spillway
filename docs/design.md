@@ -284,7 +284,7 @@ A React + TypeScript single-page app over the admin API covers operating (traffi
 | Throttling | Top throttled keys (heavy hitters, RL-21), deny rate per policy | Add override, block key, open policy |
 | Policies | Policies with level, mode, match, limits | Create and edit with validation, diff vs current, shadow report, promote shadow → enforce |
 | Routes & upstreams | Route table, endpoints, health, ejections, circuit state | Edit routes, drain an endpoint |
-| Consumers & keys | Tenants, consumers, plans, keys (prefix, created, expires, revoked); quota-usage column arrives with RL-10 in M7 | Issue, rotate, revoke keys; set overrides; edit allow and deny lists |
+| Consumers & keys | Tenants, consumers, plans, keys (prefix, created, expires, revoked); quota usage today and this month (RL-10) | Issue, rotate, revoke keys; set overrides; edit allow and deny lists |
 | Replicas | Gateway replicas, applied config and identity versions, staleness, last heartbeat | View only |
 | History | Config versions, diffs, audit log | Roll back to a version |
 | Playground (demo mode) | Allowed vs denied per tenant, `RateLimit` headers, token-bucket visual, live over SSE | Pick tenant and rate, fire traffic (generated server-side, UI-07), run a scenario |
@@ -708,7 +708,7 @@ Exit (`make verify-m6`): a new policy goes shadow → reviewed → enforced → 
 ### M7 Performance and hardening · est. 3 weeks
 
 - [x] Token leasing; deny cache in enforce mode only, holding entries for min(retry-after, 10 s) and cleared on any config or identity version change (RL-18, RL-19)
-- [ ] Quotas with the control-plane flusher: advisory lock, absolute writes, epoch marker and re-seed, UTC days and months; quota-usage column on Consumers & keys (RL-10)
+- [x] Quotas with the control-plane flusher: advisory lock, absolute writes, epoch marker and re-seed, UTC days and months; quota-usage column on Consumers & keys (RL-10)
 - [ ] pprof-driven pass to cut hot-path allocations
 - [ ] Nightly schedule and regression gate for `bench.yml`, against the same-arch baseline and the last release’s baseline, same CPU model only (NFR-05)
 - [ ] Load tests against every NFR row (scaling on the CI runner, tenant isolation from loadgen’s per-tenant histograms); chaos suite; noisy-neighbour test (NFR-02, NFR-07, NFR-10, NFR-11, NFR-14, NFR-15)

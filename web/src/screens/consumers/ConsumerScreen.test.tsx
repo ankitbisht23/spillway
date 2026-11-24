@@ -8,7 +8,7 @@ import { startSession } from "../../test/live";
 import { renderApp } from "../../test/render";
 import { server } from "../../test/server";
 import { localInput } from "../routes/fields";
-import { consumer, mockConsumer, override, type Sent } from "./testing";
+import { consumer, mockConsumer, mockUsage, override, quotaOverride, type Sent, usage } from "./testing";
 
 beforeEach(() => startSession());
 afterEach(() => setSession(null));
@@ -26,6 +26,12 @@ function mockWrites(answer?: () => Response) {
     http.post("/api/v1/overrides", handle("POST")),
     http.post("/api/v1/access-lists", handle("POST")),
     http.put("/api/v1/overrides/30", handle("PUT")),
+    http.post("/api/v1/quota-overrides", handle("POST")),
+    http.put("/api/v1/quota-overrides/50", handle("PUT")),
+    http.delete("/api/v1/quota-overrides/50", ({ request }) => {
+      sent.push({ method: "DELETE", path: "/api/v1/quota-overrides/50", ifMatch: request.headers.get("If-Match"), body: null });
+      return new HttpResponse(null, { status: 204 });
+    }),
   );
   return sent;
 }
@@ -33,12 +39,15 @@ function mockWrites(answer?: () => Response) {
 const overrides = async () => within(await screen.findByRole("region", { name: "Overrides" }));
 
 describe("a consumer's settings (UI-06, CP-20)", () => {
-  it("shows its tenant and plan, and the quota placeholder for M7", async () => {
+  it("shows its tenant and plan, and its quota usage today and this month with when it was flushed (RL-10)", async () => {
     mockConsumer();
     renderApp("/consumers/7", ["viewer"]);
     await screen.findByRole("heading", { name: "Consumer checkout" });
     expect(await screen.findByText("acme", { selector: "dd" })).toBeInTheDocument();
-    expect(screen.getByText("Arrives with quotas in M7 (RL-10)")).toBeInTheDocument();
+    expect(await screen.findByLabelText("Quota today: 120 / 1,000")).toBeInTheDocument();
+    expect(screen.getByText(/\(flushed 16\/11\/2026/)).toBeInTheDocument();
+    expect(screen.getByLabelText("Quota this month: —")).toBeInTheDocument();
+    expect(screen.getByText(/up to 10 s behind the gateways/)).toBeInTheDocument();
     for (const name of ["Save", "Delete"]) {
       expect(screen.getByRole("button", { name })).toBeDisabled();
       expect(screen.getByRole("button", { name })).toHaveAccessibleDescription("Needs the key-admin or admin role");
@@ -174,6 +183,84 @@ describe("a consumer's overrides (RL-08)", () => {
     renderApp("/consumers/7", ["viewer"]);
     expect(await (await overrides()).findByRole("alert")).toHaveTextContent("Something went wrong");
     expect((await overrides()).getByText("req-9")).toBeInTheDocument();
+  });
+});
+
+const quotaOverrides = async () => within(await screen.findByRole("region", { name: "Quota overrides" }));
+
+describe("a consumer's quota overrides (RL-10, ADR-0070)", () => {
+  it("creates a standing quota override and shows the quota at its usage in red", async () => {
+    mockConsumer();
+    const sent = mockWrites();
+    const user = userEvent.setup();
+    renderApp("/consumers/7", ["key-admin"]);
+    expect(await (await quotaOverrides()).findByText(/No quota overrides: the plan's quotas apply\./)).toBeInTheDocument();
+    await user.click((await quotaOverrides()).getByRole("button", { name: "Add quota override" }));
+    const dialog = within(await screen.findByRole("dialog", { name: "Add a quota override" }));
+    await user.type(dialog.getByRole("textbox", { name: "Daily quota" }), "5000");
+    await user.type(dialog.getByRole("textbox", { name: "Note" }), "launch");
+    await user.click(dialog.getByRole("button", { name: "Create quota override" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(sent).toEqual([{ method: "POST", path: "/api/v1/quota-overrides", ifMatch: null, body: { consumer_id: 7, quotas: { daily: 5000 }, note: "launch" } }]);
+  });
+
+  it("lists quota overrides as Quota override rows and edits one with If-Match", async () => {
+    mockConsumer({ quotaOverrides: [quotaOverride({ ends_at: "2099-01-01T00:00:00Z", quotas: { daily: 1000, monthly: 20000 } })] });
+    const sent = mockWrites();
+    const user = userEvent.setup();
+    renderApp("/consumers/7", ["admin"]);
+    const row = within(await (await quotaOverrides()).findByRole("row", { name: /^Quota override/ }));
+    expect(row.getByText("1,000 a day · 20,000 a month")).toBeInTheDocument();
+    expect(row.getByText("Burst grant, active")).toBeInTheDocument();
+    await user.click(row.getByRole("button", { name: "Edit quota override 50" }));
+    const dialog = within(await screen.findByRole("dialog", { name: "Quota override 50" }));
+    const monthly = dialog.getByRole("textbox", { name: "Monthly quota" });
+    await waitFor(() => expect(monthly).toHaveValue("20000"));
+    await user.clear(monthly);
+    await user.type(monthly, "30000");
+    await user.click(dialog.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]).toEqual({
+      method: "PUT", path: "/api/v1/quota-overrides/50", ifMatch: '"3"',
+      body: { consumer_id: 7, quotas: { daily: 1000, monthly: 30000 }, ends_at: "2099-01-01T00:00:00Z" },
+    });
+  });
+
+  it("deletes a quota override after confirming, with its version as If-Match", async () => {
+    mockConsumer({ quotaOverrides: [quotaOverride()] });
+    const sent = mockWrites();
+    const user = userEvent.setup();
+    renderApp("/consumers/7", ["key-admin"]);
+    await user.click(await (await quotaOverrides()).findByRole("button", { name: "Delete quota override 50" }));
+    const dialog = within(await screen.findByRole("dialog"));
+    expect(dialog.getByText(/The plan's quotas apply again/)).toBeInTheDocument();
+    await user.click(dialog.getByRole("button", { name: /^Delete/ }));
+    await waitFor(() => expect(sent).toEqual([{ method: "DELETE", path: "/api/v1/quota-overrides/50", ifMatch: '"3"', body: null }]));
+  });
+
+  it("disables every quota override write for a viewer, with the reason", async () => {
+    mockConsumer({ quotaOverrides: [quotaOverride()] });
+    renderApp("/consumers/7", ["viewer"]);
+    for (const name of ["Add quota override", "Edit quota override 50", "Delete quota override 50"]) {
+      const b = await (await quotaOverrides()).findByRole("button", { name });
+      expect(b, name).toBeDisabled();
+      expect(b, name).toHaveAccessibleDescription("Needs the key-admin or admin role");
+    }
+  });
+
+  it("says when the quota usage cannot be read", async () => {
+    mockConsumer();
+    server.use(http.get("/api/v1/quota-usage", () => HttpResponse.json({ code: "internal", error: "boom" }, { status: 500 })));
+    renderApp("/consumers/7", ["viewer"]);
+    expect(await screen.findAllByText("Unavailable")).toHaveLength(2);
+  });
+
+  it("marks a period at its quota", async () => {
+    mockConsumer();
+    mockUsage([usage(7, [1000, 1000], [10, 500])]);
+    renderApp("/consumers/7", ["viewer"]);
+    expect(await screen.findByLabelText("Quota today: 1,000 / 1,000, at the quota")).toHaveClass("quota-full");
+    expect(screen.getByLabelText("Quota this month: 10 / 500")).not.toHaveClass("quota-full");
   });
 });
 

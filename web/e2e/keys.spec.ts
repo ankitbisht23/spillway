@@ -1,5 +1,6 @@
 // Issue, rotate and revoke a key (UI-06, CP-15 – CP-17, ADR-0061): a
-// key-admin creates a consumer, issues a key (shown once, copied, gone
+// key-admin creates a consumer, gives it a quota override and sees it in
+// the quota-usage column (RL-10, ADR-0070), issues a key (shown once, copied, gone
 // from the page on close), rotates it with a grace period, and revokes
 // both keys after confirming; the list shows the rotation and the
 // revocations. Each key is exercised through a gateway: it works once
@@ -76,9 +77,30 @@ test("issue, rotate and revoke a key, each exercised through a gateway", async (
   const keys = page.getByRole("region", { name: "API keys" });
   await expect(keys.getByText("No API keys yet.", { exact: false })).toBeVisible();
 
+  // A quota override (RL-10, ADR-0070): the consumer's quota becomes 1,000
+  // a day, shown on the consumer and in the list's quota column; nothing is
+  // flushed yet, so 0 used.
+  const quotas = page.getByRole("region", { name: "Quota overrides" });
+  await quotas.getByRole("button", { name: "Add quota override" }).click();
+  let dialog = page.getByRole("dialog", { name: "Add a quota override" });
+  await dialog.getByRole("textbox", { name: "Daily quota" }).fill("1000");
+  await dialog.getByRole("textbox", { name: "Note" }).fill(`Playwright ${s.run}: quota`);
+  await dialog.getByRole("button", { name: "Create quota override" }).click();
+  await expect(dialog).toBeHidden();
+  await expect(quotas.getByRole("row", { name: /^Quota override/ })).toContainText("1,000 a day · — a month");
+  await expect(page.getByLabel("Quota today: 0 / 1,000")).toBeVisible();
+  await page.getByRole("link", { name: "All consumers" }).click();
+  await page.getByRole("textbox", { name: "Exact name" }).fill(name);
+  await page.getByRole("button", { name: "Find" }).click();
+  const listed = page.getByRole("row", { name: new RegExp(`^${name}`) });
+  await expect(listed.getByLabel("Today: 0 / 1,000")).toBeVisible();
+  await expect(listed.getByLabel("This month: —")).toBeVisible();
+  await listed.getByRole("link", { name }).click();
+  await expect(page.getByRole("heading", { name: `Consumer ${name}` })).toBeVisible();
+
   // Issue: shown once, copied, gone from the page when the dialog closes.
   await keys.getByRole("button", { name: "Issue key" }).click();
-  let dialog = page.getByRole("dialog", { name: `Issue an API key for ${name}` });
+  dialog = page.getByRole("dialog", { name: `Issue an API key for ${name}` });
   await dialog.getByRole("button", { name: "Issue key" }).click();
   const first = await keyIn(dialog);
   await dialog.getByRole("button", { name: "Copy key" }).click();

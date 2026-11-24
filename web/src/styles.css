@@ -193,3 +193,4 @@ button.link-button { padding: 0; border: 0; background: none; color: var(--accen
 /* Consumers & keys (m6-consumers-keys) */
 .row-actions { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0.5rem; }
 .secret code { display: block; padding: 0.5rem; border: 1px solid var(--border); border-radius: var(--radius); word-break: break-all; user-select: all; }
+.quota-full { color: var(--danger); font-weight: 600; }
