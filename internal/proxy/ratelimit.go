@@ -66,6 +66,27 @@ type limits struct {
 	// snapshot and identity (RL-19); nil for none, or when a newer pair is
 	// already in use.
 	deny *denyGeneration
+	// lease is the replica's lease table for the request's snapshot and
+	// identity (RL-18); nil for none, or when a newer pair is already in
+	// use: batched policies are then checked strictly.
+	lease *leaseGeneration
+	// leases are the request's batched policies that took cost from a lease
+	// or reserved one, in order.
+	leases []leaseUse
+	// leaseUS is the latest decision time of the policies served from
+	// leases: a grant's Redis TIME plus the time since it arrived.
+	leaseUS int64
+}
+
+// leaseUse is one batched policy of the request that took its cost from a
+// lease or reserved one (ADR-0069).
+type leaseUse struct {
+	key      string     // the lease's key: the Redis key of the policy's first limit
+	k        int64      // the policy's lease_k
+	call     *redisCall // the call carrying the reservation; nil if served
+	first    int        // reserved: the index of the policy's first limit in call
+	reserved bool       // a reservation not yet granted or ended
+	served   bool       // holds the cost from the lease: put back if the request is denied
 }
 
 // check is one limit's evaluation for the request.
@@ -141,6 +162,12 @@ func (l *limits) identify(c *config.Consumer, key string, keyID int64, id *confi
 // cache, for s and id, the request's snapshot and identity (RL-19).
 func (l *limits) useDenyCache(c *denyCache, s *config.Snapshot, id *config.Identity) {
 	l.deny = c.generation(s.Seq(), id.Seq())
+}
+
+// useLeases makes the request's Redis phase use t, the replica's lease
+// table, for s and id, the request's snapshot and identity (RL-18).
+func (l *limits) useLeases(t *leaseTable, s *config.Snapshot, id *config.Identity) {
+	l.lease = t.generation(s.Seq(), id.Seq())
 }
 
 // limitsOf returns the limits p checks the request against, or false when
@@ -239,7 +266,9 @@ func (l *limits) check(identity bool) bool {
 // request, everything the request holds is refunded and checkRedis returns
 // false; unavailable then says whether the answer is 503 (RL-23). Before
 // any call, the deny cache can deny the request, and a call's enforce deny
-// is cached (RL-19, ADR-0069).
+// is cached (RL-19, ADR-0069). Just before each call, its batched policies
+// are served from leases or reserve one in it (RL-18, ADR-0069); a call
+// left empty is not sent.
 func (l *limits) checkRedis() bool {
 	if l.redis == nil {
 		return true
@@ -252,24 +281,37 @@ func (l *limits) checkRedis() bool {
 		return false
 	}
 	start := time.Now()
-	defer func() { l.rec.RateLimitCheck(telemetry.BackendRedis, time.Since(start)) }()
+	called := false // only requests that called Redis observe its check duration
+	defer func() {
+		if called {
+			l.rec.RateLimitCheck(telemetry.BackendRedis, time.Since(start))
+		}
+	}()
 	deadline := start.Add(l.budget)
 	// The request's values reach the calls, but a client that goes away
 	// cannot cut a sent call short.
 	ctx, cancel := context.WithDeadline(context.WithoutCancel(l.r.Context()), deadline)
 	defer cancel()
 	for _, c := range calls {
+		if l.lease != nil {
+			l.useLease(c)
+			if len(c.limits) == 0 {
+				continue // every policy served from a lease
+			}
+		}
+		called = true
 		var res rlredis.Result
 		var sent time.Time
 		err := error(&rlredis.Error{Kind: rlredis.KindTimeout, Err: errBudgetSpent})
 		if time.Now().Before(deadline) {
 			span := l.startRedisSpan(ctx, c.slot, false)
-			if l.deny != nil {
+			if l.deny != nil || l.lease != nil {
 				sent = l.registry.Now()
 			}
 			res, err = l.redis.Call(ctx, l.cost, c.limits)
 			endRedisSpan(span, res.Allowed, err)
 		}
+		l.reserved(c, res, err, sent)
 		if err != nil {
 			if !l.failed(c, err) {
 				return false
@@ -281,9 +323,18 @@ func (l *limits) checkRedis() bool {
 		for i, lim := range c.limits {
 			c.checks = append(c.checks, len(l.checks))
 			// Written: enforce limits of an allowed call, and its shadow
-			// limits that would allow (the script's write rule).
+			// limits that would allow (the script's write rule). A lease
+			// group's grant stays with the lease, never refunded: the
+			// request's view counts the lease's tokens left as remaining.
 			written := res.Allowed && (lim.Enforce || res.ShadowWouldDeny&(1<<i) == 0)
-			l.checks = append(l.checks, check{policy: c.policies[i], limit: c.conf[i], windows: c.windows[i], d: res.Limits[i], held: written})
+			d := res.Limits[i]
+			if lim.LeaseK > 0 {
+				written = false
+				if res.Allowed {
+					d.Remaining += res.Granted[i] - l.cost
+				}
+			}
+			l.checks = append(l.checks, check{policy: c.policies[i], limit: c.conf[i], windows: c.windows[i], d: d, held: written})
 		}
 		l.decide(c, func(i int) string {
 			if res.Limits[i].Allowed {
@@ -301,6 +352,130 @@ func (l *limits) checkRedis() bool {
 		}
 	}
 	return true
+}
+
+// useLease serves c's batched policies from this replica's leases before c
+// is sent (RL-18, ADR-0069, step 3): an enforce policy with lease_k ≥ the
+// request's cost takes the cost from a live lease that holds it and leaves
+// c, with an allow decision; otherwise it reserves in c (lease_k = k), or is
+// checked strictly while another request's reservation for the key is in
+// flight or the table is full.
+func (l *limits) useLease(c *redisCall) {
+	var now time.Time
+	keep := 0
+	for i := 0; i < len(c.limits); {
+		p := c.policies[i]
+		j := i + 1
+		for j < len(c.limits) && c.policies[j] == p {
+			j++
+		}
+		if p.LeaseK > 0 && p.Mode == config.Enforce && l.cost <= p.LeaseK {
+			if now.IsZero() {
+				now = l.registry.Now()
+			}
+			key := c.limits[i].Key
+			take := l.lease.acquire(key, c.limits[i:j], l.cost, now)
+			switch take.step {
+			case leaseServe:
+				l.rec.Lease(leaseLocal)
+				l.served(c, i, j, take, now)
+				l.leases = append(l.leases, leaseUse{key: key, k: p.LeaseK, served: true})
+				i = j
+				continue // decided: not in the call
+			case leaseReserve:
+				for x := i; x < j; x++ {
+					c.limits[x].LeaseK = p.LeaseK
+				}
+				l.leases = append(l.leases, leaseUse{key: key, k: p.LeaseK, call: c, first: keep, reserved: true})
+			default:
+				if take.result != "" {
+					l.rec.Lease(take.result)
+				}
+			}
+		}
+		for x := i; x < j; x++ { // keep the policy in the call
+			c.limits[keep], c.policies[keep], c.conf[keep], c.windows[keep], c.keys[keep] = c.limits[x], c.policies[x], c.conf[x], c.windows[x], c.keys[x]
+			keep++
+		}
+		i = j
+	}
+	c.limits, c.policies, c.conf, c.windows, c.keys = c.limits[:keep], c.policies[:keep], c.conf[:keep], c.windows[:keep], c.keys[:keep]
+}
+
+// served records the policy of c's limits [i, j) as served from a lease at
+// now: an allow, with each limit's remaining the grant's plus the lease's
+// tokens left and its reset the grant's less the time since (ADR-0069,
+// "Headers and decision time"); the decision time is the grant's Redis
+// TIME plus that time.
+func (l *limits) served(c *redisCall, i, j int, take leaseTake, now time.Time) {
+	since := now.Sub(take.grantAt)
+	for x := i; x < j; x++ {
+		ll := take.limits[x-i]
+		d := ratelimit.Decision{Allowed: true, Remaining: ll.remaining + take.tokens, ResetAfter: max(0, ll.reset-since)}
+		l.checks = append(l.checks, check{policy: c.policies[x], limit: c.conf[x], windows: c.windows[x], d: d})
+	}
+	l.q.Decisions = append(l.q.Decisions, telemetry.Decision{Policy: c.policies[i].Name, Decision: "allow", Mode: c.policies[i].Mode})
+	l.leaseUS = max(l.leaseUS, take.grantUS+since.Microseconds())
+}
+
+// reserved ends the reservations c carried, once c, sent at sent, answered
+// res or failed with err: an allowed call's grant becomes the lease, less
+// the request's cost, which the request holds until it is answered; a
+// denied, failed or unsent call grants nothing (ADR-0069, "Reserve").
+func (l *limits) reserved(c *redisCall, res rlredis.Result, err error, sent time.Time) {
+	var now time.Time
+	for i := range l.leases {
+		u := &l.leases[i]
+		if !u.reserved || u.call != c {
+			continue
+		}
+		u.reserved = false
+		var g int64
+		if err == nil && res.Allowed {
+			g = res.Granted[u.first]
+		}
+		switch {
+		case err != nil:
+			l.lease.ended(u.key)
+			l.rec.Lease(leaseError)
+			continue
+		case g < l.cost: // denied: nothing written
+			l.lease.ended(u.key)
+			l.rec.Lease(leaseDenied)
+			continue
+		case g < u.k:
+			l.rec.Lease(leasePartial)
+		default:
+			l.rec.Lease(leaseGranted)
+		}
+		if now.IsZero() {
+			now = l.registry.Now()
+		}
+		var lims []leaseLimit
+		for x := u.first; x < len(c.limits) && c.policies[x] == c.policies[u.first]; x++ {
+			lim, d := c.limits[x], res.Limits[x]
+			lims = append(lims, leaseLimit{rate: lim.Rate, burst: lim.Burst, period: lim.Period, remaining: d.Remaining, reset: d.ResetAfter})
+		}
+		l.lease.granted(u.key, l.cost, g, sent, now, res.NowUS, lims)
+		u.served = true
+	}
+}
+
+// putBack gives the cost back to every lease the request took it from, its
+// own grant's included, once the request is denied (ADR-0069).
+func (l *limits) putBack() {
+	var now time.Time
+	for i := range l.leases {
+		u := &l.leases[i]
+		if !u.served {
+			continue
+		}
+		if now.IsZero() {
+			now = l.registry.Now()
+		}
+		l.lease.putBack(u.key, u.k, l.cost, now)
+		u.served = false
+	}
 }
 
 // cachedDeny denies the request from the deny cache if an enforce limit of
@@ -430,14 +605,19 @@ func (l *limits) failed(c *redisCall, err error) bool {
 // decided the request (ADR-0021).
 const decisionTimeHeader = "Spillway-Decision-Time"
 
-// decisionTime is the Spillway-Decision-Time value: the now_us of the last
-// Redis call that ran, if the request made at least one and none failed;
-// otherwise "" (ADR-0021).
+// decisionTime is the Spillway-Decision-Time value: the latest of the
+// now_us of the last Redis call that ran and the decision times of the
+// policies served from leases (ADR-0069), if the request had either and
+// no call failed; otherwise "" (ADR-0021).
 func (l *limits) decisionTime() string {
-	if len(l.calls) == 0 || l.failures {
+	us := l.leaseUS
+	if len(l.calls) > 0 {
+		us = max(us, l.calls[len(l.calls)-1].nowUS)
+	}
+	if us == 0 || l.failures {
 		return ""
 	}
-	return strconv.FormatInt(l.calls[len(l.calls)-1].nowUS, 10)
+	return strconv.FormatInt(us, 10)
 }
 
 // redisErrorHeader carries, in dev mode, the kinds of the request's failed
@@ -541,7 +721,7 @@ func (l *limits) redisCalls() []*redisCall {
 		for _, lim := range lims {
 			c.limits = append(c.limits, rlredis.Limit{
 				Key: key(lim.Period), Level: p.Level, Enforce: p.Mode == config.Enforce,
-				Algorithm: p.Algorithm, Rate: lim.Rate, Period: lim.Period, Burst: lim.Burst,
+				Algorithm: p.Algorithm, Rate: lim.Rate, Period: lim.Period, Burst: lim.Burst, Group: i + 1,
 			})
 			c.policies = append(c.policies, p)
 			c.conf = append(c.conf, lim)
@@ -554,9 +734,11 @@ func (l *limits) redisCalls() []*redisCall {
 
 // refund gives back everything a denied request holds, shadow limits
 // included: local deductions at once, Redis ones asynchronously, one refund
-// call per Redis call with the limits it wrote (ADR-0021). The headers show
-// the state after the refunds.
+// call per Redis call with the limits it wrote (ADR-0021); costs taken from
+// leases go back to them (ADR-0069). The headers show the state after the
+// refunds.
 func (l *limits) refund() {
+	l.putBack()
 	for i := range l.checks {
 		c := &l.checks[i]
 		if !c.held || c.limiter == nil {

@@ -47,6 +47,14 @@ var redisErrorKinds = []string{"timeout", "conn", "script"}
 // gw_ratelimit_deny_cache_total{result} (RL-19, ADR-0069).
 var denyCacheResults = []string{"hit", "insert", "full"}
 
+// leaseResults and leaseDropReasons are the label values of
+// gw_ratelimit_lease_total{result} and
+// gw_ratelimit_lease_tokens_dropped_total{reason} (RL-18, ADR-0069).
+var (
+	leaseResults     = []string{"local", "granted", "partial", "denied", "error", "inflight", "full"}
+	leaseDropReasons = []string{"expired", "reset", "reserve"}
+)
+
 // maxTenants is how many tenants keep their own tenant label (OB-01).
 const maxTenants = 50
 
@@ -105,7 +113,9 @@ type Recorder struct {
 	refunds    prometheus.Counter
 	keyCap     *prometheus.CounterVec
 
-	denyCache *prometheus.CounterVec
+	denyCache    *prometheus.CounterVec
+	leases       *prometheus.CounterVec
+	leaseDropped *prometheus.CounterVec
 	// denyEntries counts the deny cache's entries; nil until set.
 	denyEntries atomic.Pointer[func() int64]
 	mu          sync.Mutex // a tenant rotation never runs between labelling and observing
@@ -161,6 +171,14 @@ func NewRecorder(reg prometheus.Registerer, log *slog.Logger, sampleRate float64
 			Name: "gw_ratelimit_deny_cache_total",
 			Help: "Deny cache outcomes (RL-19): hit (a request denied locally, without a Redis call), insert (an enforce deny cached), full (not cached: its shard was full of live entries).",
 		}, []string{"result"}),
+		leases: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "gw_ratelimit_lease_total",
+			Help: "Batched-mode outcomes per policy check (RL-18): local (served from a lease), granted (a reservation got lease_k), partial (got less, at least the cost), denied, error (a reservation failed or was not sent), inflight (checked strictly: a reservation for the key was in flight), full (checked strictly: the lease table's shard was full).",
+		}, []string{"result"}),
+		leaseDropped: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "gw_ratelimit_lease_tokens_dropped_total",
+			Help: "Lease tokens dropped unspent (RL-18): expired (the lease's 1 s ran out), reset (a config or identity swap, or changed limits), reserve (fewer than a request's cost, dropped when it reserved).",
+		}, []string{"reason"}),
 		tenants: newTenantCapper(maxTenants),
 	}
 	for _, k := range redisErrorKinds {
@@ -168,6 +186,12 @@ func NewRecorder(reg prometheus.Registerer, log *slog.Logger, sampleRate float64
 	}
 	for _, r := range denyCacheResults {
 		rec.denyCache.WithLabelValues(r)
+	}
+	for _, r := range leaseResults {
+		rec.leases.WithLabelValues(r)
+	}
+	for _, r := range leaseDropReasons {
+		rec.leaseDropped.WithLabelValues(r)
 	}
 	entries := prometheus.NewGaugeFunc(prometheus.GaugeOpts{
 		Name: "gw_ratelimit_deny_cache_entries",
@@ -178,7 +202,7 @@ func NewRecorder(reg prometheus.Registerer, log *slog.Logger, sampleRate float64
 		}
 		return 0
 	})
-	reg.MustRegister(rec.requests, rec.duration, rec.upstream, rec.retries, rec.decisions, rec.checks, rec.redis, rec.refunds, rec.keyCap, rec.denyCache, entries)
+	reg.MustRegister(rec.requests, rec.duration, rec.upstream, rec.retries, rec.decisions, rec.checks, rec.redis, rec.refunds, rec.keyCap, rec.denyCache, entries, rec.leases, rec.leaseDropped)
 	return rec
 }
 
@@ -251,6 +275,18 @@ func (rec *Recorder) RefundFailure() {
 // (RL-19, ADR-0069).
 func (rec *Recorder) DenyCache(result string) {
 	rec.denyCache.WithLabelValues(result).Inc()
+}
+
+// Lease records a batched-mode outcome of one policy check: one of local,
+// granted, partial, denied, error, inflight or full (RL-18, ADR-0069).
+func (rec *Recorder) Lease(result string) {
+	rec.leases.WithLabelValues(result).Inc()
+}
+
+// LeaseTokensDropped records n lease tokens dropped unspent for reason: one
+// of expired, reset or reserve (RL-18, ADR-0069).
+func (rec *Recorder) LeaseTokensDropped(reason string, n int64) {
+	rec.leaseDropped.WithLabelValues(reason).Add(float64(n))
 }
 
 // DenyCacheEntries makes gw_ratelimit_deny_cache_entries report entries().

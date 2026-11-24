@@ -337,7 +337,7 @@ func (c *Client) Refund(ctx context.Context, cost, admittedUS int64, limits []Li
 func encode(cost int64, limits []Limit) []any {
 	args := make([]any, 0, 1+8*len(limits)+1)
 	args = append(args, cost)
-	group := 0
+	group, prev := 0, 0
 	for i, l := range limits {
 		mode, burst, lease := "shadow", int64(0), l.LeaseK
 		if l.Enforce {
@@ -349,9 +349,10 @@ func encode(cost int64, limits []Limit) []any {
 		if cost < 0 {
 			lease = 0
 		}
-		if i == 0 || l.Group == 0 || l.Group != limits[i-1].Group {
+		if i == 0 || l.Group == 0 || l.Group != prev {
 			group++
 		}
+		prev = l.Group
 		args = append(args, l.Level, mode, l.Algorithm, l.Rate, l.Period.Milliseconds(), burst, lease, group)
 	}
 	return args
