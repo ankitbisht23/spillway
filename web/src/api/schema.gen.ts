@@ -892,10 +892,9 @@ export interface components {
             from_plan?: boolean;
             /**
              * Format: int64
-             * @description Lease size k for batched mode (RL-18): each gateway reserves up to k cost units per key and serves them locally; 0 means strict. Only for Redis gcra and sliding_window policies, at most every limit's burst (gcra) or rate (sliding_window); honoured in enforce mode only.
-             * @default 0
+             * @description Lease size k for batched mode (RL-18): each gateway reserves up to k cost units per key and serves them locally; 0, the default (left out of responses), means strict. Only for Redis gcra and sliding_window policies, at most every limit's burst (gcra) or rate (sliding_window); honoured in enforce mode only.
              */
-            lease_k: number;
+            lease_k?: number;
             /** Format: int64 */
             readonly version: number;
             /** Format: date-time */

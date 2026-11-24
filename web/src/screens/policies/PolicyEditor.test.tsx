@@ -151,6 +151,33 @@ describe("an existing policy (UI-01, CP-14)", () => {
     }]);
   });
 
+  it("sets the lease size k of a Redis policy, shown only for Redis gcra and sliding_window policies (RL-18)", async () => {
+    const m = mockPolicy(policy({ local: false, failure_mode: "fail_open", lease_k: 10 }));
+    renderApp("/policies/9", ["editor"]);
+    await screen.findByRole("heading", { name: "Policy per-client" });
+    const k = field("Lease size k");
+    expect(k).toHaveValue("10");
+    expect(k).toHaveAccessibleDescription(/^0 = strict: one Redis call per request\. k > 0 = batched: .* up to replicas × k\. Enforce mode only\.$/);
+    await userEvent.clear(k);
+    await userEvent.type(k, "101");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(field("Lease size k")).toHaveAccessibleDescription(/At most limit 1's burst of 100/);
+    expect(m.sent).toEqual([]);
+    await userEvent.clear(field("Lease size k"));
+    await userEvent.type(field("Lease size k"), "25");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText(/Saved to the working set\./)).toBeInTheDocument();
+    expect(m.sent[0]?.body).toMatchObject({ lease_k: 25, failure_mode: "fail_open" });
+    // Local, or a local-only algorithm: no lease.
+    await userEvent.click(screen.getByRole("checkbox", { name: "Local (per gateway, no Redis)" }));
+    expect(screen.queryByRole("textbox", { name: "Lease size k" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("checkbox", { name: "Local (per gateway, no Redis)" }));
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Algorithm" }), "sliding_window");
+    expect(field("Lease size k")).toHaveValue("25");
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Algorithm" }), "fixed_window");
+    expect(screen.queryByRole("textbox", { name: "Lease size k" })).not.toBeInTheDocument();
+  });
+
   it("on 412 offers Reload, which loads the current version into the form", async () => {
     const m = mockPolicy(policy(), () => HttpResponse.json({ error: "If-Match does not match", code: "precondition_failed", request_id: "r", details: [{ version: 5 }] }, { status: 412 }));
     renderApp("/policies/9", ["editor"]);

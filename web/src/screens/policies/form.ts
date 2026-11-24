@@ -33,6 +33,8 @@ export interface PolicyForm {
   /** Empty: the server's default, fail_open, for a Redis policy. */
   failureMode: string;
   fromPlan: boolean;
+  /** Lease size k (RL-18): empty or 0 for strict. Redis gcra and sliding_window policies only. */
+  leaseK: string;
 }
 
 export type Field = keyof PolicyForm;
@@ -42,7 +44,7 @@ export type FieldErrors = Partial<Record<Field, string>>;
 export function newForm(): PolicyForm {
   return {
     name: "", level: "route", routes: "", methods: "", keyTemplate: "", algorithm: "gcra",
-    limits: [{ rate: "", period: "1s", burst: "" }], mode: "shadow", local: false, failureMode: "", fromPlan: false,
+    limits: [{ rate: "", period: "1s", burst: "" }], mode: "shadow", local: false, failureMode: "", fromPlan: false, leaseK: "",
   };
 }
 
@@ -60,7 +62,13 @@ export function formOf(p: Policy): PolicyForm {
     local: p.local ?? false,
     failureMode: p.failure_mode ?? "",
     fromPlan: p.from_plan ?? false,
+    leaseK: p.lease_k ? String(p.lease_k) : "",
   };
+}
+
+/** Whether a policy can be batched (RL-18): a Redis gcra or sliding_window policy. */
+export function leaseable(f: PolicyForm): boolean {
+  return !f.local && (f.algorithm === "gcra" || f.algorithm === "sliding_window");
 }
 
 function list(s: string): string[] {
@@ -89,6 +97,7 @@ export function bodyOf(f: PolicyForm): Policy {
   }
   if (f.local) body.local = true;
   if (f.failureMode) body.failure_mode = f.failureMode;
+  if (leaseable(f) && Number(f.leaseK) > 0) body.lease_k = Number(f.leaseK);
   // The API types read-only fields as required; the server ignores them.
   return body as unknown as Policy;
 }
@@ -100,6 +109,7 @@ const MAX_QUANTITY = 1_000_000_000;
 const MAX_PERIOD_S = 8760 * 3600;
 const MAX_DEFAULT_BURST_PERIOD_S = 60;
 const MAX_REDIS_LIMITS = 32;
+const MAX_LEASE_K = 1_000_000;
 
 /** The placeholders of a key template, or why it does not parse (as config.ParseKeyTemplate). */
 export function parseKeyTemplate(t: string): { fields: string[] } | { error: string } {
@@ -201,7 +211,24 @@ export function validatePolicy(f: PolicyForm): FieldErrors {
     const err = limitsError(f, local);
     if (err) e.limits = err;
   }
+  const lease = leaseKError(f);
+  if (lease) e.leaseK = lease;
   return e;
+}
+
+/** Why the lease size is not valid, if it is not (as config's compilePolicy and checkLeaseK; plans are the server's to check). */
+function leaseKError(f: PolicyForm): string | undefined {
+  const k = f.leaseK.trim();
+  if (!leaseable(f) || k === "") return undefined;
+  if (!/^\d+$/.test(k) || Number(k) > MAX_LEASE_K) return `A whole number from 0 to ${MAX_LEASE_K}`;
+  if (Number(k) === 0 || f.fromPlan) return undefined;
+  for (const [i, l] of f.limits.entries()) {
+    const at = f.algorithm === "gcra" ? Number(l.burst.trim() || l.rate) : Number(l.rate);
+    if (Number.isFinite(at) && at >= 1 && Number(k) > at) {
+      return `At most limit ${i + 1}'s ${f.algorithm === "gcra" ? "burst" : "rate"} of ${at}: a lease holds at most what a limit admits at once`;
+    }
+  }
+  return undefined;
 }
 
 /** The form field a server 422 detail is about, from its path or its message's first word. */
@@ -209,6 +236,7 @@ const SERVER_FIELDS: [RegExp, Field][] = [
   [/^name\b/, "name"], [/^level\b/, "level"], [/^algorithm\b/, "algorithm"], [/^mode\b/, "mode"],
   [/^failure_mode\b/, "failureMode"], [/^match\.routes\b/, "routes"], [/^match\.methods\b/, "methods"],
   [/^key_template\b/, "keyTemplate"], [/^limits\b/, "limits"], [/^route "/, "limits"], [/^from_plan\b/, "fromPlan"],
+  [/^lease_k\b/, "leaseK"],
 ];
 
 /**
