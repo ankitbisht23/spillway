@@ -312,6 +312,8 @@ Prometheus scrapes RED metrics, limiter decisions and dependency health from the
 | `gw_ratelimit_check_duration_seconds` | histogram | backend (local, redis) |
 | `gw_ratelimit_deny_cache_total` | counter | result (hit, insert, full) |
 | `gw_ratelimit_deny_cache_entries` | gauge | none |
+| `gw_ratelimit_lease_total` | counter | result (local, granted, partial, denied, error, inflight, full) |
+| `gw_ratelimit_lease_tokens_dropped_total` | counter | reason (expired, reset, reserve) |
 | `gw_redis_errors_total` | counter | kind (timeout, conn, script) |
 | `gw_retries_total` | counter | upstream, outcome (sent, budget\_exhausted) |
 | `gw_circuit_state` | gauge | upstream |
@@ -699,7 +701,7 @@ Exit (`make verify-m6`): a new policy goes shadow → reviewed → enforced → 
 
 ### M7 Performance and hardening · est. 3 weeks
 
-- [ ] Token leasing; deny cache in enforce mode only, holding entries for min(retry-after, 10 s) and cleared on any config or identity version change (RL-18, RL-19)
+- [x] Token leasing; deny cache in enforce mode only, holding entries for min(retry-after, 10 s) and cleared on any config or identity version change (RL-18, RL-19)
 - [ ] Quotas with the control-plane flusher: advisory lock, absolute writes, epoch marker and re-seed, UTC days and months; quota-usage column on Consumers & keys (RL-10)
 - [ ] pprof-driven pass to cut hot-path allocations
 - [ ] Nightly schedule and regression gate for `bench.yml`, against the same-arch baseline and the last release’s baseline, same CPU model only (NFR-05)
