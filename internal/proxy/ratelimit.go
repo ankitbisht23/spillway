@@ -62,6 +62,10 @@ type limits struct {
 	// unavailable: Redis failed for an enforce fail_closed policy, so the
 	// request is answered 503 (RL-23).
 	unavailable bool
+	// deny is the generation of the replica's deny cache for the request's
+	// snapshot and identity (RL-19); nil for none, or when a newer pair is
+	// already in use.
+	deny *denyGeneration
 }
 
 // check is one limit's evaluation for the request.
@@ -131,6 +135,12 @@ func (l *limits) identify(c *config.Consumer, key string, keyID int64, id *confi
 		l.values.APIKey = hex.EncodeToString(sum[:])
 	}
 	l.values.Consumer, l.values.Tenant = c.Name, c.Tenant
+}
+
+// useDenyCache makes the request's Redis phase use c, the replica's deny
+// cache, for s and id, the request's snapshot and identity (RL-19).
+func (l *limits) useDenyCache(c *denyCache, s *config.Snapshot, id *config.Identity) {
+	l.deny = c.generation(s.Seq(), id.Seq())
 }
 
 // limitsOf returns the limits p checks the request against, or false when
@@ -227,7 +237,9 @@ func (l *limits) check(identity bool) bool {
 // start of the first (RL-22): a call the budget leaves no time for is not
 // sent and fails as a timeout. If one denies, or a failure mode ends the
 // request, everything the request holds is refunded and checkRedis returns
-// false; unavailable then says whether the answer is 503 (RL-23).
+// false; unavailable then says whether the answer is 503 (RL-23). Before
+// any call, the deny cache can deny the request, and a call's enforce deny
+// is cached (RL-19, ADR-0069).
 func (l *limits) checkRedis() bool {
 	if l.redis == nil {
 		return true
@@ -235,6 +247,9 @@ func (l *limits) checkRedis() bool {
 	calls := l.redisCalls()
 	if len(calls) == 0 {
 		return true
+	}
+	if l.cachedDeny(calls) {
+		return false
 	}
 	start := time.Now()
 	defer func() { l.rec.RateLimitCheck(telemetry.BackendRedis, time.Since(start)) }()
@@ -245,9 +260,13 @@ func (l *limits) checkRedis() bool {
 	defer cancel()
 	for _, c := range calls {
 		var res rlredis.Result
+		var sent time.Time
 		err := error(&rlredis.Error{Kind: rlredis.KindTimeout, Err: errBudgetSpent})
 		if time.Now().Before(deadline) {
 			span := l.startRedisSpan(ctx, c.slot, false)
+			if l.deny != nil {
+				sent = l.registry.Now()
+			}
 			res, err = l.redis.Call(ctx, l.cost, c.limits)
 			endRedisSpan(span, res.Allowed, err)
 		}
@@ -273,12 +292,66 @@ func (l *limits) checkRedis() bool {
 			return "deny"
 		})
 		if !res.Allowed {
+			if l.deny != nil {
+				l.cacheDeny(c, res, sent)
+			}
 			l.denied = true
 			l.refund()
 			return false
 		}
 	}
 	return true
+}
+
+// cachedDeny denies the request from the deny cache if an enforce limit of
+// its calls has a live entry for a cost no higher than the request's (RL-19,
+// ADR-0069). The deny is recorded as a Redis deny would be, the denying
+// limit alone, marked cached; no other limit is evaluated, and the local
+// phases' deductions are refunded.
+func (l *limits) cachedDeny(calls []*redisCall) bool {
+	if l.deny == nil || l.deny.entries.Load() == 0 {
+		return false // nothing cached: the allowed hot path pays one atomic load
+	}
+	now := l.registry.Now()
+	for _, c := range calls {
+		for i, lim := range c.limits {
+			if !lim.Enforce {
+				continue
+			}
+			e, ok := l.deny.lookup(lim, l.cost, now)
+			if !ok {
+				continue
+			}
+			p := c.policies[i]
+			l.checks = append(l.checks, check{policy: p, limit: c.conf[i], windows: c.windows[i], d: ratelimit.Decision{ResetAfter: max(0, e.reset.Sub(now)), RetryAfter: e.until.Sub(now)}})
+			l.q.Decisions = append(l.q.Decisions, telemetry.Decision{Policy: p.Name, Decision: "deny", Mode: p.Mode, Cached: true})
+			l.throttled(p, c.keys[i])
+			l.rec.DenyCache(denyCacheHit)
+			l.denied = true
+			l.refund()
+			return true
+		}
+	}
+	return false
+}
+
+// cacheDeny caches the deny of c, a call sent at sent that res denied: for
+// its denying limit only, if that is an enforce limit, for min(retry-after,
+// 10 s) from sent (RL-19, ADR-0069). Timed from the send, which precedes the
+// script's TIME, the entry never outlives Redis's deny.
+func (l *limits) cacheDeny(c *redisCall, res rlredis.Result, sent time.Time) {
+	i := res.DenyingLimit
+	if i < 0 || i >= len(c.limits) || !c.limits[i].Enforce {
+		return
+	}
+	d := res.Limits[i]
+	hold := min(d.RetryAfter, denyCacheMaxHold)
+	if hold <= 0 {
+		return
+	}
+	lim := c.limits[i]
+	e := denyEntry{until: sent.Add(hold), reset: sent.Add(d.ResetAfter), cost: l.cost, rate: lim.Rate, burst: lim.Burst}
+	l.rec.DenyCache(l.deny.insert(lim.Key, e, sent))
 }
 
 // failed applies the failure modes of the policies in c, a call that failed

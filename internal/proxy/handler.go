@@ -39,6 +39,7 @@ type Handler struct {
 	pools    *Registry
 	limiters *local.Registry
 	redis    Redis
+	deny     *denyCache                        // enforce denies of the Redis policies (RL-19)
 	devMode  bool                              // Spillway-Decision-Time on Redis-decided responses (ADR-0021), Spillway-Redis-Error (ADR-0034) and Spillway-Attempts (ADR-0030)
 	jitter   func(time.Duration) time.Duration // draws a retry's backoff in [0, n) (GW-12)
 	tracer   trace.Tracer                      // nil when tracing is off (OB-02)
@@ -68,7 +69,11 @@ type Handler struct {
 // it traces every request it does not shed (OB-02); with none, traceparent
 // goes upstream unchanged.
 func NewHandler(snapshot func() *config.Snapshot, identity func() *config.Identity, trusted TrustedProxies, pools *Registry, limiters *local.Registry, redis Redis, devMode bool, maxInFlight int64, tracer trace.Tracer, rec *telemetry.Recorder, log *slog.Logger) *Handler {
-	return &Handler{snapshot: snapshot, identity: identity, trusted: trusted, pools: pools, limiters: limiters, redis: redis, devMode: devMode, jitter: rand.N[time.Duration], tracer: tracer, maxInFlight: maxInFlight, rec: rec, log: log, errLog: slog.NewLogLogger(log.Handler(), slog.LevelWarn)}
+	h := &Handler{snapshot: snapshot, identity: identity, trusted: trusted, pools: pools, limiters: limiters, redis: redis, deny: newDenyCache(), devMode: devMode, jitter: rand.N[time.Duration], tracer: tracer, maxInFlight: maxInFlight, rec: rec, log: log, errLog: slog.NewLogLogger(log.Handler(), slog.LevelWarn)}
+	if rec != nil {
+		rec.DenyCacheEntries(h.deny.entries)
+	}
+	return h
 }
 
 // SetHeavyHitters makes the handler count every rate-limit deny and shadow
@@ -215,6 +220,7 @@ func (h *Handler) serve(w *responseRecorder, r *http.Request, body *countingBody
 		return
 	}
 	lim := newLimits(s, route, h.limiters, h.redis, h.tracer, h.hitters, h.rec, h.log, r, q, ip)
+	lim.useDenyCache(h.deny, s, id)
 	defer lim.release()
 	allowed := exempt || lim.check(false)
 	if allowed {

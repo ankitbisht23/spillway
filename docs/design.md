@@ -310,6 +310,8 @@ Prometheus scrapes RED metrics, limiter decisions and dependency health from the
 | `gw_upstream_duration_seconds` | histogram | upstream, attempt |
 | `gw_ratelimit_decisions_total` | counter | policy, decision, mode |
 | `gw_ratelimit_check_duration_seconds` | histogram | backend (local, redis) |
+| `gw_ratelimit_deny_cache_total` | counter | result (hit, insert, full) |
+| `gw_ratelimit_deny_cache_entries` | gauge | none |
 | `gw_redis_errors_total` | counter | kind (timeout, conn, script) |
 | `gw_retries_total` | counter | upstream, outcome (sent, budget\_exhausted) |
 | `gw_circuit_state` | gauge | upstream |

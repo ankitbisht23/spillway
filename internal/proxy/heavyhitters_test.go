@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -69,12 +70,16 @@ func TestHeavyHitterEvents(t *testing.T) {
 		got = append(got, send("", "client-secret-c1", ip))
 	}
 	// Redis, as app (consumer 5, key 72): redis-shadow would deny from the
-	// second, redis-consumer denies the fourth and fifth.
+	// second, redis-consumer denies the fourth and, from the deny cache,
+	// the fifth.
 	for i := range 5 {
 		got = append(got, send("app", "client-"+string(rune('a'+i)), ip))
 	}
 	// Redis down: redis-consumer's degraded limiter (3 per replica) denies
-	// the fourth; fail_open outcomes are not counted.
+	// the fourth; fail_open outcomes are not counted. First the deny cache's
+	// entry for redis-consumer expires: the fake's retry-after is 1 s
+	// (RL-19).
+	w.g.clock.Advance(time.Second)
 	w.redis.setFail("{t:2}", true)
 	for i := range 4 {
 		got = append(got, send("app", "client-"+string(rune('k'+i)), ip))
@@ -98,8 +103,8 @@ func TestHeavyHitterEvents(t *testing.T) {
 	for policy, want := range map[int64]counts{
 		41: {1, 0, 0, 0},  // before authentication: no IDs
 		42: {0, 2, 0, 0},  //
-		43: {3, 0, 5, 72}, // two in Redis, one degraded
-		45: {0, 4, 5, 72},
+		43: {3, 0, 5, 72}, // two in Redis (the second from the deny cache, RL-19), one degraded
+		45: {0, 3, 5, 72}, // not the fifth request's: a cached deny evaluates no other limit (ADR-0069)
 	} {
 		e := by[policy]
 		if g := (counts{e.Denied, e.ShadowDenied, e.Consumer, e.APIKey}); g != want {
