@@ -557,10 +557,10 @@ func (q *Queries) GetConsumer(ctx context.Context, id int64) (Consumer, error) {
 }
 
 const getOverride = `-- name: GetOverride :one
-SELECT id, consumer_id, policy_id, limits, quotas, starts_at, ends_at, note, version, created_at, updated_at FROM overrides WHERE id = $1
+SELECT id, consumer_id, policy_id, limits, quotas, starts_at, ends_at, note, version, created_at, updated_at FROM overrides WHERE id = $1 AND policy_id IS NOT NULL
 `
 
-// overrides_pkey.
+// overrides_pkey. A policy override.
 func (q *Queries) GetOverride(ctx context.Context, id int64) (Override, error) {
 	row := q.db.QueryRow(ctx, getOverride, id)
 	var i Override
@@ -839,7 +839,7 @@ func (q *Queries) ListConsumers(ctx context.Context, arg ListConsumersParams) ([
 
 const listOverrides = `-- name: ListOverrides :many
 SELECT id, consumer_id, policy_id, limits, quotas, starts_at, ends_at, note, version, created_at, updated_at FROM overrides
-WHERE id > $1::bigint
+WHERE id > $1::bigint AND policy_id IS NOT NULL
   AND ($2::bigint IS NULL OR consumer_id = $2)
   AND ($3::bigint IS NULL OR policy_id = $3)
 ORDER BY id LIMIT $4
@@ -852,7 +852,8 @@ type ListOverridesParams struct {
 	Lim        int32
 }
 
-// overrides_pkey keyset scan.
+// overrides_pkey keyset scan. Policy overrides only: quota overrides have
+// their own resource (ADR-0071).
 func (q *Queries) ListOverrides(ctx context.Context, arg ListOverridesParams) ([]Override, error) {
 	rows, err := q.db.Query(ctx, listOverrides,
 		arg.After,

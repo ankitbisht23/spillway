@@ -58,6 +58,8 @@ var matrix = map[string][]string{
 	"getOverride": all, "listAccessLists": all, "getAccessList": all,
 	"createConsumer": {"key-admin", "admin"}, "updateConsumer": {"key-admin", "admin"}, "deleteConsumer": {"key-admin", "admin"},
 	"createOverride": {"key-admin", "admin"}, "updateOverride": {"key-admin", "admin"}, "deleteOverride": {"key-admin", "admin"},
+	"listQuotaOverrides": all, "getQuotaOverride": all, "getQuotaUsage": all,
+	"createQuotaOverride": {"key-admin", "admin"}, "updateQuotaOverride": {"key-admin", "admin"}, "deleteQuotaOverride": {"key-admin", "admin"},
 	"createAccessList": {"key-admin", "admin"}, "updateAccessList": {"key-admin", "admin"}, "deleteAccessList": {"key-admin", "admin"},
 	"issueKey": {"key-admin", "admin"}, "rotateKey": {"key-admin", "admin"}, "revokeKey": {"key-admin", "admin"},
 	"validateConfig": all, "listConfigVersions": all, "getConfigVersion": all, "diffConfigVersion": all,

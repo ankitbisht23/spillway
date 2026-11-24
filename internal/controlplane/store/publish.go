@@ -387,6 +387,9 @@ func identityRefs(ctx context.Context, q *db.Queries, base *Published, c *config
 	}
 	seen := map[int64]bool{}
 	for _, o := range live {
+		if o.PolicyID == nil {
+			continue // a quota override refers to no config entity (ADR-0071)
+		}
 		ref := IdentityRef{Entity: "override", ID: o.ID, Field: "policy_id", Ref: *o.PolicyID}
 		if ref.Limits, err = parseLimits(o.Limits); err != nil {
 			return nil, fmt.Errorf("override %d: stored limits: %w", o.ID, err)

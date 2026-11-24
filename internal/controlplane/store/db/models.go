@@ -153,6 +153,13 @@ type Policy struct {
 	UpdatedAt time.Time
 }
 
+type QuotaUsage struct {
+	ConsumerID int64
+	Period     string
+	Used       int64
+	FlushedAt  time.Time
+}
+
 type Replica struct {
 	ID                    string
 	ConfigVersion         int64

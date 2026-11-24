@@ -133,16 +133,17 @@ ORDER BY id
 RETURNING *;
 
 -- name: ListOverrides :many
--- overrides_pkey keyset scan.
+-- overrides_pkey keyset scan. Policy overrides only: quota overrides have
+-- their own resource (ADR-0071).
 SELECT * FROM overrides
-WHERE id > @after::bigint
+WHERE id > @after::bigint AND policy_id IS NOT NULL
   AND (sqlc.narg(consumer_id)::bigint IS NULL OR consumer_id = sqlc.narg(consumer_id))
   AND (sqlc.narg(policy_id)::bigint IS NULL OR policy_id = sqlc.narg(policy_id))
 ORDER BY id LIMIT @lim;
 
 -- name: GetOverride :one
--- overrides_pkey.
-SELECT * FROM overrides WHERE id = @id;
+-- overrides_pkey. A policy override.
+SELECT * FROM overrides WHERE id = @id AND policy_id IS NOT NULL;
 
 -- name: CreateOverride :one
 INSERT INTO overrides (consumer_id, policy_id, limits, starts_at, ends_at, note, version)

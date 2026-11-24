@@ -62,7 +62,7 @@ func checkPublished(ctx context.Context, q *db.Queries, refs configRefs) error {
 		if err != nil {
 			return err
 		}
-		snap, err := config.Compile(c)
+		snap, err := config.CompileManaged(c)
 		if err != nil {
 			return fmt.Errorf("config version %d does not compile: %w", latest.Version, err)
 		}

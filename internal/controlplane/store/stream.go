@@ -236,6 +236,12 @@ func readIdentity(ctx context.Context, q *db.Queries) (*configpb.Identity, error
 		if ov.Limits, err = parseLimits(o.Limits); err != nil {
 			return nil, fmt.Errorf("override %d: stored limits: %w", o.ID, err)
 		}
+		if o.Quotas != nil { // a quota override (policy_id NULL, ADR-0071)
+			ov.Quotas = &configpb.Quotas{}
+			if err := protojson.Unmarshal(o.Quotas, ov.Quotas); err != nil {
+				return nil, fmt.Errorf("override %d: stored quotas: %w", o.ID, err)
+			}
+		}
 		id.Overrides = append(id.Overrides, ov)
 	}
 	return id, nil
