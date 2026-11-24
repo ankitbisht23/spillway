@@ -92,6 +92,7 @@ func shutdownGateway(t *testing.T, u *shutdownUpstream, drain, grace time.Durati
 		shutdownGrace: grace,
 
 		maxConnections: defaultMaxConnections,
+		maxPerIP:       defaultMaxPerIP,
 		maxInFlight:    defaultMaxInFlight,
 	}
 	logs = &lockedBuffer{}

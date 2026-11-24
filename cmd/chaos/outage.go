@@ -138,8 +138,9 @@ func newOutageRun(r *cpRun, key string) *outageRun {
 	for _, g := range r.o.gateways {
 		// One transport per replica, so the restarted one's connections
 		// can be closed alone; the client closes idle connections before
-		// the gateway's 120 s idle timeout would.
-		tr := &http.Transport{MaxIdleConns: o.maxInFlight, MaxIdleConnsPerHost: o.maxInFlight, IdleConnTimeout: time.Minute}
+		// the gateway's 120 s idle timeout would. At most 512 connections
+		// per replica, below its per-address cap (ADR-0071).
+		tr := &http.Transport{MaxConnsPerHost: maxConnsPerGateway, MaxIdleConns: o.maxInFlight, MaxIdleConnsPerHost: maxConnsPerGateway, IdleConnTimeout: time.Minute}
 		u.gws = append(u.gws, &gwLoad{name: g, transport: tr, client: &http.Client{Transport: tr, Timeout: o.timeout}})
 	}
 	return u

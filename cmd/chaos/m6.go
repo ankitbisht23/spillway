@@ -204,8 +204,11 @@ type probe struct {
 func newProbe(o m6Options, traffic func(string) string) *probe {
 	p := &probe{o: o, traffic: traffic, sem: make(chan struct{}, o.maxInFlight)}
 	for range o.gateways {
+		// At most 512 connections per gateway: the probe sends from one
+		// address, which must stay below the gateways' per-address cap of
+		// 1,024 (ADR-0071).
 		p.clients = append(p.clients, &http.Client{Timeout: o.timeout,
-			Transport: &http.Transport{MaxIdleConnsPerHost: 512, MaxIdleConns: 4096, IdleConnTimeout: time.Minute}})
+			Transport: &http.Transport{MaxConnsPerHost: maxConnsPerGateway, MaxIdleConnsPerHost: maxConnsPerGateway, MaxIdleConns: 4096, IdleConnTimeout: time.Minute}})
 	}
 	return p
 }

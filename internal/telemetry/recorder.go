@@ -37,6 +37,13 @@ const (
 
 	BackendLocal = "local" // rate limit checks in the gateway's memory
 	BackendRedis = "redis" // rate limit checks on Redis Cluster (ADR-0021)
+
+	// The label values of gw_connections_capped_total (GW-26, ADR-0071):
+	// which connection cap was reached, and what happened.
+	CapGlobal           = "global"         // the replica's cap on open connections
+	CapPerIP            = "per_ip"         // the cap per client address
+	ActionClosedWaiting = "closed_waiting" // a connection without a request in progress was closed for the new one
+	ActionShed          = "shed"           // the new connection was shed: a fixed 503 or a reset
 )
 
 // redisErrorKinds are the label values of gw_redis_errors_total{kind}: the
@@ -53,6 +60,13 @@ var denyCacheResults = []string{"hit", "insert", "full"}
 var (
 	leaseResults     = []string{"local", "granted", "partial", "denied", "error", "inflight", "full"}
 	leaseDropReasons = []string{"expired", "reset", "reserve"}
+)
+
+// cappedCaps and cappedActions are the label values of
+// gw_connections_capped_total{cap,action} (GW-26, ADR-0071).
+var (
+	cappedCaps    = []string{CapGlobal, CapPerIP}
+	cappedActions = []string{ActionClosedWaiting, ActionShed}
 )
 
 // maxTenants is how many tenants keep their own tenant label (OB-01).
@@ -116,6 +130,7 @@ type Recorder struct {
 	denyCache    *prometheus.CounterVec
 	leases       *prometheus.CounterVec
 	leaseDropped *prometheus.CounterVec
+	capped       *prometheus.CounterVec
 	// denyEntries counts the deny cache's entries; nil until set.
 	denyEntries atomic.Pointer[func() int64]
 	mu          sync.Mutex // a tenant rotation never runs between labelling and observing
@@ -179,6 +194,10 @@ func NewRecorder(reg prometheus.Registerer, log *slog.Logger, sampleRate float64
 			Name: "gw_ratelimit_lease_tokens_dropped_total",
 			Help: "Lease tokens dropped unspent (RL-18): expired (the lease's 1 s ran out), reset (a config or identity swap, or changed limits), reserve (fewer than a request's cost, dropped when it reserved).",
 		}, []string{"reason"}),
+		capped: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "gw_connections_capped_total",
+			Help: "New client connections that found a connection cap reached (GW-26): cap global (the replica's) or per_ip (the client address's); action closed_waiting (a connection without a request in progress was closed for it) or shed (it got the fixed 503 or a reset).",
+		}, []string{"cap", "action"}),
 		tenants: newTenantCapper(maxTenants),
 	}
 	for _, k := range redisErrorKinds {
@@ -193,6 +212,11 @@ func NewRecorder(reg prometheus.Registerer, log *slog.Logger, sampleRate float64
 	for _, r := range leaseDropReasons {
 		rec.leaseDropped.WithLabelValues(r)
 	}
+	for _, c := range cappedCaps {
+		for _, a := range cappedActions {
+			rec.capped.WithLabelValues(c, a)
+		}
+	}
 	entries := prometheus.NewGaugeFunc(prometheus.GaugeOpts{
 		Name: "gw_ratelimit_deny_cache_entries",
 		Help: "Entries in the deny cache (RL-19), expired ones not yet removed included.",
@@ -202,7 +226,7 @@ func NewRecorder(reg prometheus.Registerer, log *slog.Logger, sampleRate float64
 		}
 		return 0
 	})
-	reg.MustRegister(rec.requests, rec.duration, rec.upstream, rec.retries, rec.decisions, rec.checks, rec.redis, rec.refunds, rec.keyCap, rec.denyCache, entries, rec.leases, rec.leaseDropped)
+	reg.MustRegister(rec.requests, rec.duration, rec.upstream, rec.retries, rec.decisions, rec.checks, rec.redis, rec.refunds, rec.keyCap, rec.denyCache, entries, rec.leases, rec.leaseDropped, rec.capped)
 	return rec
 }
 
@@ -253,6 +277,13 @@ func (rec *Recorder) observe(q *Request) {
 // duration (ADR-0030).
 func (rec *Recorder) ShedConnection() {
 	rec.requests.WithLabelValues(NoRoute, "other", "5xx", OriginGateway, ReasonShed, NoTenant).Inc()
+}
+
+// ConnectionCapped records a new connection that found a connection cap,
+// CapGlobal or CapPerIP, reached and the action taken, ActionClosedWaiting
+// or ActionShed (GW-26, ADR-0071).
+func (rec *Recorder) ConnectionCapped(which, action string) {
+	rec.capped.WithLabelValues(which, action).Inc()
 }
 
 // RateLimitCheck records how long one phase of a request's rate limit checks

@@ -7,9 +7,11 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"math"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"slices"
 	"strings"
@@ -128,10 +130,18 @@ func TestInFlightCapHTTP2(t *testing.T) {
 }
 
 // connCapServer serves h on a plain or TLS listener with a cap of max
-// connections, and returns the cap, the address, the metrics, and the log.
-// A request for /hold gets 200 and its headers at once, and its body only
-// when its client goes away or the test ends.
+// connections and no cap per address that matters, and returns the cap,
+// the address, the metrics, and the log. A request for /hold gets 200 and
+// its headers at once, and its body only when its client goes away or the
+// test ends.
 func connCapServer(t *testing.T, max int64, tlsConfig *tls.Config, h http.Handler) (*ConnLimit, string, *prometheus.Registry, *logBuffer) {
+	t.Helper()
+	return capServer(t, "127.0.0.1:0", max, math.MaxInt64, nil, tlsConfig, h)
+}
+
+// capServer is connCapServer listening on listen, with a cap of maxPerIP
+// connections per client address outside trusted.
+func capServer(t *testing.T, listen string, max, maxPerIP int64, trusted TrustedProxies, tlsConfig *tls.Config, h http.Handler) (*ConnLimit, string, *prometheus.Registry, *logBuffer) {
 	t.Helper()
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })
@@ -150,10 +160,10 @@ func connCapServer(t *testing.T, max int64, tlsConfig *tls.Config, h http.Handle
 	})
 	metrics, logs := prometheus.NewRegistry(), &logBuffer{}
 	rec := telemetry.NewRecorder(metrics, slog.New(slog.DiscardHandler), 1)
-	l := NewConnLimit(max, rec, slog.New(slog.NewJSONHandler(logs, nil)))
+	l := NewConnLimit(max, maxPerIP, trusted, rec, slog.New(slog.NewJSONHandler(logs, nil)))
 	srv := NewServer(h, slog.New(slog.DiscardHandler))
 	srv.ConnState = l.ConnState
-	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", listen)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -281,6 +291,9 @@ func TestConnectionCap(t *testing.T) {
 	if v := metricOf(t, metrics, shedSeries); v != "2" {
 		t.Errorf("%s = %q, want 2", shedSeries, v)
 	}
+	if v := metricOf(t, metrics, cappedSeries(telemetry.CapGlobal, telemetry.ActionShed)); v != "2" {
+		t.Errorf("global shed connections: %q, want 2", v)
+	}
 	if n := strings.Count(logs.String(), `"msg":"shedding connections"`); n != 1 || !strings.Contains(logs.String(), `"connections":1,"max_connections":1`) {
 		t.Errorf("want one log line for the first shed connection within a second, got\n%s", logs.String())
 	}
@@ -348,6 +361,9 @@ func TestConnectionCapWaiting(t *testing.T) {
 	}
 	if v := metricOf(t, metrics, shedSeries); v != "" {
 		t.Errorf("%s = %q, want none shed", shedSeries, v)
+	}
+	if v := metricOf(t, metrics, cappedSeries(telemetry.CapGlobal, telemetry.ActionClosedWaiting)); v != "2" {
+		t.Errorf("waiting connections closed at the global cap: %q, want 2", v)
 	}
 	if !strings.Contains(logs.String(), `"msg":"closing waiting connections at the connection cap","connections":1,"max_connections":3`) {
 		t.Errorf("no log line for the closed connection in\n%s", logs.String())
@@ -532,5 +548,289 @@ func TestShedLatencyUnderOverload(t *testing.T) {
 	}
 	if g.h.InFlight() != 0 {
 		waitFor(t, "in-flight count back to 0", func() bool { return g.h.InFlight() == 0 })
+	}
+}
+
+// cappedSeries is gw_connections_capped_total's series for which and action.
+func cappedSeries(which, action string) string {
+	return `gw_connections_capped_total{action="` + action + `",cap="` + which + `"}`
+}
+
+// openFrom returns how many open connections l counts for the address ip.
+func openFrom(l *ConnLimit, ip string) int64 {
+	key, _ := addrKey(netip.MustParseAddr(ip), nil)
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if a := l.addrs[key]; a != nil {
+		return a.open
+	}
+	return 0
+}
+
+// TestConnectionCapPerIP: at its address's cap, a new connection takes the
+// place of that address's longest-waiting connection, which is closed; with
+// every one of them busy, it gets the shed path's 503, while the replica's
+// cap has room. Each is counted with cap per_ip and logged without the
+// address; the address's count follows closes and never counts a shed
+// connection (GW-26, ADR-0071).
+func TestConnectionCapPerIP(t *testing.T) {
+	l, addr, metrics, logs := capServer(t, "127.0.0.1:0", 100, 3, nil, nil, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests) // a refusal keeps the connection open
+	}))
+	held := holdOpen(t, addr)
+	idle := keepOpenStatus(t, addr, http.StatusTooManyRequests)
+	silent := dial(t, addr)
+	waitFor(t, "3 open", func() bool { return l.Open() == 3 })
+	closed := func(c net.Conn) bool {
+		_ = c.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+		_, err := c.Read(make([]byte, 1))
+		return err != nil && !errors.Is(err, os.ErrDeadlineExceeded)
+	}
+
+	// The idle connection has waited longest: it gives way, then the
+	// silent one.
+	next := keepOpenStatus(t, addr, http.StatusTooManyRequests)
+	if !closed(idle) || closed(silent) || closed(held) {
+		t.Errorf("after a fourth connection: idle closed %v, silent %v, held %v; want only the idle one", closed(idle), closed(silent), closed(held))
+	}
+	fifth := keepOpenStatus(t, addr, http.StatusTooManyRequests)
+	if !closed(silent) || closed(next) || closed(held) {
+		t.Errorf("after a fifth connection: silent closed %v, next %v, held %v; want only the silent one", closed(silent), closed(next), closed(held))
+	}
+	if n, m := l.Open(), openFrom(l, "127.0.0.1"); n != 3 || m != 3 {
+		t.Errorf("%d open, %d from 127.0.0.1; want 3 and 3", n, m)
+	}
+	if v := metricOf(t, metrics, cappedSeries(telemetry.CapPerIP, telemetry.ActionClosedWaiting)); v != "2" {
+		t.Errorf("waiting connections closed at the per-address cap: %q, want 2", v)
+	}
+	if v := metricOf(t, metrics, cappedSeries(telemetry.CapGlobal, telemetry.ActionClosedWaiting)); v != "0" {
+		t.Errorf("waiting connections closed at the global cap: %q, want 0", v)
+	}
+
+	// All three busy: the next connection is shed.
+	_, _ = next.Close(), fifth.Close()
+	waitFor(t, "1 open", func() bool { return l.Open() == 1 })
+	holdOpen(t, addr)
+	holdOpen(t, addr)
+	raw := dial(t, addr)
+	_ = raw.SetDeadline(time.Now().Add(5 * time.Second))
+	_, _ = io.WriteString(raw, "GET / HTTP/1.1\r\nHost: x\r\n\r\n")
+	if got, err := io.ReadAll(raw); err != nil || string(got) != shedResponse {
+		t.Errorf("past the per-address cap: %q, %v; want %q", got, err, shedResponse)
+	}
+	if n, m := l.Open(), openFrom(l, "127.0.0.1"); n != 3 || m != 3 {
+		t.Errorf("after a shed connection: %d open, %d from 127.0.0.1; want 3 and 3", n, m)
+	}
+	for _, s := range []string{shedSeries, cappedSeries(telemetry.CapPerIP, telemetry.ActionShed)} {
+		if v := metricOf(t, metrics, s); v != "1" {
+			t.Errorf("%s = %q, want 1", s, v)
+		}
+	}
+	if v := metricOf(t, metrics, cappedSeries(telemetry.CapGlobal, telemetry.ActionShed)); v != "0" {
+		t.Errorf("global shed connections: %q, want 0", v)
+	}
+	out := logs.String()
+	for _, want := range []string{
+		`"msg":"closing waiting connections at the per-address connection cap","connections":1,"max_connections_per_ip":3`,
+		`"msg":"shedding connections at the per-address connection cap","connections":1,"max_connections_per_ip":3`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("no %s in\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "127.0.0.1") {
+		t.Errorf("the log names the client address:\n%s", out)
+	}
+
+	// Closing them frees the address's places, and its entry goes.
+	_ = held.Close()
+	waitFor(t, "a place freed", func() bool { return openFrom(l, "127.0.0.1") == 2 })
+	l.mu.Lock()
+	n := len(l.addrs)
+	l.mu.Unlock()
+	if n != 1 {
+		t.Errorf("%d addresses tracked, want 1", n)
+	}
+}
+
+// TestConnectionCapPerIPGlobalShed: a connection shed at the replica's cap
+// gives back the place its address had taken for it (ADR-0071).
+func TestConnectionCapPerIPGlobalShed(t *testing.T) {
+	l, addr, metrics, _ := capServer(t, "127.0.0.1:0", 2, 2, nil, nil, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	a, b := holdOpen(t, addr), holdOpen(t, addr)
+	// Both caps are reached; the per-address one is checked first.
+	if got, err := firstLine(t, addr); err != nil || !strings.HasPrefix(got, "HTTP/1.1 503") {
+		t.Fatalf("third connection: %q, %v; want the shed 503", got, err)
+	}
+	if v := metricOf(t, metrics, cappedSeries(telemetry.CapPerIP, telemetry.ActionShed)); v != "1" {
+		t.Errorf("per-address shed connections: %q, want 1", v)
+	}
+	_, _ = a.Close(), b.Close()
+	waitFor(t, "every place freed", func() bool { return l.Open() == 0 && openFrom(l, "127.0.0.1") == 0 })
+
+	// Only the replica's cap reached.
+	l, addr, metrics, _ = capServer(t, "127.0.0.1:0", 2, 3, nil, nil, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	holdOpen(t, addr)
+	holdOpen(t, addr)
+	if got, err := firstLine(t, addr); err != nil || !strings.HasPrefix(got, "HTTP/1.1 503") {
+		t.Fatalf("third connection: %q, %v; want the shed 503", got, err)
+	}
+	if v := metricOf(t, metrics, cappedSeries(telemetry.CapGlobal, telemetry.ActionShed)); v != "1" {
+		t.Errorf("global shed connections: %q, want 1", v)
+	}
+	if n := openFrom(l, "127.0.0.1"); n != 2 {
+		t.Errorf("%d counted for 127.0.0.1 after a global shed, want 2", n)
+	}
+}
+
+// TestConnectionCapPerIPTrusted: a trusted proxy's connections have no cap
+// of their own, only the replica's (SEC-05, ADR-0071).
+func TestConnectionCapPerIPTrusted(t *testing.T) {
+	trusted, err := ParseTrustedProxies("127.0.0.0/8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	l, addr, metrics, _ := capServer(t, "127.0.0.1:0", 10, 1, trusted, nil, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	for range 3 {
+		holdOpen(t, addr)
+	}
+	l.mu.Lock()
+	n := len(l.addrs)
+	l.mu.Unlock()
+	if o := l.Open(); o != 3 || n != 0 {
+		t.Errorf("%d open, %d addresses tracked; want 3 and 0", o, n)
+	}
+	for _, a := range []string{telemetry.ActionShed, telemetry.ActionClosedWaiting} {
+		if v := metricOf(t, metrics, cappedSeries(telemetry.CapPerIP, a)); v != "0" {
+			t.Errorf("per-address %s: %q, want 0", a, v)
+		}
+	}
+}
+
+// TestConnectionCapPerIPOtherAddress: one address at its cap with every
+// connection busy leaves another address's connections alone (ADR-0071).
+func TestConnectionCapPerIPOtherAddress(t *testing.T) {
+	l, addr, _, _ := capServer(t, ":0", 10, 1, nil, nil, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	_, port, _ := net.SplitHostPort(addr)
+	v6 := net.JoinHostPort("::1", port)
+	if c, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", v6); err != nil {
+		t.Skipf("no IPv6 loopback: %v", err)
+	} else {
+		_ = c.Close()
+		waitFor(t, "the probe closed", func() bool { return l.Open() == 0 })
+	}
+	holdOpen(t, net.JoinHostPort("127.0.0.1", port))
+	if got, err := firstLine(t, net.JoinHostPort("127.0.0.1", port)); err != nil || !strings.HasPrefix(got, "HTTP/1.1 503") {
+		t.Errorf("second connection from 127.0.0.1: %q, %v; want the shed 503", got, err)
+	}
+	keepOpen(t, v6)
+	if n, m := openFrom(l, "127.0.0.1"), openFrom(l, "::1"); n != 1 || m != 1 {
+		t.Errorf("%d from 127.0.0.1 and %d from ::1, want 1 and 1", n, m)
+	}
+}
+
+// TestAddrKey: a connection counts against its IPv4 address, IPv4-mapped
+// ones included, or its IPv6 address's /64; a trusted proxy's has none
+// (ADR-0071).
+func TestAddrKey(t *testing.T) {
+	trusted, err := ParseTrustedProxies("10.0.0.0/8, 2001:db8:ffff::/48")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for ip, want := range map[string]string{
+		"192.0.2.1":           "192.0.2.1/32",
+		"::ffff:192.0.2.1":    "192.0.2.1/32",
+		"2001:db8:1:2:3::1":   "2001:db8:1:2::/64",
+		"2001:db8:1:2:ffff::": "2001:db8:1:2::/64",
+		"2001:db8:1:3::1":     "2001:db8:1:3::/64",
+		"fe80::1%en0":         "fe80::/64",
+		"::1":                 "::/64",
+		"10.1.2.3":            "",
+		"::ffff:10.1.2.3":     "",
+		"2001:db8:ffff:1::1":  "",
+	} {
+		key, ok := addrKey(netip.MustParseAddr(ip), trusted)
+		got := ""
+		if ok {
+			got = key.String()
+		}
+		if got != want {
+			t.Errorf("%s: key %q, want %q", ip, got, want)
+		}
+	}
+}
+
+// pipeListener hands out one end of net.Pipe per Dial, with the given
+// remote address, so tests can connect from any address.
+type pipeListener struct {
+	conns chan net.Conn
+	done  chan struct{}
+}
+
+type addrConn struct {
+	net.Conn
+	remote net.Addr
+}
+
+func (c *addrConn) RemoteAddr() net.Addr { return c.remote }
+
+func (p *pipeListener) Accept() (net.Conn, error) {
+	select {
+	case c := <-p.conns:
+		return c, nil
+	case <-p.done:
+		return nil, net.ErrClosed
+	}
+}
+
+func (p *pipeListener) Close() error   { return nil }
+func (p *pipeListener) Addr() net.Addr { return &net.TCPAddr{} }
+
+// dialFrom returns the client end of a connection from ip.
+func (p *pipeListener) dialFrom(t *testing.T, ip string) net.Conn {
+	t.Helper()
+	server, client := net.Pipe()
+	t.Cleanup(func() { _, _ = server.Close(), client.Close() })
+	p.conns <- &addrConn{Conn: server, remote: net.TCPAddrFromAddrPort(netip.AddrPortFrom(netip.MustParseAddr(ip), 50000))}
+	return client
+}
+
+// TestConnectionCapPerIPv6: addresses in one IPv6 /64 share its cap;
+// another /64 has its own (ADR-0071).
+func TestConnectionCapPerIPv6(t *testing.T) {
+	rec := telemetry.NewRecorder(prometheus.NewRegistry(), slog.New(slog.DiscardHandler), 1)
+	l := NewConnLimit(10, 1, nil, rec, slog.New(slog.DiscardHandler))
+	p := &pipeListener{conns: make(chan net.Conn), done: make(chan struct{})}
+	t.Cleanup(func() { close(p.done) })
+	ln := l.Listener(p, nil)
+	accepted := make(chan net.Conn, 10)
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			l.ConnState(c, http.StateActive) // busy: never closed for another
+			accepted <- c
+		}
+	}()
+	p.dialFrom(t, "2001:db8:1:2::1")
+	<-accepted
+	// Same /64: shed. The shed path answers once the request starts.
+	c := p.dialFrom(t, "2001:db8:1:2:ffff::2")
+	_ = c.SetDeadline(time.Now().Add(5 * time.Second))
+	go func() { _, _ = io.WriteString(c, "G") }()
+	if got, err := bufio.NewReader(c).ReadString('\n'); err != nil || !strings.HasPrefix(got, "HTTP/1.1 503") {
+		t.Errorf("second connection in the /64: %q, %v; want the shed 503", got, err)
+	}
+	// Another /64: accepted.
+	p.dialFrom(t, "2001:db8:1:3::1")
+	select {
+	case <-accepted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a connection from another /64 was not accepted")
+	}
+	if n := l.Open(); n != 2 {
+		t.Errorf("%d open, want 2", n)
 	}
 }

@@ -92,6 +92,7 @@ func TestTracesFlushedOnShutdown(t *testing.T) {
 		dnsRefresh:     time.Minute,
 		shutdownGrace:  time.Second,
 		maxConnections: defaultMaxConnections,
+		maxPerIP:       defaultMaxPerIP,
 		maxInFlight:    defaultMaxInFlight,
 
 		accessLogSampleRate: 1,

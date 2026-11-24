@@ -51,6 +51,7 @@ type settings struct {
 
 	// Load shedding (GW-26, ADR-0030); the admin port is exempt
 	maxConnections int64 // SPILLWAY_GATEWAY_MAX_CONNECTIONS: open client connections across the traffic listeners, default 8192
+	maxPerIP       int64 // SPILLWAY_GATEWAY_MAX_CONNECTIONS_PER_IP: of those, from one client address (IPv6: its /64) outside the trusted proxies, default 1024, at most maxConnections (ADR-0071)
 	maxInFlight    int64 // SPILLWAY_GATEWAY_MAX_IN_FLIGHT: requests being handled at once, default 4096
 
 	// Clients (SEC-05)
@@ -82,6 +83,7 @@ const defaultAdminAddr = "127.0.0.1:8001"
 // memory budget in ADR-0030.
 const (
 	defaultMaxConnections = 8192
+	defaultMaxPerIP       = 1024 // an eighth of the default cap (ADR-0071)
 	defaultMaxInFlight    = 4096
 )
 
@@ -175,6 +177,17 @@ func loadSettings(getenv func(string) string) (settings, error) {
 	if v := getenv("SPILLWAY_GATEWAY_MAX_CONNECTIONS"); v != "" {
 		if s.maxConnections, err = strconv.ParseInt(v, 10, 64); err != nil || s.maxConnections <= 0 {
 			return s, fmt.Errorf("SPILLWAY_GATEWAY_MAX_CONNECTIONS: %q is not a positive integer", v)
+		}
+	}
+	// Unset, the cap per address is the default or, below it, the cap on
+	// all connections; set, it must not be above that.
+	s.maxPerIP = min(defaultMaxPerIP, s.maxConnections)
+	if v := getenv("SPILLWAY_GATEWAY_MAX_CONNECTIONS_PER_IP"); v != "" {
+		if s.maxPerIP, err = strconv.ParseInt(v, 10, 64); err != nil || s.maxPerIP <= 0 {
+			return s, fmt.Errorf("SPILLWAY_GATEWAY_MAX_CONNECTIONS_PER_IP: %q is not a positive integer", v)
+		}
+		if s.maxPerIP > s.maxConnections {
+			return s, fmt.Errorf("SPILLWAY_GATEWAY_MAX_CONNECTIONS_PER_IP: %d is above SPILLWAY_GATEWAY_MAX_CONNECTIONS (%d)", s.maxPerIP, s.maxConnections)
 		}
 	}
 	if v := getenv("SPILLWAY_GATEWAY_MAX_IN_FLIGHT"); v != "" {

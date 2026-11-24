@@ -62,6 +62,10 @@ const (
 	decisionTimeHeader = "Spillway-Decision-Time" // dev mode only (ADR-0021)
 	redisErrorHeader   = "Spillway-Redis-Error"   // dev mode only (ADR-0034)
 	maxInFlight        = 1000                     // a request due while this many are in flight is dropped
+	// maxConnsPerGateway bounds the connections of a sender whose
+	// in-flight limit is above the gateways' per-address cap of 1,024,
+	// since every sender sends from one address (ADR-0071).
+	maxConnsPerGateway = 512
 	// The policy of test/chaos/primary.yaml, which names its Redis keys.
 	policyName   = "chaos-primary"
 	policyPeriod = time.Second
