@@ -6,7 +6,7 @@
 
 ## Context
 
-M7 (Performance and hardening) turns the M0–M6 system into one that meets, or honestly re-baselines, every NFR row, runs on Kubernetes, and can be released. The user approved the task order — design-adrs, deny-cache, leasing, quotas, hardening-carryover, perf, bench-gate, nfr-load, kind, helm, readme, verify, then review, verify-main and release (prepare only) — and referred to twelve decisions D1–D12 without listing them. This ADR defines them in the twelve areas the run gives, indexes the eight M7 ADRs that detail them, maps every M7 box and requirement to a task, describes what the system does between tasks, lists the design-text changes the ADRs need (P19–P32) and two task-plan changes (T4, T5), and records the two open items from the M6 review (O1, O2). The user sees all of it at a checkpoint before any M7 code.
+M7 (Performance and hardening) turns the M0–M6 system into one that meets, or honestly re-baselines, every NFR row, runs on Kubernetes, and can be released. The user approved the task order — design-adrs, deny-cache, leasing, quotas, hardening-carryover, perf, bench-gate, nfr-load, kind, helm, readme, verify, then review, verify-main and release (prepare only) — and referred to twelve decisions D1–D12 without listing them. This ADR defines them in the twelve areas the run gives, indexes the eight M7 ADRs that detail them, maps every M7 box and requirement to a task, describes what the system does between tasks, lists the design-text changes the ADRs need (P19–P33) and two task-plan changes (T4, T5), and records the two open items from the M6 review (O1, O2). The user sees all of it at a checkpoint before any M7 code.
 
 ## Decision
 
@@ -90,11 +90,12 @@ docs/design.md is not edited in this PR. Each item names the task that applies i
 - **(P25) Admin API table**, new rows (quotas): "GET, POST · `/api/v1/quota-overrides` · List, create quota overrides (overrides with no policy)"; "GET, PUT, DELETE · `/api/v1/quota-overrides/{id}` · Read, update (`If-Match`), delete"; "GET · `/api/v1/quota-usage?consumer_id=` · Flushed daily and monthly quota usage and the effective quotas, up to 50 consumers".
 - **(P26) Postgres schema table** (quotas): `overrides` "…policy\_id (null for a quota override), limits, quotas, …" → "…policy\_id (null for a quota override, which has quotas and empty limits), limits, quotas, …"; `quota_usage` "consumer\_id, period, used (written as `GREATEST(used, $n)`), flushed\_at" → "consumer\_id, period (`d<YYYYMMDD>` or `m<YYYYMM>`, UTC), used (written as `GREATEST(used, $n)`), flushed\_at".
 - **(P27) Redis keys table** (quotas): the Quota row's value "count; `<period>` is the UTC day or month" → "count of cost units; `<period>` is `d<YYYYMMDD>` or `m<YYYYMM>` (UTC)", TTL "period + 1 day" → "the rest of the period + 1 day, set on every write".
-- **(P28) Repo layout** (readme, gathering what kind, helm and nfr-load added): `cmd/` gains `benchgate/`, `accuracy/` and `chaos/` (existing, unlisted); `deploy/` reads "compose/, kind/ (cluster, dependency and observability manifests, values), helm/spillway/, grafana/dashboards/, prometheus/rules/"; `test/` gains `kind/`, `obs/`, `verify/`; the root gains `CHANGELOG.md`.
+- **(P28) Repo layout** (readme, gathering what kind, helm, nfr-load and release added), line by line in the tree: `.github/` "# workflows/ (CI, bench.yml), dependabot.yml" → "# workflows/ (CI, bench.yml, release.yml), dependabot.yml"; `loadgen/` "# accuracy harness + open-model load driver" → "# open-model load driver; no-op upstream (`serve`)", followed by three new lines `accuracy/` "# accuracy harness (NFR-06, NFR-07)", `chaos/` "# chaos scenarios and exit-check drivers" and `benchgate/` "# NFR-05 regression gate"; `deploy/` "# compose/ (service configs), kind/ (cluster + dependency manifests), helm/spillway/, grafana/, prometheus/" → "# compose/ (service configs), kind/ (cluster, dependency and observability manifests, values), helm/spillway/, grafana/dashboards/, prometheus/rules/"; `test/` "# integration/, chaos/, load/ (scripts; results on the bench-results branch)" → "# integration/, chaos/, load/ (scripts; results on the bench-results branch), accuracy/, verify/, kind/, obs/"; a new root line `CHANGELOG.md` "# Keep a Changelog (ADR-0076)" after `README.md`.
 - **(P29) NFR-02, only if x64's SMT layout is what fails it** (nfr-load): Measured by "CI runner with CPU pinning: …" → "arm64 CI runner (physical cores) with CPU pinning: …; x64 (2 cores × 2 threads) is reported for information". Answering it now saves a blocked stop later.
-- **(P30) Open question "Quotas: is up to 10 s of under-count acceptable?"** (quotas): tick it with "→ yes: lost counts are bounded by one 10 s flush interval; the ~1 s unseeded window follows the failure mode (ADR-0070)", if the user agrees.
+- **(P30) Open question "Quotas: is up to 10 s of under-count after a Redis loss acceptable?"** (quotas): tick it with "→ yes: lost counts are bounded by one 10 s flush interval; the ~1 s unseeded window follows the failure mode (ADR-0070)", if the user agrees.
 - **(P31) GW-26** (hardening-carryover): "Per-replica caps on open connections and in-flight requests; …" → "Per-replica caps on open connections (also per client address, trusted proxies exempt) and in-flight requests; …".
 - **(P32) Admin UI table, Consumers & keys** (quotas): "…; quota-usage column arrives with RL-10 in M7" → "…; quota usage today and this month (RL-10)".
+- **(P33) k6 is not used** (nfr-load): ADR-0074 runs the M7 load scenarios (soak, noisy neighbour) with `cmd/loadgen` and the chaos scenarios with `cmd/chaos`, as M1–M6 did, so no k6 script exists. Testing table, Load row: "`cmd/loadgen` (open model, HDR; fails a run below 99% of its target rate) for benchmarks, k6 for scenarios; results on the `bench-results` branch" → "`cmd/loadgen` (open model, HDR; fails a run below 99% of its target rate) for benchmarks and load scenarios, `cmd/chaos` for chaos scenarios; results on the `bench-results` branch". Stack table, Testing row: "testcontainers-go, `rapid`, Go fuzzing, `cmd/loadgen`, k6, toxiproxy, Vitest, Playwright" → "testcontainers-go, `rapid`, Go fuzzing, `cmd/loadgen`, toxiproxy, Vitest, Playwright". If declined, the text stays and k6 remains listed but unused.
 
 ### Proposed changes to the task plan
 
@@ -104,7 +105,7 @@ docs/design.md is not edited in this PR. Each item names the task that applies i
 ### Questions for the user at the checkpoint
 
 - **P19 first:** without it, verify-m7's NFR-01 line checks 10k and x64 will very likely fail, and the perf task stops blocked if profiling does not close a ~2× gap.
-- P20 – P32, T4 and T5.
+- P20 – P33, T4 and T5.
 - **Gateway identity in Kubernetes** (ADR-0075): a fleet certificate with pod-name replica IDs, rather than a StatefulSet (which cannot honour `maxUnavailable: 0`). Confirm.
 - **Quota failure mode** (ADR-0070): the tenant-slot call's policies decide, rather than a new `quotas.failure_mode` plan field. Confirm or ask for the field.
 - **Quota overrides as their own resource** (ADR-0071): rather than a nullable `Override.policy_id` with an `oasdiff` exception. Confirm.
@@ -137,7 +138,7 @@ Each is detailed in the named ADR section.
 ## Consequences
 
 - Later M7 tasks implement these ADRs; a task that finds one wrong writes a new ADR that supersedes the part.
-- P19 – P32 change docs/design.md only after the user approves them; T4, T5 and the questions above are for the same checkpoint.
+- P19 – P33 change docs/design.md only after the user approves them; T4, T5 and the questions above are for the same checkpoint.
 - Carried and not M7 unless a task needs them: no CRL for stream certificates; the Playground and SC-03's wording (M8); a `consumer_id` filter on `listAccessLists` (needs its own ADR); `make verify-m3`'s accepted laptop pass rate.
 - New ports: docs/ports.md gets the kind NodePort note and two port-forward ports (13000, 19091) for Grafana and Prometheus on kind.
 

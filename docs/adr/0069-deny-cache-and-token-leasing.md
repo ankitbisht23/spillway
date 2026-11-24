@@ -21,7 +21,7 @@ Today (ADR-0021, `internal/proxy/ratelimit.go`) a request's Redis policies becom
 3. **Leases.** For each *enforce* policy with `lease_k > 0`, take the request's cost from this replica's lease for that policy and key if the lease is live and holds enough; such a policy is removed from its call. A policy whose lease cannot serve the request either asks for a new lease in the call (`lease_k = k`) or, when this replica already has a reservation in flight for that key, is checked strictly (`lease_k = 0`) in the call.
 4. Send the remaining calls as today (tenant slot first, then global; one budget; failure modes). A call that ends up empty is not sent.
 
-If a later step denies the request (another call, a failure mode), the cost taken from a lease in step 3 is put back into that lease (never above k). Local policies (RL-17) never use either mechanism.
+If a later step denies the request (another call, a failure mode), the cost taken from a lease is put back into that lease (never above k): in step 3, or from a grant made by this request's own reservation, whose lease then holds the whole grant g. Local policies (RL-17) never use either mechanism.
 
 ### Deny cache (RL-19)
 
