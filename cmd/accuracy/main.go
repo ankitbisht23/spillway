@@ -500,10 +500,11 @@ func summarize(pattern string, keys []string, arrivals []arrival, out []outcome,
 			r.Status.Other++
 		}
 	}
-	for k, a := range admitted {
+	for k, key := range keys { // admitted has one entry per key
+		a := admitted[k]
 		slices.Sort(a)
 		if over, w, at := overAdmission(a, policy); over > r.MaxOverAdmission.Count {
-			r.MaxOverAdmission = overAdmitted{over, keys[k], w.Milliseconds(), at}
+			r.MaxOverAdmission = overAdmitted{over, key, w.Milliseconds(), at}
 		}
 	}
 	r.MeanAdmittedRPS = float64(r.Status.OK) / float64(len(keys)) / d.Seconds()
