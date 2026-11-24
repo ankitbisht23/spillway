@@ -283,6 +283,11 @@ message Policy {
   // Takes the limits from the consumer's plan instead of limits (RL-08,
   // ADR-0041).
   bool from_plan = 11;
+  // Batched mode (RL-18, ADR-0069): each gateway reserves up to lease_k
+  // cost units per key in Redis and serves them locally; 0 or unset is
+  // strict. Redis gcra and sliding_window policies only, at most every
+  // limit's burst (gcra) or rate (sliding_window); enforce mode only.
+  int64 lease_k = 12;
 }
 
 // Plan sets default limits per policy for the consumers on it (RL-08,

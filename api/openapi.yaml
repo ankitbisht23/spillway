@@ -1926,6 +1926,12 @@ components:
         local: { type: boolean }
         failure_mode: { type: string, description: 'fail_open, fail_closed or degraded.' }
         from_plan: { type: boolean, description: "Takes the limits from the consumer's plan (RL-08)." }
+        lease_k:
+          type: integer
+          format: int64
+          minimum: 0
+          maximum: 1000000
+          description: 'Lease size k for batched mode (RL-18): each gateway reserves up to k cost units per key and serves them locally; 0, the default (left out of responses), means strict. Only for Redis gcra and sliding_window policies, at most every limit''s burst (gcra) or rate (sliding_window); honoured in enforce mode only.'
         version: { type: integer, format: int64, readOnly: true }
         created_at: { type: string, format: date-time, readOnly: true }
         updated_at: { type: string, format: date-time, readOnly: true }

@@ -89,6 +89,8 @@ func TestPlanRejects(t *testing.T) {
 		{"an entry without a burst over 1m", "{rate: 10000, period: 1h, burst: 500}", "{rate: 10000, period: 1h}", `plan "pro": default_limits[0] (policy "orders-plan"): limits[1].burst: required for periods over 1m0s (RL-03)`},
 		{"an entry below a route's cost", "{rate: 10, period: 1s, burst: 20}", "{rate: 4, period: 1s, burst: 4}", `plan "free": default_limits[0] (policy "orders-plan"): route "b" costs 5, more than the 4 that limits[0] admits`},
 		{"an entry below a route's cost per replica", "{policy: per-consumer, limits: [{rate: 500, period: 1s}]}", "{policy: per-consumer, limits: [{rate: 9, period: 1s}]}", "more than the 4 that limits[0] admits per replica"},
+		{"lease_k above a plan's burst", "algorithm: gcra, from_plan: true}", "algorithm: gcra, from_plan: true, lease_k: 21}",
+			`plan "free": default_limits[0] (policy "orders-plan"): lease_k 21 is more than limits[0]'s burst of 20`},
 		{"two plans with one ID", "{id: 22, name: pro", "{id: 21, name: pro", `plan "pro": id 21 is plan "free"'s`},
 		{"a from_plan policy with limits", "algorithm: gcra, from_plan: true}", "algorithm: gcra, from_plan: true, limits: [{rate: 1, period: 1s}]}", "remove limits"},
 		{"two entries for one policy", "{policy: per-consumer, limits: [{rate: 500, period: 1s}]}", "{policy: orders-plan, limits: [{rate: 1, period: 1s}]}, {policy: per-consumer, limits: [{rate: 500, period: 1s}]}",
@@ -149,6 +151,15 @@ func TestCheckOverride(t *testing.T) {
 				t.Errorf("error = %v, want %q", err, tt.want)
 			}
 		})
+	}
+	// lease_k is not checked against an override: the script never grants
+	// more than is available (ADR-0069).
+	leased, err := compilePlanConfig(t, strings.Replace(planConfig, "algorithm: gcra, from_plan: true}", "algorithm: gcra, from_plan: true, lease_k: 20}", 1), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := leased.CheckOverride(12, []*configpb.Limit{lim(5, "1s", 5)}); err != nil {
+		t.Errorf("an override below lease_k: %v", err)
 	}
 	// OverrideLimits, at request time: per replica for a local policy,
 	// cluster-wide for a Redis one, false when they do not fit.

@@ -12,6 +12,13 @@ describe("validatePolicy (CP-03's policy rules, in the browser)", () => {
     expect(validatePolicy(valid({ routes: "*", algorithm: "concurrency", limits: [{ rate: "20", period: "", burst: "" }] }))).toEqual({});
     expect(validatePolicy(valid({ local: true, algorithm: "fixed_window", limits: [{ rate: "10", period: "1m", burst: "" }, { rate: "100", period: "1h", burst: "" }] }))).toEqual({});
     expect(validatePolicy(valid({ level: "consumer", keyTemplate: "{consumer}", fromPlan: true, limits: [] }))).toEqual({});
+    // Lease sizes up to every limit's burst (its rate by default) or window rate.
+    expect(validatePolicy(valid({ leaseK: "100" }))).toEqual({});
+    expect(validatePolicy(valid({ leaseK: "0" }))).toEqual({});
+    expect(validatePolicy(valid({ algorithm: "sliding_window", leaseK: "60", limits: [{ rate: "60", period: "1m", burst: "" }] }))).toEqual({});
+    expect(validatePolicy(valid({ level: "consumer", keyTemplate: "{consumer}", fromPlan: true, limits: [], leaseK: "500" }))).toEqual({});
+    // Hidden, so not checked: a local policy's leftover value.
+    expect(validatePolicy(valid({ local: true, leaseK: "x" }))).toEqual({});
   });
 
   it.each<[string, Partial<PolicyForm>, keyof PolicyForm, string | RegExp]>([
@@ -43,6 +50,12 @@ describe("validatePolicy (CP-03's policy rules, in the browser)", () => {
     ["a concurrency period", { algorithm: "concurrency", limits: [{ rate: "1", period: "1s", burst: "" }] }, "limits", /exactly one limit/],
     ["from plan on a global policy", { level: "global", keyTemplate: "{consumer}", fromPlan: true, limits: [] }, "fromPlan", /Plans apply only/],
     ["from plan per IP", { level: "consumer", keyTemplate: "{ip}", fromPlan: true, limits: [] }, "fromPlan", /Plans apply only/],
+    ["a lease size that is not a number", { leaseK: "ten" }, "leaseK", "A whole number from 0 to 1000000"],
+    ["a negative lease size", { leaseK: "-1" }, "leaseK", /A whole number/],
+    ["a lease size over 10^6", { leaseK: "1000001" }, "leaseK", /A whole number/],
+    ["a lease size above the default burst", { leaseK: "101" }, "leaseK", "At most limit 1's burst of 100: a lease holds at most what a limit admits at once"],
+    ["a lease size above a second limit's burst", { leaseK: "11", limits: [{ rate: "100", period: "1s", burst: "" }, { rate: "1000", period: "1h", burst: "10" }] }, "leaseK", /At most limit 2's burst of 10/],
+    ["a lease size above a window's rate", { algorithm: "sliding_window", leaseK: "61", limits: [{ rate: "60", period: "1m", burst: "" }] }, "leaseK", /At most limit 1's rate of 60/],
   ])("flags %s", (_, over, field, want) => {
     const errs = validatePolicy(valid(over));
     expect(errs[field]).toMatch(want);
@@ -84,6 +97,15 @@ describe("the body", () => {
     expect(bodyOf(valid({ algorithm: "concurrency", local: true, limits: [{ rate: "5", period: "", burst: "" }] }))).toMatchObject({ local: true, limits: [{ rate: 5 }] });
   });
 
+  it("sends lease_k for a batched Redis policy only", () => {
+    expect(bodyOf(valid({ leaseK: "10" }))).toMatchObject({ lease_k: 10 });
+    expect(bodyOf(valid({ leaseK: "0" }))).not.toHaveProperty("lease_k");
+    expect(bodyOf(valid({ leaseK: "" }))).not.toHaveProperty("lease_k");
+    expect(bodyOf(valid({ local: true, leaseK: "10" }))).not.toHaveProperty("lease_k");
+    expect(formOf({ id: 1, name: "x", lease_k: 25, version: 1, created_at: "", updated_at: "" }).leaseK).toBe("25");
+    expect(formOf({ id: 1, name: "x", version: 1, created_at: "", updated_at: "" }).leaseK).toBe("");
+  });
+
   it("reads an unset mode as enforce", () => {
     expect(formOf({ id: 1, name: "x", version: 1, created_at: "", updated_at: "" }).mode).toBe("enforce");
   });
@@ -97,11 +119,13 @@ describe("serverErrors (422 in place)", () => {
       { entity: "policy", message: 'limits[0].burst: required for periods over 1m0s (RL-03)' },
       { entity: "policy", message: 'route "orders" costs 5, more than the 2 that limits[0] admits' },
       { entity: "policy", message: "something else" },
+      { entity: "policy", message: "lease_k 21 is more than limits[0]'s burst of 20" },
     ]);
     expect(got.fields).toEqual({
       name: "name must be 1-64 characters",
       routes: 'match.routes: route "nope" is not defined',
       limits: "limits[0].burst: required for periods over 1m0s (RL-03)",
+      leaseK: "lease_k 21 is more than limits[0]'s burst of 20",
     });
     expect(got.rest).toEqual(['route "orders" costs 5, more than the 2 that limits[0] admits', "something else"]);
   });

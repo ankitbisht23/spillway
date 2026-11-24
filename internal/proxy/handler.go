@@ -40,6 +40,7 @@ type Handler struct {
 	limiters *local.Registry
 	redis    Redis
 	deny     *denyCache                        // enforce denies of the Redis policies (RL-19)
+	leases   *leaseTable                       // batched policies' leases (RL-18)
 	devMode  bool                              // Spillway-Decision-Time on Redis-decided responses (ADR-0021), Spillway-Redis-Error (ADR-0034) and Spillway-Attempts (ADR-0030)
 	jitter   func(time.Duration) time.Duration // draws a retry's backoff in [0, n) (GW-12)
 	tracer   trace.Tracer                      // nil when tracing is off (OB-02)
@@ -70,9 +71,12 @@ type Handler struct {
 // goes upstream unchanged.
 func NewHandler(snapshot func() *config.Snapshot, identity func() *config.Identity, trusted TrustedProxies, pools *Registry, limiters *local.Registry, redis Redis, devMode bool, maxInFlight int64, tracer trace.Tracer, rec *telemetry.Recorder, log *slog.Logger) *Handler {
 	h := &Handler{snapshot: snapshot, identity: identity, trusted: trusted, pools: pools, limiters: limiters, redis: redis, deny: newDenyCache(), devMode: devMode, jitter: rand.N[time.Duration], tracer: tracer, maxInFlight: maxInFlight, rec: rec, log: log, errLog: slog.NewLogLogger(log.Handler(), slog.LevelWarn)}
+	var drop func(string, int64)
 	if rec != nil {
 		rec.DenyCacheEntries(h.deny.entries)
+		drop = rec.LeaseTokensDropped
 	}
+	h.leases = newLeaseTable(drop)
 	return h
 }
 
@@ -221,6 +225,7 @@ func (h *Handler) serve(w *responseRecorder, r *http.Request, body *countingBody
 	}
 	lim := newLimits(s, route, h.limiters, h.redis, h.tracer, h.hitters, h.rec, h.log, r, q, ip)
 	lim.useDenyCache(h.deny, s, id)
+	lim.useLeases(h.leases, s, id)
 	defer lim.release()
 	allowed := exempt || lim.check(false)
 	if allowed {

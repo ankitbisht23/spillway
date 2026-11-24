@@ -1312,7 +1312,12 @@ type Policy struct {
 	Id int64 `protobuf:"varint,10,opt,name=id,proto3" json:"id,omitempty"`
 	// Takes the limits from the consumer's plan instead of limits (RL-08,
 	// ADR-0041).
-	FromPlan      bool `protobuf:"varint,11,opt,name=from_plan,json=fromPlan,proto3" json:"from_plan,omitempty"`
+	FromPlan bool `protobuf:"varint,11,opt,name=from_plan,json=fromPlan,proto3" json:"from_plan,omitempty"`
+	// Batched mode (RL-18, ADR-0069): each gateway reserves up to lease_k
+	// cost units per key in Redis and serves them locally; 0 or unset is
+	// strict. Redis gcra and sliding_window policies only, at most every
+	// limit's burst (gcra) or rate (sliding_window); enforce mode only.
+	LeaseK        int64 `protobuf:"varint,12,opt,name=lease_k,json=leaseK,proto3" json:"lease_k,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1422,6 +1427,13 @@ func (x *Policy) GetFromPlan() bool {
 		return x.FromPlan
 	}
 	return false
+}
+
+func (x *Policy) GetLeaseK() int64 {
+	if x != nil {
+		return x.LeaseK
+	}
+	return 0
 }
 
 // Plan sets default limits per policy for the consumers on it (RL-08,
@@ -2299,7 +2311,7 @@ const file_config_proto_rawDesc = "" +
 	"\x05regex\x18\x03 \x01(\tR\x05regex\"R\n" +
 	"\x11RateLimitSettings\x12\x1a\n" +
 	"\breplicas\x18\x01 \x01(\x05R\breplicas\x12!\n" +
-	"\fredis_budget\x18\x02 \x01(\tR\vredisBudget\"\xd7\x02\n" +
+	"\fredis_budget\x18\x02 \x01(\tR\vredisBudget\"\xf0\x02\n" +
 	"\x06Policy\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05level\x18\x02 \x01(\tR\x05level\x125\n" +
@@ -2312,7 +2324,8 @@ const file_config_proto_rawDesc = "" +
 	"\ffailure_mode\x18\t \x01(\tR\vfailureMode\x12\x0e\n" +
 	"\x02id\x18\n" +
 	" \x01(\x03R\x02id\x12\x1b\n" +
-	"\tfrom_plan\x18\v \x01(\bR\bfromPlan\"q\n" +
+	"\tfrom_plan\x18\v \x01(\bR\bfromPlan\x12\x17\n" +
+	"\alease_k\x18\f \x01(\x03R\x06leaseK\"q\n" +
 	"\x04Plan\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x03R\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12E\n" +

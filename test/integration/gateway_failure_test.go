@@ -289,16 +289,27 @@ func startGateway(t *testing.T, addrMap, config string) *hostGateway {
 	}
 }
 
-// freeAddr returns a loopback address with a port that was free just now.
+// handedOut holds the addresses freeAddr has returned in this test binary.
+var handedOut sync.Map
+
+// freeAddr returns a loopback address with a port that was free just now
+// and that it has not returned before: the kernel can give a port just
+// closed to the next 127.0.0.1:0 listener, and two processes told the
+// same address fail with "address already in use" (CI, PR #87).
 func freeAddr(t *testing.T) string {
 	t.Helper()
-	var lc net.ListenConfig
-	ln, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+	for {
+		var lc net.ListenConfig
+		ln, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		addr := ln.Addr().String()
+		_ = ln.Close()
+		if _, seen := handedOut.LoadOrStore(addr, true); !seen {
+			return addr
+		}
 	}
-	defer func() { _ = ln.Close() }()
-	return ln.Addr().String()
 }
 
 func (g *hostGateway) get(t *testing.T, path string) (int, http.Header, string) {

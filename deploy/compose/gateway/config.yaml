@@ -32,6 +32,11 @@ routes:
   - name: shared
     match: { path_prefix: /anything/shared }
     upstream: httpbin
+  # Batched mode (RL-18, ADR-0069), keyed by X-Batched-Key: see
+  # batched-global below.
+  - name: batched
+    match: { path_prefix: /anything/batched }
+    upstream: httpbin
   # Up to 3 attempts per request (GW-12), each a span in Tempo (OB-02):
   # GET /retry/status/503 makes three.
   - name: retry
@@ -44,8 +49,8 @@ routes:
     upstream: httpbin
 # Local policies (ADR-0017): each gateway keeps their state in memory, and
 # none touches Redis (RL-17). The limits stay well above what make verify-m1
-# and the benchmarks send. The last two policies run in Redis and apply only
-# to /anything/shared.
+# and the benchmarks send. The last three policies run in Redis and apply
+# only to /anything/shared and /anything/batched.
 policies:
   - name: per-ip # IP flood limit; covers anonymous traffic too
     level: global
@@ -93,3 +98,15 @@ policies:
     key_template: '{header:X-Shared-Key}'
     algorithm: gcra
     limits: [{ rate: 3, period: 10s }]
+  # Batched mode (RL-18, ADR-0069): a gateway reserves up to 20 units per
+  # X-Batched-Key in one Redis call and serves them locally for up to 1 s,
+  # so 20 GET /anything/batched with one X-Batched-Key cost one Redis call
+  # (gw_ratelimit_lease_total). The burst lets a key run at twice its rate
+  # for 20 s.
+  - name: batched-global
+    level: global
+    match: { routes: [batched] }
+    key_template: '{header:X-Batched-Key}'
+    algorithm: gcra
+    limits: [{ rate: 10, period: 1s, burst: 200 }]
+    lease_k: 20

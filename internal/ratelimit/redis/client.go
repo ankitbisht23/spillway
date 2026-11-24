@@ -73,6 +73,15 @@ type Limit struct {
 	Rate      int64         // configured, cluster-wide
 	Period    time.Duration // whole seconds
 	Burst     int64         // GCRA only, after its default
+	// LeaseK > 0 makes the limit's policy a lease group in an enforce call
+	// (RL-18, ADR-0069): an allowed call writes the group's grant,
+	// min(LeaseK, available), instead of the cost, which must be at most
+	// LeaseK. 0 is strict.
+	LeaseK int64
+	// Group tells the limits of one policy apart: adjacent limits with the
+	// same non-zero Group are one group in the script, sharing LeaseK; a
+	// limit with Group 0 is a group of its own.
+	Group int
 }
 
 // Result is a call's reply.
@@ -86,6 +95,7 @@ type Result struct {
 	ShadowWouldDeny uint32               // bit i: limits[i] is shadow and would deny
 	NowUS           int64                // Redis TIME the script used, µs since the Unix epoch
 	Limits          []ratelimit.Decision // per limit, in call order
+	Granted         []int64              // per limit: the units written; 0 for none
 }
 
 // Client runs the limiter script on Redis Cluster.
@@ -321,19 +331,29 @@ func (c *Client) Refund(ctx context.Context, cost, admittedUS int64, limits []Li
 	return c.run(ctx, append(encode(-cost, limits), admittedUS), limits)
 }
 
-// encode returns the script's ARGV for cost and limits.
+// encode returns the script's ARGV for cost and limits: per limit, its
+// fields and its group's 1-based index in the call. A refund (negative
+// cost) is always strict.
 func encode(cost int64, limits []Limit) []any {
-	args := make([]any, 0, 1+6*len(limits)+1)
+	args := make([]any, 0, 1+8*len(limits)+1)
 	args = append(args, cost)
-	for _, l := range limits {
-		mode, burst := "shadow", int64(0)
+	group, prev := 0, 0
+	for i, l := range limits {
+		mode, burst, lease := "shadow", int64(0), l.LeaseK
 		if l.Enforce {
 			mode = "enforce"
 		}
 		if l.Algorithm == config.GCRA {
 			burst = l.Burst
 		}
-		args = append(args, l.Level, mode, l.Algorithm, l.Rate, l.Period.Milliseconds(), burst)
+		if cost < 0 {
+			lease = 0
+		}
+		if i == 0 || l.Group == 0 || l.Group != prev {
+			group++
+		}
+		prev = l.Group
+		args = append(args, l.Level, mode, l.Algorithm, l.Rate, l.Period.Milliseconds(), burst, lease, group)
 	}
 	return args
 }
@@ -514,8 +534,8 @@ func redisVersion(info string) (string, int, error) {
 // decode reads the script's reply for a call of n limits.
 func decode(v any, n int) (Result, error) {
 	reply, ok := v.([]any)
-	if !ok || len(reply) != 8+4*n {
-		return Result{}, fmt.Errorf("limiter reply: want an array of %d, got %T of %d", 8+4*n, v, len(reply))
+	if !ok || len(reply) != 8+5*n {
+		return Result{}, fmt.Errorf("limiter reply: want an array of %d, got %T of %d", 8+5*n, v, len(reply))
 	}
 	ints := make([]int64, len(reply))
 	for i, x := range reply {
@@ -543,10 +563,12 @@ func decode(v any, n int) (Result, error) {
 		ShadowWouldDeny: uint32(ints[6]), //nolint:gosec // G115: checked < 2^n ≤ 2^32 above
 		NowUS:           ints[7],
 		Limits:          make([]ratelimit.Decision, n),
+		Granted:         make([]int64, n),
 	}
 	for i := range res.Limits {
-		f := ints[8+4*i:]
+		f := ints[8+5*i:]
 		res.Limits[i] = ratelimit.Decision{Allowed: f[0] == 1, Remaining: f[1], ResetAfter: ms(f[2]), RetryAfter: ms(f[3])}
+		res.Granted[i] = f[4]
 	}
 	return res, nil
 }

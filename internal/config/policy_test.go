@@ -174,6 +174,27 @@ func TestRedisPolicies(t *testing.T) {
 	}
 }
 
+// TestLeaseK: lease_k is kept as given, 0 when unset, up to every limit's
+// burst (gcra) or rate (sliding window), whatever the mode; a cost above k
+// is allowed, such requests being checked strictly (RL-18, ADR-0069).
+func TestLeaseK(t *testing.T) {
+	s, err := parse([]byte(policies("",
+		p("name", "strict", "local", ""),
+		p("name", "gcra", "local", "", "lease_k", "20", "limits", "[{rate: 10, period: 1s, burst: 20}, {rate: 1000, period: 1h, burst: 50}]"),
+		p("name", "window", "local", "", "algorithm", "sliding_window", "lease_k", "60", "limits", "[{rate: 60, period: 1m}]"),
+		p("name", "shadow", "local", "", "lease_k", "1", "mode", "shadow"),
+		p("name", "max", "local", "", "lease_k", "1000000", "limits", "[{rate: 1000000, period: 1s}]"),
+	)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, want := range []int64{0, 20, 60, 1, 1_000_000} {
+		if got := s.Policies[i].LeaseK; got != want {
+			t.Errorf("%s: lease_k %d, want %d", s.Policies[i].Name, got, want)
+		}
+	}
+}
+
 // TestPerReplica: a degraded limiter's limit is rate and burst ÷ replicas,
 // rounded down, minimum 1 (RL-23, RL-31).
 func TestPerReplica(t *testing.T) {
@@ -283,6 +304,13 @@ func TestPolicyRejects(t *testing.T) {
 		{"cost above per-replica window rate", policies("ratelimit: {replicas: 3}\n", p("algorithm", "fixed_window", "limits", "[{rate: 14, period: 1m}]")), `route "b" costs 5, more than the 4`},
 		{"cost above the max in flight", policies("", p("algorithm", "concurrency", "match", "{routes: [b]}", "limits", "[{rate: 4}]")), `route "b" costs 5, more than the 4`},
 		{"cost checked for off policies too", policies("", p("mode", "off", "limits", "[{rate: 4, period: 1s}]")), `route "b" costs 5`},
+		{"negative lease_k", policies("", p("local", "", "lease_k", "-1")), `policy "p": lease_k: -1 is not 0 to 1000000`},
+		{"lease_k over 10^6", policies("", p("local", "", "lease_k", "1000001", "limits", "[{rate: 2000000, period: 1s}]")), "lease_k: 1000001 is not 0 to 1000000"},
+		{"lease_k on a local policy", policies("", p("lease_k", "5")), `policy "p": lease_k applies only to Redis policies (gcra or sliding_window); local policies never call Redis`},
+		{"lease_k on concurrency", policies("", p("local", "", "algorithm", "concurrency", "limits", "[{rate: 5}]", "lease_k", "1")), "lease_k applies only to Redis policies"},
+		{"lease_k above a gcra burst", policies("", p("local", "", "lease_k", "21", "limits", "[{rate: 100, period: 1s, burst: 20}]")), `policy "p": lease_k 21 is more than limits[0]'s burst of 20`},
+		{"lease_k above a second limit's burst", policies("", p("local", "", "lease_k", "11", "limits", "[{rate: 100, period: 1s}, {rate: 1000, period: 1h, burst: 10}]")), "lease_k 11 is more than limits[1]'s burst of 10"},
+		{"lease_k above a window's rate", policies("", p("local", "", "algorithm", "sliding_window", "lease_k", "61", "limits", "[{rate: 60, period: 1m}]")), "lease_k 61 is more than limits[0]'s rate of 60"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

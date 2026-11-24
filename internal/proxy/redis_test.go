@@ -18,7 +18,8 @@ import (
 // fakeRedis is a slot-call backend for handler tests. Each key is a count of
 // the cost units it holds out of its limit's capacity (burst for GCRA, rate
 // for a sliding window), with no time; calls follow the script's write rule
-// (docs/design.md "Limiter script contract").
+// (docs/design.md "Limiter script contract"), a lease group writing its
+// grant, min(lease_k, what is left on each of its limits) (ADR-0069).
 type fakeRedis struct {
 	mu          sync.Mutex
 	used        map[string]int64
@@ -63,6 +64,9 @@ func (f *fakeRedis) Call(ctx context.Context, cost int64, limits []rlredis.Limit
 			mode = "enforce"
 		}
 		line += fmt.Sprintf(" | %s %s %s %s %d/%v burst %d", l.Key, l.Level, mode, l.Algorithm, l.Rate, l.Period, l.Burst)
+		if l.LeaseK > 0 {
+			line += fmt.Sprintf(" lease %d", l.LeaseK)
+		}
 	}
 	f.calls = append(f.calls, line)
 	deadline, _ := ctx.Deadline()
@@ -85,7 +89,7 @@ func (f *fakeRedis) Call(ctx context.Context, cost int64, limits []rlredis.Limit
 		return rlredis.Result{}, &rlredis.Error{Kind: rlredis.KindConn, Node: "redis-1:6379", Err: errors.New("connection refused")}
 	}
 	f.now += 1000
-	res := rlredis.Result{Allowed: true, DenyingLimit: -1, NowUS: f.now, Limits: make([]ratelimit.Decision, len(limits))}
+	res := rlredis.Result{Allowed: true, DenyingLimit: -1, NowUS: f.now, Limits: make([]ratelimit.Decision, len(limits)), Granted: make([]int64, len(limits))}
 	for i, l := range limits {
 		ok := f.used[l.Key]+cost <= capacity(l)
 		res.Limits[i].Allowed = ok
@@ -96,11 +100,27 @@ func (f *fakeRedis) Call(ctx context.Context, cost int64, limits []rlredis.Limit
 			res.ShadowWouldDeny |= 1 << i
 		}
 	}
+	for i := 0; i < len(limits) && res.Allowed; {
+		j, units := i+1, cost
+		for j < len(limits) && limits[j].Group != 0 && limits[j].Group == limits[i].Group {
+			j++
+		}
+		if k := limits[i].LeaseK; k > 0 {
+			units = k
+			for _, l := range limits[i:j] {
+				units = min(units, capacity(l)-f.used[l.Key])
+			}
+		}
+		for x := i; x < j; x++ {
+			if res.Limits[x].Allowed {
+				f.used[limits[x].Key] += units
+				res.Granted[x] = units
+			}
+		}
+		i = j
+	}
 	for i, l := range limits {
 		d := &res.Limits[i]
-		if res.Allowed && d.Allowed {
-			f.used[l.Key] += cost
-		}
 		f.state(l, d)
 		if !d.Allowed {
 			d.RetryAfter = l.Period

@@ -93,6 +93,8 @@ func TestValidateConfig(t *testing.T) {
 		{"upstream rule", func(c *configpb.Config) { c.Upstreams[0].Lb = "random" }, nil, `upstream "orders" : lb "random"`},
 		{"route rule", func(c *configpb.Config) { c.Routes[1].Match.PathPrefix = "/x" }, nil, `route "health" : set exactly one of match.path`},
 		{"policy rule", func(c *configpb.Config) { c.Policies[0].Level = "user" }, nil, `policy "per-route" : level "user"`},
+		{"policy lease_k", func(c *configpb.Config) { c.Policies[0].LeaseK = 200 }, nil, ""},
+		{"policy lease_k above its burst", func(c *configpb.Config) { c.Policies[0].LeaseK = 201 }, nil, `policy "per-route" : lease_k 201 is more than limits[0]'s burst of 200`},
 		{"plan rule", func(c *configpb.Config) {
 			c.Plans[0].DefaultLimits = []*configpb.PlanLimits{{Policy: "per-route", Limits: []*configpb.Limit{{Rate: 1, Period: "1s"}}}}
 		}, nil, `config "" : plan "free": default_limits[0]: policy "per-route": plans and overrides apply only to consumer- and route-level policies`},

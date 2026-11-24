@@ -1,0 +1,21 @@
+# The gateways' config during make accuracy MODE=batched (NFR-07, ADR-0069):
+# test/accuracy/gateway.yaml's route and policy in batched mode, lease_k 10,
+# so a window may hold up to replicas × 10 admissions over GCRA's bound.
+version: 32
+upstreams:
+  - name: upstream-1
+    endpoints:
+      - address: upstream-1:8080
+routes:
+  - name: accuracy
+    match: { path_prefix: /bytes }
+    upstream: upstream-1
+policies:
+  - name: accuracy
+    level: route
+    match: { routes: [accuracy] }
+    key_template: '{header:X-Accuracy-Key}'
+    algorithm: gcra
+    limits: [{ rate: 100, period: 1s, burst: 100 }]
+    lease_k: 10
+    failure_mode: fail_closed

@@ -46,6 +46,8 @@ const (
 	// maxDefaultBurstPeriod is the longest period whose burst defaults to
 	// its rate (RL-03).
 	maxDefaultBurstPeriod = time.Minute
+	// maxLeaseK is the largest lease_k (RL-18, ADR-0069).
+	maxLeaseK = 1_000_000
 	// maxCallLimits is the most limits one Redis call carries: the script's
 	// shadow_would_deny is a 32-bit mask (ADR-0021).
 	maxCallLimits = 32
@@ -93,6 +95,10 @@ type Policy struct {
 	// policy); plans without an ID (static mode) are not kept, since no
 	// consumer can be on one (ADR-0050).
 	PlanLimits map[int64][]Limit
+	// LeaseK is the policy's lease size k (RL-18, ADR-0069): 0 for strict,
+	// one Redis call per decision; otherwise each gateway reserves up to k
+	// cost units per key and serves them locally, in enforce mode only.
+	LeaseK int64
 	// maxLimits is the most limits one request can check: of Limits and
 	// of every plan entry; overrides are checked on their own.
 	maxLimits int
@@ -217,7 +223,7 @@ func checkCallLimits(routes []Route, policies []Policy, extra *Policy, n int) er
 }
 
 func compilePolicy(p *configpb.Policy, replicas int64, routes []Route) (Policy, error) {
-	pol := Policy{Name: p.GetName(), Ref: p.GetName(), ID: p.GetId(), Level: p.GetLevel(), Algorithm: p.GetAlgorithm(), Mode: p.GetMode(), FromPlan: p.GetFromPlan()}
+	pol := Policy{Name: p.GetName(), Ref: p.GetName(), ID: p.GetId(), Level: p.GetLevel(), Algorithm: p.GetAlgorithm(), Mode: p.GetMode(), FromPlan: p.GetFromPlan(), LeaseK: p.GetLeaseK()}
 	if !ValidName(pol.Name) {
 		return pol, errors.New("name must be 1-64 characters from A-Z, a-z, 0-9, '.', '_' and '-'")
 	}
@@ -248,6 +254,13 @@ func compilePolicy(p *configpb.Policy, replicas int64, routes []Route) (Policy, 
 			return pol, fmt.Errorf("failure_mode %q: want fail_open, fail_closed or degraded", pol.FailureMode)
 		}
 	}
+	// Batched mode (RL-18, ADR-0069); limitsFor checks k against each limit.
+	switch {
+	case pol.LeaseK < 0 || pol.LeaseK > maxLeaseK:
+		return pol, fmt.Errorf("lease_k: %d is not 0 to %d", pol.LeaseK, maxLeaseK)
+	case pol.LeaseK > 0 && pol.Local:
+		return pol, errors.New("lease_k applies only to Redis policies (gcra or sliding_window); local policies never call Redis")
+	}
 	if err := pol.compileMatch(p.GetMatch(), routes); err != nil {
 		return pol, err
 	}
@@ -267,6 +280,9 @@ func compilePolicy(p *configpb.Policy, replicas int64, routes []Route) (Policy, 
 		return pol, nil
 	}
 	if pol.Limits, err = pol.limitsFor(p.GetLimits(), replicas, routes); err != nil {
+		return pol, err
+	}
+	if err := pol.checkLeaseK(pol.Limits); err != nil {
 		return pol, err
 	}
 	pol.maxLimits = len(pol.Limits)
@@ -317,6 +333,26 @@ func (pol *Policy) limitsFor(ls []*configpb.Limit, replicas int64, routes []Rout
 		}
 	}
 	return limits, nil
+}
+
+// checkLeaseK checks that pol's lease_k is at most what each of limits, its
+// own or a plan's, admits at once: its burst (GCRA) or rate (sliding
+// window). Overrides are not checked: they apply without a publish, and the
+// script never grants more than is available (ADR-0069).
+func (pol *Policy) checkLeaseK(limits []Limit) error {
+	if pol.LeaseK == 0 {
+		return nil
+	}
+	for i, l := range limits {
+		capacity, what := l.Rate, "rate"
+		if pol.Algorithm == GCRA {
+			capacity, what = l.Burst, "burst"
+		}
+		if pol.LeaseK > capacity {
+			return fmt.Errorf("lease_k %d is more than limits[%d]'s %s of %d; a lease holds at most what a limit admits at once", pol.LeaseK, i, what, capacity)
+		}
+	}
+	return nil
 }
 
 // OverrideLimits compiles an override's limits for p as limitsFor does, with
@@ -477,6 +513,9 @@ func compilePlans(plans []*configpb.Plan, policies []Policy, routes []Route, rep
 				return fmt.Errorf("plan %q: default_limits[%d]: policy %q: %s", p.GetName(), i, pol.Name, perConsumerRule)
 			}
 			limits, err := pol.limitsFor(e.GetLimits(), replicas, routes)
+			if err == nil {
+				err = pol.checkLeaseK(limits)
+			}
 			if err != nil {
 				return fmt.Errorf("plan %q: default_limits[%d] (policy %q): %w", p.GetName(), i, pol.Name, err)
 			}

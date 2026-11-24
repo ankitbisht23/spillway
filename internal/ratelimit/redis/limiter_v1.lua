@@ -4,11 +4,19 @@
 -- writes per the write rule; a negative cost refunds. The maths and the state
 -- layout are part of v1: changing either is a v2 script and key prefix (RL-29).
 --
--- ARGV: cost, then per key: level, mode, algorithm, rate, period_ms, burst;
--- refunds add admitted_us (0: the current window and time).
+-- ARGV: cost, then per key: level, mode, algorithm, rate, period_ms, burst,
+-- lease_k, group; refunds add admitted_us (0: the current window and time).
 -- Reply: allowed, denying_level, denying_limit, remaining, reset_after_ms,
 -- retry_after_ms, shadow_would_deny, now_us, then per key: allowed_i,
--- remaining_i, reset_after_ms_i, retry_after_ms_i.
+-- remaining_i, reset_after_ms_i, retry_after_ms_i, granted_i.
+--
+-- group is the 1-based index of the limit's policy in the call: a policy's
+-- limits are adjacent and share it and lease_k. A group with lease_k = k > 0
+-- (an enforce policy in batched mode, RL-18, ADR-0069) is decided as a
+-- strict one for cost, but an allowed call writes its grant
+-- g = min(k, available on each of its limits) instead of cost; granted_i is
+-- what was written to each limit (0 when nothing was). Refunds carry
+-- lease_k 0: a grant stays with the gateway's lease.
 
 -- Every number written goes through fmt: Lua's default %.14g would cut a
 -- 16-digit µs timestamp.
@@ -36,7 +44,8 @@ if not cost or cost == 0 then
   return fail('cost must be a non-zero integer')
 end
 local refund = cost < 0
-local nargs = 1 + 6 * n
+local per = 8 -- arguments per key
+local nargs = 1 + per * n
 if refund then
   nargs = nargs + 1
 end
@@ -53,10 +62,11 @@ end
 
 local lim = {}
 for i = 1, n do
-  local a = 1 + 6 * (i - 1)
+  local a = 1 + per * (i - 1)
   local l = {
     key = KEYS[i], level = ARGV[a + 1], mode = ARGV[a + 2], alg = ARGV[a + 3],
     rate = int(ARGV[a + 4]), period = int(ARGV[a + 5]), burst = int(ARGV[a + 6]),
+    k = int(ARGV[a + 7]), group = int(ARGV[a + 8]),
   }
   if not LEVELS[l.level] then
     return fail('limit ' .. i .. ': level ' .. tostring(l.level))
@@ -83,6 +93,20 @@ for i = 1, n do
     l.p = l.period * 1000
   else
     return fail('limit ' .. i .. ': algorithm ' .. tostring(l.alg))
+  end
+  if not l.k or l.k < 0 then
+    return fail('limit ' .. i .. ': lease_k must be an integer >= 0')
+  end
+  if l.k > 0 and (refund or l.mode ~= 'enforce' or l.k < cost) then
+    return fail('limit ' .. i .. ': lease_k > 0 needs an enforce limit, a cost of at most lease_k and no refund')
+  end
+  local prev = lim[i - 1]
+  local first = prev == nil or l.group == prev.group + 1
+  if not l.group or not (first or prev and l.group == prev.group) or prev == nil and l.group ~= 1 then
+    return fail('limit ' .. i .. ': group must be 1, then the same as the previous limit\'s or one more')
+  end
+  if not first and l.k ~= prev.k then
+    return fail('limit ' .. i .. ': lease_k differs within group ' .. l.group)
   end
   lim[i] = l
 end
@@ -169,10 +193,20 @@ local function save_window(l)
   redis.call('PEXPIRE', l.key, fmt(2 * l.period))
 end
 
--- write takes c > 0 from l, which admits it.
-local function write(l, c)
+-- available is how many units l admits now, after check: the most c that
+-- check would allow, never below 0.
+local function available(l)
   if l.alg == 'gcra' then
-    save_gcra(l, l.next)
+    return math.max(0, math.floor((l.tau - (l.s - now)) / l.t))
+  end
+  return math.max(0, math.floor(l.rate - l.est))
+end
+
+-- write takes c > 0 from l, which admits at least c (check, or available).
+local function write(l, c)
+  l.granted = c
+  if l.alg == 'gcra' then
+    save_gcra(l, l.s + c * l.t)
     return
   end
   l.cur = l.cur + c
@@ -242,12 +276,26 @@ else
     end
   end
   -- Write rule: nothing on a deny; otherwise every enforce limit and each
-  -- shadow limit that admits on its own.
+  -- shadow limit that admits on its own, a lease group's limits its grant.
   if allowed == 1 then
-    for _, l in ipairs(lim) do
-      if l.ok then
-        write(l, cost)
+    local i = 1
+    while i <= n do
+      local j, units = i, cost
+      while j < n and lim[j + 1].group == lim[i].group do
+        j = j + 1
       end
+      if lim[i].k > 0 then
+        units = lim[i].k
+        for x = i, j do
+          units = math.min(units, available(lim[x]))
+        end
+      end
+      for x = i, j do
+        if lim[x].ok then
+          write(lim[x], units)
+        end
+      end
+      i = j + 1
     end
   end
 end
@@ -295,5 +343,6 @@ for _, l in ipairs(lim) do
   out[#out + 1] = l.rem
   out[#out + 1] = ms(l.reset)
   out[#out + 1] = ms(l.retry)
+  out[#out + 1] = l.granted or 0
 end
 return out

@@ -17,7 +17,7 @@ import { QueryState } from "../../components/QueryState";
 import { NotFound } from "../../components/states";
 import { Unpublished } from "../../components/Unpublished";
 import {
-  ALGORITHMS, bodyOf, FAILURE_MODES, formOf, LEVELS, MODES, newForm, serverErrors, validatePolicy,
+  ALGORITHMS, bodyOf, FAILURE_MODES, formOf, leaseable, LEVELS, MODES, newForm, serverErrors, validatePolicy,
   type Field, type FieldErrors, type LimitRow, type PolicyForm,
 } from "./form";
 import { policyKey, usePolicy, usePromote, type Loaded } from "./queries";
@@ -127,6 +127,11 @@ function PolicyFormView({ initial, loaded, id, notice = null, onNotice = () => {
             hint="Shadow decides and records but never rejects (RL-26)." onChange={(v) => set({ mode: v })} />
           <CheckField label="Limits from the consumer's plan" field="fromPlan" checked={form.fromPlan} errors={errors} onChange={(v) => set({ fromPlan: v })} />
           {!form.fromPlan && <LimitsField rows={form.limits} error={errors.limits} onChange={(limits) => set({ limits })} />}
+          {leaseable(form) && (
+            <TextField label="Lease size k" field="leaseK" value={form.leaseK} errors={errors} inputMode="numeric" placeholder="0"
+              hint="0 = strict: one Redis call per request. k > 0 = batched: each gateway reserves up to k cost units per key and serves them locally; admissions can exceed the limit by up to replicas × k. Enforce mode only."
+              onChange={(v) => set({ leaseK: v })} />
+          )}
         </fieldset>
         {server && server.rest.length > 0 && (
           <div role="alert"><ul className="form-error" aria-label="Other errors">{server.rest.map((m, i) => <li key={i}>{m}</li>)}</ul></div>
@@ -243,10 +248,13 @@ function Wrap({ label, field, errors, hint, children }: FieldProps & { children:
   );
 }
 
-function TextField(p: FieldProps & { value: string; onChange: (v: string) => void }) {
+function TextField(p: FieldProps & { value: string; inputMode?: "numeric"; placeholder?: string; onChange: (v: string) => void }) {
   return (
     <Wrap {...p}>
-      {(id, by) => <input id={id} value={p.value} aria-invalid={p.errors[p.field] ? true : undefined} aria-describedby={by} onChange={(e) => p.onChange(e.target.value)} />}
+      {(id, by) => (
+        <input id={id} value={p.value} inputMode={p.inputMode} placeholder={p.placeholder} aria-invalid={p.errors[p.field] ? true : undefined} aria-describedby={by}
+          onChange={(e) => p.onChange(e.target.value)} />
+      )}
     </Wrap>
   );
 }
