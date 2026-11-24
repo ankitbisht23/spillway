@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/ankitbisht23/spillway/internal/gen/configpb"
@@ -20,6 +21,17 @@ const (
 	SchemaMajor = 1
 	SchemaMinor = 0
 )
+
+// compiled numbers every Snapshot and Identity compiled, in the order they
+// were compiled (see Snapshot.Seq).
+var compiled atomic.Uint64
+
+// Seq orders s among the snapshots and identities this process compiled:
+// one compiled later has a higher Seq. A gateway swaps in what it has just
+// compiled, so a higher Seq is a later swap, whether or not the version
+// changed; the deny cache clears on it (RL-19, ADR-0069). It is 0 for a
+// Snapshot not built by Compile.
+func (s *Snapshot) Seq() uint64 { return s.seq }
 
 // Snapshot is a compiled config. It never changes once compiled: a reload
 // builds a new one, and a request keeps the snapshot it started with (GW-21).
@@ -34,6 +46,7 @@ type Snapshot struct {
 	// request (RL-22, ADR-0021).
 	RedisBudget time.Duration
 	router      *router.Router
+	seq         uint64 // see Seq
 }
 
 // Route is a compiled route.
@@ -89,7 +102,7 @@ func CompileManaged(c *configpb.Config) (*Snapshot, error) {
 }
 
 func compile(c *configpb.Config, managed bool) (*Snapshot, error) {
-	s := &Snapshot{Version: c.GetVersion(), Upstreams: map[string]*Upstream{}}
+	s := &Snapshot{Version: c.GetVersion(), Upstreams: map[string]*Upstream{}, seq: compiled.Add(1)}
 	for _, u := range c.GetUpstreams() {
 		up, err := compileUpstream(u)
 		if err != nil {

@@ -42,6 +42,16 @@ type Identity struct {
 	// picks the one that applies.
 	allow, deny access
 	overrides   map[[2]int64][]override
+	seq         uint64 // see Seq
+}
+
+// Seq orders id among the snapshots and identities this process compiled,
+// as Snapshot.Seq does; it is 0 for a nil Identity (no identity file).
+func (id *Identity) Seq() uint64 {
+	if id == nil {
+		return 0
+	}
+	return id.seq
 }
 
 // access is one action's access-list entries.
@@ -209,7 +219,7 @@ func CompileIdentity(c *configpb.Identity) (*Identity, error) {
 	default:
 		return nil, fmt.Errorf("key_format %q: want none (static keys) or %q (managed keys)", c.GetKeyFormat(), KeyFormatManaged)
 	}
-	id := &Identity{Version: c.GetVersion(), keys: map[string]apiKey{}, now: time.Now}
+	id := &Identity{Version: c.GetVersion(), keys: map[string]apiKey{}, now: time.Now, seq: compiled.Add(1)}
 	consumers := map[string]*Consumer{}
 	for _, cc := range c.GetConsumers() {
 		if cc.GetName() == "" {
@@ -255,7 +265,7 @@ func CompileIdentity(c *configpb.Identity) (*Identity, error) {
 // ends after that are checked at each request. Errors name keys by ID,
 // never by any part of the key.
 func compileManaged(c *configpb.Identity) (*Identity, error) {
-	id := &Identity{Version: c.GetVersion(), keys: map[string]apiKey{}, subjects: map[string]*Consumer{}, managed: true, now: time.Now}
+	id := &Identity{Version: c.GetVersion(), keys: map[string]apiKey{}, subjects: map[string]*Consumer{}, managed: true, now: time.Now, seq: compiled.Add(1)}
 	tenants := map[int64]*configpb.Tenant{}
 	for _, t := range c.GetTenants() {
 		if t.GetId() <= 0 {
