@@ -1,5 +1,6 @@
-// Shadow → promote → rollback (UI-01, UI-02, D8, ADR-0061): a new policy
-// is created in shadow mode, published with its diff and note, its shadow
+// Shadow → promote → rollback (UI-01, UI-02, D8, ADR-0061): a new Redis
+// policy is created in shadow mode, batched with a lease size k (RL-18,
+// ADR-0069), published with its diff and note, its shadow
 // report opens (in make dev the gateways are static, so it shows its
 // empty states), it is promoted with an edit and published again, and the
 // config is rolled back from History to the version before it, after which
@@ -31,11 +32,12 @@ test("a new policy goes shadow → published → reviewed → promoted → publi
     await page.getByRole("textbox", { name: "Name" }).fill(name);
     await page.getByRole("textbox", { name: "Routes" }).fill("e2e-orders");
     await page.getByRole("textbox", { name: "Key template" }).fill("{ip}");
-    await page.getByRole("checkbox", { name: "Local (per gateway, no Redis)" }).check();
     await expect(page.getByRole("combobox", { name: "Mode", exact: true })).toHaveValue("shadow");
     await page.getByRole("group", { name: "Limit 1" }).getByRole("textbox", { name: "Rate" }).fill("50");
+    await page.getByRole("textbox", { name: "Lease size k" }).fill("10");
     await page.getByRole("button", { name: "Create policy" }).click();
     await expect(page.getByRole("heading", { name: `Policy ${name}` })).toBeVisible();
+    await expect(page.getByRole("textbox", { name: "Lease size k" })).toHaveValue("10");
     const id = Number(/\/policies\/(\d+)/.exec(page.url())?.[1]);
     // An editor may not publish: the page says so.
     await page.getByRole("link", { name: "review and publish" }).click();
@@ -47,6 +49,7 @@ test("a new policy goes shadow → published → reviewed → promoted → publi
     const diff = page.getByLabel("Diff against the published version");
     await expect(diff.locator(".diff-add", { hasText: `name: ${name}` })).toBeVisible();
     await expect(diff.locator(".diff-add", { hasText: "mode: shadow" })).toBeVisible();
+    await expect(diff.locator(".diff-add", { hasText: "lease_k: 10" })).toBeVisible();
     await expect(page.getByRole("list", { name: "Changes" })).toContainText(`added policy ${name}`);
     const shadowVersion = await publish(page, `Playwright ${s.run}: ${name} in shadow`);
 
