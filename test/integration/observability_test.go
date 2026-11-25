@@ -184,7 +184,7 @@ func TestDashboardQueries(t *testing.T) {
 		"$replica", ".*", "$policy", ".*", "$upstream", ".*", "$node", ".*")
 	n := 0
 	for _, f := range files {
-		b, err := os.ReadFile(f)
+		b, err := os.ReadFile(f) //nolint:gosec // G304: a dashboard file of this repo
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -236,7 +236,7 @@ func TestDashboardQueries(t *testing.T) {
 func TestGrafanaDashboards(t *testing.T) {
 	password := os.Getenv("GRAFANA_ADMIN_PASSWORD")
 	if password == "" {
-		password = "dev-only-not-secret"
+		password = "dev-only-not-secret" //nolint:gosec // G101: compose's dev default
 	}
 	var uids []string
 	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(time.Second) {
