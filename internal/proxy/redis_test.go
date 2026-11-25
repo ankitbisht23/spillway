@@ -29,7 +29,6 @@ type fakeRedis struct {
 	refunds     []string                 // one line per Refund: cost, admitted_us, then each key
 	fail        map[string]struct{}      // hash tags whose calls fail as conn
 	slow        map[string]time.Duration // hash tags whose calls answer this late, or time out at their deadline
-	late        map[string]bool          // slow hash tags whose timed-out calls stay in flight: their Late decides them when the delay is over (ADR-0079)
 	failRefunds bool                     // every Refund fails as conn
 	unseeded    map[string]bool          // hash tags whose quota epoch is missing
 	clock       func() time.Time         // Redis TIME, for a quota's retry-after; time.Now if nil
@@ -39,7 +38,7 @@ type fakeRedis struct {
 }
 
 func newFakeRedis() *fakeRedis {
-	return &fakeRedis{used: map[string]int64{}, fail: map[string]struct{}{}, slow: map[string]time.Duration{}, unseeded: map[string]bool{}, late: map[string]bool{}, now: 1_000_000}
+	return &fakeRedis{used: map[string]int64{}, fail: map[string]struct{}{}, slow: map[string]time.Duration{}, unseeded: map[string]bool{}, now: 1_000_000}
 }
 
 // tagged returns m's value for the hash tag key has, if any.
@@ -81,35 +80,16 @@ func (f *fakeRedis) Call(ctx context.Context, cost int64, limits []rlredis.Limit
 	f.deadlines = append(f.deadlines, deadline)
 	f.arrivals = append(f.arrivals, time.Now())
 	delay, _ := tagged(f.slow, limits[0].Key)
-	late, _ := tagged(f.late, limits[0].Key)
 	f.mu.Unlock()
 	if delay > 0 {
-		end := time.Now().Add(delay)
 		t := time.NewTimer(delay)
 		defer t.Stop()
 		select {
 		case <-t.C:
 		case <-ctx.Done():
-			err := &rlredis.Error{Kind: rlredis.KindTimeout, Node: "redis-1:6379", Err: ctx.Err()}
-			if late { // decided whether or not Late is called, as Redis does
-				var res rlredis.Result
-				var lerr error
-				done := make(chan struct{})
-				go func() {
-					defer close(done)
-					time.Sleep(time.Until(end))
-					res, lerr = f.decide(cost, limits)
-				}()
-				err.Late = func() (rlredis.Result, error) { <-done; return res, lerr }
-			}
-			return rlredis.Result{}, err
+			return rlredis.Result{}, &rlredis.Error{Kind: rlredis.KindTimeout, Node: "redis-1:6379", Err: ctx.Err()}
 		}
 	}
-	return f.decide(cost, limits)
-}
-
-// decide runs a call that has arrived: the script's checks and writes.
-func (f *fakeRedis) decide(cost int64, limits []rlredis.Limit) (rlredis.Result, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if _, ok := tagged(f.fail, limits[0].Key); ok {

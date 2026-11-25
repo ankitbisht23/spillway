@@ -212,9 +212,6 @@ func TestMetricLabels(t *testing.T) {
 	rec.RedisError("timeout")
 	rec.RedisError("conn")
 	rec.RefundFailure()
-	rec.LateRefund(true)
-	rec.LateRefund(true)
-	rec.LateRefund(false)
 
 	m := scrape(t, reg)
 	for _, s := range []string{
@@ -239,8 +236,6 @@ func TestMetricLabels(t *testing.T) {
 		`gw_redis_errors_total{kind="conn"} 1`,
 		`gw_redis_errors_total{kind="script"} 0`,
 		`gw_ratelimit_refund_failures_total 1`,
-		`gw_ratelimit_late_refunds_total{result="refunded"} 2`,
-		`gw_ratelimit_late_refunds_total{result="failed"} 1`,
 		`gw_request_duration_seconds_count{route="orders",tenant="none"} 8`,
 		`gw_request_duration_seconds_bucket{route="none",tenant="none",le="0.0025"} 0`,
 		`gw_request_duration_seconds_bucket{route="none",tenant="none",le="0.005"} 1`,
