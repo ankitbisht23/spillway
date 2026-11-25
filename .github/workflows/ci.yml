@@ -38,6 +38,8 @@ jobs:
         run: make lint-api
       - name: sqlc generated code (CP-01)
         run: make lint-sql
+      - name: "Helm chart: helm lint, helm template, chart tests (ADR-0086)"
+        run: make lint-helm
       - name: Unit tests and fuzz smoke
         run: make test-go FUZZTIME=10s
       - name: govulncheck

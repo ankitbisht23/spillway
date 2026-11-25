@@ -1,0 +1,60 @@
+# The kind cluster's overrides of the `spillway` chart (ADR-0075 §D11,
+# ADR-0086), installed by make kind-up into namespace spillway with
+#   helm --kube-context kind-spillway upgrade --install spillway deploy/helm/spillway -f deploy/kind/values.yaml
+# plus networkPolicy.kubeletCIDRs, which make kind-up reads from the kind
+# Docker network. The Secrets and ConfigMaps named here are made by make
+# kind-up from the dev files, by reference (ADR-0085); no value is here.
+
+gateway:
+  image:
+    repository: spillway-gateway
+    tag: kind
+    pullPolicy: Never # loaded with kind load, no registry
+  tls:
+    secretName: gateway-tls
+  stream:
+    secretName: gateway-stream
+  # SEC-06: kind's pod and Service ranges (deploy/kind/cluster.yaml).
+  allowedNetworks: 10.244.0.0/16,10.96.0.0/16
+  redis:
+    addrs: redis-0.redis.spillway-deps.svc.cluster.local:6379,redis-1.redis.spillway-deps.svc.cluster.local:6379,redis-2.redis.spillway-deps.svc.cluster.local:6379,redis-3.redis.spillway-deps.svc.cluster.local:6379,redis-4.redis.spillway-deps.svc.cluster.local:6379,redis-5.redis.spillway-deps.svc.cluster.local:6379
+    secretName: dev-secrets
+  # SEC-04: Keycloak over HTTPS, no dev mode.
+  jwt:
+    issuer: https://keycloak.spillway-deps.svc.cluster.local:8443/auth/realms/spillway
+    jwksURL: https://keycloak.spillway-deps.svc.cluster.local:8443/auth/realms/spillway/protocol/openid-connect/certs
+  otlpEndpoint: http://otel-collector.spillway-obs.svc:4317
+
+controlplane:
+  image:
+    repository: spillway-controlplane
+    tag: kind
+    pullPolicy: Never
+  stream:
+    secretName: controlplane-stream
+  allowedNetworks: 10.244.0.0/16,10.96.0.0/16
+  # Postgres in spillway-deps speaks plain TCP inside the cluster (ADR-0086).
+  database:
+    url: postgres://spillway_app@postgres.spillway-deps.svc:5432/spillway?sslmode=disable
+    secretName: dev-secrets
+  migrate:
+    url: postgres://spillway@postgres.spillway-deps.svc:5432/spillway?sslmode=disable
+    secretName: dev-secrets
+  redis:
+    addrs: redis-0.redis.spillway-deps.svc.cluster.local:6379,redis-1.redis.spillway-deps.svc.cluster.local:6379,redis-2.redis.spillway-deps.svc.cluster.local:6379,redis-3.redis.spillway-deps.svc.cluster.local:6379,redis-4.redis.spillway-deps.svc.cluster.local:6379,redis-5.redis.spillway-deps.svc.cluster.local:6379
+    secretName: dev-secrets
+  oidc:
+    issuer: https://keycloak.spillway-deps.svc.cluster.local:8443/auth/realms/spillway
+    jwksURL: https://keycloak.spillway-deps.svc.cluster.local:8443/auth/realms/spillway/protocol/openid-connect/certs
+  prometheusURL: http://prometheus.spillway-obs.svc:9090
+
+heavyHitter:
+  secretName: dev-secrets
+
+# The mkcert CA (public), which signed Keycloak's certificate.
+oidc:
+  caConfigMap: mkcert-ca
+
+networkPolicy:
+  prometheus:
+    namespace: spillway-obs

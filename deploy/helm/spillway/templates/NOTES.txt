@@ -1,0 +1,7 @@
+Spillway {{ .Chart.AppVersion }} in namespace {{ .Release.Namespace }}.
+
+The edge: Service spillway-gateway, HTTPS on port {{ .Values.gateway.service.port }}{{ if eq .Values.gateway.service.type "NodePort" }} (NodePort {{ .Values.gateway.service.nodePort }}){{ end }}; no plain HTTP.
+The control plane's REST API and admin UI are internal (SEC-02):
+  kubectl --context <context> -n {{ .Release.Namespace }} port-forward service/spillway-controlplane 8080:8080
+Gateways are not ready until the control plane has published a config.
+Runbook for a gateway started during a control-plane outage: docs/runbooks/gateway-snapshot.md

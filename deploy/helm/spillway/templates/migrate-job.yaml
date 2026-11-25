@@ -1,0 +1,68 @@
+{{- /*
+CP-19: migrations run as a pre-install/pre-upgrade hook Job, as the owner
+role, before any control-plane pod of the release starts or rolls. Its
+service account is a hook too, created first; hooks are not deleted with the
+release.
+*/}}
+{{- $m := .Values.controlplane.migrate }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: spillway-migrate
+  labels:
+    {{- include "spillway.labels" . | nindent 4 }}
+    app.kubernetes.io/name: spillway-migrate
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation
+automountServiceAccountToken: false
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: spillway-migrate
+  labels:
+    {{- include "spillway.labels" . | nindent 4 }}
+    app.kubernetes.io/name: spillway-migrate
+    app.kubernetes.io/component: migrate
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: {{ $m.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "spillway.labels" . | nindent 8 }}
+        app.kubernetes.io/name: spillway-migrate
+        app.kubernetes.io/component: migrate
+    spec:
+      restartPolicy: Never
+      serviceAccountName: spillway-migrate
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        {{- include "spillway.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: migrate
+          image: {{ include "spillway.image" (dict "image" .Values.controlplane.image "root" .) }}
+          imagePullPolicy: {{ .Values.controlplane.image.pullPolicy }}
+          args: ["migrate"]
+          env:
+            - { name: SPILLWAY_CP_MIGRATE_DATABASE_URL, value: {{ required "controlplane.migrate.url: the owner role's postgres:// URL, without a password" $m.url | quote }} }
+            - { name: SPILLWAY_CP_MIGRATE_PASSWORD_FILE, value: /etc/spillway-secrets/owner/value }
+            # The app role's password, which migrate sets (ADR-0040).
+            - { name: SPILLWAY_CP_DATABASE_PASSWORD_FILE, value: /etc/spillway-secrets/database/value }
+          resources:
+            {{- toYaml .Values.controlplane.resources | nindent 12 }}
+          securityContext:
+            {{- include "spillway.containerSecurityContext" . | nindent 12 }}
+          volumeMounts:
+            - { name: owner, mountPath: /etc/spillway-secrets/owner, readOnly: true }
+            - { name: database, mountPath: /etc/spillway-secrets/database, readOnly: true }
+      volumes:
+        {{- include "spillway.secretFile" (dict "name" "owner" "secretName" $m.secretName "key" $m.passwordKey) | nindent 8 }}
+        {{- include "spillway.secretFile" (dict "name" "database" "secretName" .Values.controlplane.database.secretName "key" .Values.controlplane.database.passwordKey) | nindent 8 }}

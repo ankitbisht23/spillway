@@ -1,0 +1,152 @@
+# Production-shaped defaults of the `spillway` chart (ADR-0075 §D11,
+# ADR-0086). deploy/kind/values.yaml holds the kind cluster's overrides.
+#
+# Resource names are fixed (spillway-gateway, spillway-controlplane,
+# spillway-migrate): the gateways' fleet certificate is named
+# spillway-gateway, pod names start with it (the replica IDs, ADR-0075
+# §D11), and Prometheus finds the pods by app.kubernetes.io/name. So install
+# one release per namespace.
+#
+# Secrets are referenced by name only (SEC-09): the chart never renders a
+# secret value, mounts each key as a file and passes the *_FILE setting.
+# Values marked "required" have no usable default; rendering fails without
+# them.
+
+gateway:
+  replicas: 3
+  image:
+    repository: ghcr.io/ankitbisht23/spillway-gateway
+    tag: "" # default: the chart's appVersion
+    pullPolicy: IfNotPresent
+  # GW-27: GOMAXPROCS and GOMEMLIMIT follow these limits. No CPU limit, so
+  # the gateway is never throttled; GOMAXPROCS follows the node's CPUs.
+  resources:
+    requests: { cpu: 250m, memory: 128Mi }
+    limits: { memory: 256Mi }
+  # The edge (GW-25, SEC-01): HTTPS only, no port 80, no ingress
+  # controller. On kind, extraPortMappings map 127.0.0.1:443 to the
+  # NodePort (docs/ports.md).
+  service:
+    type: NodePort
+    port: 443
+    nodePort: 30443
+    # Cluster: every node forwards to every ready gateway. Client addresses
+    # reaching the gateway are then node addresses (SNAT), so IP-keyed
+    # limits and maxConnectionsPerIP count per node, not per client.
+    externalTrafficPolicy: Cluster
+  # A kubernetes.io/tls Secret (tls.crt, tls.key) with the edge certificate.
+  tls:
+    secretName: spillway-gateway-tls
+  # The config stream's mTLS (SEC-02): a Secret with cert.pem, key.pem
+  # (the fleet's client certificate, whose only DNS name is fleetName) and
+  # ca.pem (the stream CA). Every pod mounts it; each names itself by its
+  # pod name (SPILLWAY_GATEWAY_REPLICA_ID), which starts with fleetName-.
+  stream:
+    secretName: spillway-gateway-stream
+    fleetName: spillway-gateway
+  # Upstream allow-list (SEC-06), comma-separated CIDRs. Required.
+  allowedNetworks: ""
+  trustedProxies: "" # SPILLWAY_GATEWAY_TRUSTED_PROXIES
+  # Load shedding (GW-26). maxConnectionsPerIP counts per client address;
+  # behind the NodePort with externalTrafficPolicy Cluster that is per node
+  # (see service), so raise it, or list the node network in trustedProxies,
+  # when many clients share a node.
+  maxConnections: 8192
+  maxConnectionsPerIP: 1024
+  maxInFlight: 4096
+  # Shutdown (GW-23): the preStop sleep lets endpoints and kube-proxy drop
+  # the pod before SIGTERM; then drain and grace as in compose. The grace
+  # period covers preStop + drain + shutdownGrace + 15 s for the telemetry
+  # flush and slack.
+  preStopSleepSeconds: 10
+  drain: 5s
+  shutdownGrace: 15s
+  terminationGracePeriodSeconds: 45
+  # The limiter's Redis Cluster (ADR-0021); empty addrs: no Redis policies.
+  redis:
+    addrs: "" # comma-separated host:port seeds
+    username: ""
+    secretName: "" # Secret with the password; empty: no AUTH
+    passwordKey: REDIS_PASSWORD
+  # Bearer tokens (GW-18, SEC-04): https only; off when issuer is empty.
+  jwt:
+    issuer: ""
+    jwksURL: ""
+    audience: spillway-gateway
+  otlpEndpoint: "" # such as http://otel-collector:4317; off when empty
+  traceSampleRatio: "1"
+  accessLogSampleRate: "1"
+  # CP-07: the on-disk snapshot on an emptyDir under the read-only root
+  # filesystem. A replacement pod started while the control plane is down
+  # has none (docs/runbooks/gateway-snapshot.md).
+  snapshot:
+    sizeLimit: 64Mi
+  # CP-07: with secretName set, an init container copies snapshot.pb from
+  # that Secret into an empty snapshot volume (the runbook's seed).
+  snapshotSeed:
+    secretName: ""
+  podDisruptionBudget:
+    maxUnavailable: 1
+
+controlplane:
+  # CP-22: v1 runs one active control-plane replica; HA is stretch.
+  replicas: 1
+  image:
+    repository: ghcr.io/ankitbisht23/spillway-controlplane
+    tag: ""
+    pullPolicy: IfNotPresent
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { memory: 256Mi }
+  # The config stream's server certificate (cert.pem, key.pem) and the
+  # stream CA gateway certificates must chain to (ca.pem).
+  stream:
+    secretName: spillway-controlplane-stream
+  # The gateways' upstream allow-list, checked by the API (SEC-06). Required.
+  allowedNetworks: ""
+  # The app role, without a password (it comes from the Secret). Required.
+  database:
+    url: ""
+    secretName: spillway-database
+    passwordKey: SPILLWAY_CP_DATABASE_PASSWORD
+  # CP-19: the pre-install/pre-upgrade Job runs `controlplane migrate` as
+  # the owner role. url is required.
+  migrate:
+    url: ""
+    secretName: spillway-database
+    passwordKey: POSTGRES_PASSWORD
+    activeDeadlineSeconds: 300
+  # The quota flusher's Redis Cluster (RL-10): SPILLWAY_CP_REDIS_*; empty
+  # addrs turns the flusher off.
+  redis:
+    addrs: ""
+    username: ""
+    secretName: ""
+    passwordKey: REDIS_PASSWORD
+  # Bearer tokens (CP-11, SEC-04): https only. issuer and jwksURL required.
+  oidc:
+    issuer: ""
+    jwksURL: ""
+    audience: spillway-controlplane
+  prometheusURL: "" # the admin UI's live data (UI-03); optional
+
+# The heavy-hitter secret (RL-21, ADR-0053), required by both.
+heavyHitter:
+  secretName: spillway-heavy-hitter
+  key: SPILLWAY_HEAVY_HITTER_SECRET
+
+# A ConfigMap with a CA certificate (key ca.pem) trusted, besides the system
+# roots, for the OIDC issuer's JWKS URL; empty: the system roots only.
+oidc:
+  caConfigMap: ""
+
+# GW-25: the admin ports listen on the pod IP and admit only Prometheus and
+# the kubelet. Egress is not restricted in v1.
+networkPolicy:
+  prometheus:
+    namespace: monitoring
+    podLabels:
+      app.kubernetes.io/name: prometheus
+  # The node network the kubelet's probes come from. Required: without it
+  # the probes would be dropped.
+  kubeletCIDRs: []

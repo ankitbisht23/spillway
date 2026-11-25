@@ -1,0 +1,58 @@
+{{- /*
+GW-25 (ADR-0075 §D11): the admin ports admit only Prometheus and the
+kubelet (the node network). The gateway's traffic port is open; the control
+plane's gRPC admits the gateways and its REST the pods of this namespace.
+Egress is not restricted in v1.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: spillway-gateway
+  labels:
+    {{- include "spillway.labels" . | nindent 4 }}
+    app.kubernetes.io/name: spillway-gateway
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: spillway-gateway
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - { protocol: TCP, port: 8443 }
+    - from:
+        {{- include "spillway.prometheusPeer" . | trim | nindent 8 }}
+        {{- include "spillway.kubeletPeers" . | trim | nindent 8 }}
+      ports:
+        - { protocol: TCP, port: 8001 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: spillway-controlplane
+  labels:
+    {{- include "spillway.labels" . | nindent 4 }}
+    app.kubernetes.io/name: spillway-controlplane
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: spillway-controlplane
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: spillway-gateway
+              app.kubernetes.io/instance: {{ .Release.Name }}
+      ports:
+        - { protocol: TCP, port: 9090 }
+    - from:
+        - podSelector: {}
+      ports:
+        - { protocol: TCP, port: 8080 }
+    - from:
+        {{- include "spillway.prometheusPeer" . | trim | nindent 8 }}
+        {{- include "spillway.kubeletPeers" . | trim | nindent 8 }}
+      ports:
+        - { protocol: TCP, port: 8081 }
