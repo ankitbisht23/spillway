@@ -290,10 +290,7 @@ func (l *limits) checkRedis() bool {
 		}
 	}()
 	deadline := start.Add(l.budget)
-	// The request's values reach the calls, but a client that goes away
-	// cannot cut a sent call short.
-	ctx, cancel := context.WithDeadline(context.WithoutCancel(l.r.Context()), deadline)
-	defer cancel()
+	var ctx context.Context // made for the first call sent, not for a request its leases serve
 	for _, c := range calls {
 		if l.lease != nil {
 			l.useLease(c)
@@ -302,6 +299,13 @@ func (l *limits) checkRedis() bool {
 			}
 		}
 		called = true
+		if ctx == nil {
+			// The request's values reach the calls, but a client that goes
+			// away cannot cut a sent call short.
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithDeadline(context.WithoutCancel(l.r.Context()), deadline)
+			defer cancel()
+		}
 		var res rlredis.Result
 		var sent time.Time
 		var err error
