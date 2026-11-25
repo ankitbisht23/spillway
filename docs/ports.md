@@ -24,6 +24,8 @@ This file is the source of truth for every host port the stack uses; `compose.ya
 
 The gateway ports belong to `gateway-1`. Multi-replica runs add `gateway-2` … `gateway-5` (compose profile `replicas`), which publish no host ports. Processes run on the host reach the Redis nodes through the address map in [ADR-0004](adr/0004-dev-networking.md).
 
+`make chaos-redis-latency` (ADR-0074) creates toxiproxy proxies `redis-0` … `redis-5` listening on **26370–26375** inside the compose network (`toxiproxy:2637N` → `redis-N:6379`); they are not published on the host and are deleted when the test ends.
+
 Inside the kind cluster (M7, ADR-0075), the gateway's NodePort is **30443**, the node-side end of the 443 mapping; it is a port on the kind node container, not on the host, and nothing else in the cluster is published on the host. kind and the compose stack are not run together (memory), so the kind port-forwards use their own ports rather than compose's 3000 and 9091.
 
 ## Before `make dev`

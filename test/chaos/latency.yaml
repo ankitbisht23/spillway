@@ -1,0 +1,43 @@
+# gateway-4's config during make chaos-redis-latency (ADR-0074 §D9), mounted
+# by test/chaos/latency.compose.yml: three routes to upstream-1, each with
+# one route-level Redis policy keyed {route}, one per failure mode. The open
+# and closed limits are far above the 100 rps the sender drives; the
+# degraded one is 50/s, burst 50, which gateway-4 alone (replicas 1) runs
+# locally while Redis calls time out.
+version: 73
+upstreams:
+  - name: upstream-1
+    endpoints:
+      - address: upstream-1:8080
+routes:
+  - name: latency-open
+    match: { path_prefix: /anything/latency-open }
+    upstream: upstream-1
+  - name: latency-closed
+    match: { path_prefix: /anything/latency-closed }
+    upstream: upstream-1
+  - name: latency-degraded
+    match: { path_prefix: /anything/latency-degraded }
+    upstream: upstream-1
+policies:
+  - name: latency-open
+    level: route
+    match: { routes: [latency-open] }
+    key_template: '{route}'
+    algorithm: gcra
+    limits: [{ rate: 10000, period: 1s }]
+    failure_mode: fail_open
+  - name: latency-closed
+    level: route
+    match: { routes: [latency-closed] }
+    key_template: '{route}'
+    algorithm: gcra
+    limits: [{ rate: 10000, period: 1s }]
+    failure_mode: fail_closed
+  - name: latency-degraded
+    level: route
+    match: { routes: [latency-degraded] }
+    key_template: '{route}'
+    algorithm: gcra
+    limits: [{ rate: 50, period: 1s, burst: 50 }]
+    failure_mode: degraded

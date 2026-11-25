@@ -408,7 +408,7 @@ func (r latencyReport) lines(o latencyOptions) []string {
 	}
 	for i, rt := range r.Routes {
 		out = append(out, line(4+i, fmt.Sprintf("%s: median <= pre-toxic + %s", rt.Name, o.slack),
-			fmt.Sprintf("median %.2f ms under the toxic, %.2f ms before (+%.2f ms)", rt.Window.MedianMS, rt.PreMedianMS, rt.Window.MedianMS-rt.PreMedianMS)))
+			fmt.Sprintf("median %.2f ms under the toxic, %.2f ms before (%+.2f ms)", rt.Window.MedianMS, rt.PreMedianMS, rt.Window.MedianMS-rt.PreMedianMS)))
 	}
 	for i, rt := range r.Routes {
 		rec := rt.Recovered
