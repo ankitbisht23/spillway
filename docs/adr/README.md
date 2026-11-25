@@ -3,7 +3,7 @@
 Decisions that shape Spillway and are not obvious from the code or from docs/design.md. Requirements live in [design.md](../design.md); an ADR records how and why one was met, or why the design changed.
 
 - One decision per file, named `NNNN-kebab-title.md` with the next free number. Start from [0000-template.md](0000-template.md).
-- Status is one of **Proposed** (a draft still under discussion), **Accepted** or **Superseded by NNNN**. An ADR is marked Accepted in the PR that proposes it and takes effect when that PR merges.
+- Status is one of **Proposed** (a draft still under discussion), **Accepted**, **Superseded by NNNN** or **Rejected** (a proposal measured or considered and not taken; its record and the decision taken instead stay). An ADR is marked Accepted in the PR that proposes it and takes effect when that PR merges.
 - Never edit an accepted ADR's decision. To change it, write a new ADR that supersedes it and set the old one's status to "Superseded by NNNN"; typo and link fixes are fine.
 - Each ADR lists the requirement IDs it affects, or "none".
 
@@ -87,3 +87,4 @@ Decisions that shape Spillway and are not obvious from the code or from docs/des
 | [0076](0076-release-and-supply-chain.md) | Release v1.0.0 and the supply chain | Accepted | 2026-11-24 |
 | [0077](0077-quotas-implementation-details.md) | Quotas: implementation details | Accepted | 2026-11-25 |
 | [0078](0078-hardening-carry-over-implementation-details.md) | Hardening carry-over: implementation details and the boundary 503s | Accepted | 2026-11-25 |
+| [0079](0079-keep-redis-connections-after-a-timed-out-limiter-call.md) | Keep Redis connections after a timed-out limiter call (rejected: boundary 503s a known limit) | Rejected | 2026-11-25 |
