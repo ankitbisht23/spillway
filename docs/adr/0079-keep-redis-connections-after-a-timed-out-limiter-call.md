@@ -99,7 +99,7 @@ Other checks on build 1 (not repeated on build 2, which failed the 2xx rule firs
 - **Build 2** refunded 30,000–35,000 late admissions per strict run and 18,000–20,000 per batched run, with no failures. Even so, boundary 2xx stayed below main's lowest run in all six runs. Strict was 29,725–34,914 against 37,676, and batched 42,492–44,105 against 49,383. The 503 share went back up, to 48–56 % strict (main 55–61 %) and 34–38 % batched (main 33–42 %). Why:
   - The 2xx are bounded by how many calls Redis answers within 5 ms, not by tokens.
   - The refunds are one more Redis call each, made during the bursts. Script calls in the boundary minute rose to 116,000–119,000 strict, from 88,000–90,000 in build 1, so the queues grew again.
-  - A refund lands after its late reply plus its own wait in the queue, so the next burst's in-time calls often still find the tokens spent: 429s stayed 2.3–3 times main's.
+  - A refund lands after its late reply plus its own wait in the queue, so the next burst's in-time calls often still find the tokens spent: 429s stayed 2.3–3.1 times main's in strict mode and 1.2–1.7 times in batched mode (run for run).
 - **Main** closes a timed-out call's connection, which acts as crude admission control: calls without a connection fail at their budget without reaching Redis, so fewer calls queue and more of those sent are answered in time.
 
 ## Consequences

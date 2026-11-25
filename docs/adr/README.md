@@ -3,7 +3,7 @@
 Decisions that shape Spillway and are not obvious from the code or from docs/design.md. Requirements live in [design.md](../design.md); an ADR records how and why one was met, or why the design changed.
 
 - One decision per file, named `NNNN-kebab-title.md` with the next free number. Start from [0000-template.md](0000-template.md).
-- Status is one of **Proposed** (a draft still under discussion), **Accepted** or **Superseded by NNNN**. An ADR is marked Accepted in the PR that proposes it and takes effect when that PR merges.
+- Status is one of **Proposed** (a draft still under discussion), **Accepted**, **Superseded by NNNN** or **Rejected** (a proposal measured or considered and not taken; its record and the decision taken instead stay). An ADR is marked Accepted in the PR that proposes it and takes effect when that PR merges.
 - Never edit an accepted ADR's decision. To change it, write a new ADR that supersedes it and set the old one's status to "Superseded by NNNN"; typo and link fixes are fine.
 - Each ADR lists the requirement IDs it affects, or "none".
 
