@@ -172,7 +172,7 @@ The gateway is a stateless Go reverse proxy. Each requirement carries an ID (ref
 
 ### Self-protection
 
-- **GW-26** (M4) Per-replica caps on open connections and in-flight requests; beyond them the gateway sheds load fast with 503 and `Retry-After` instead of queueing.
+- **GW-26** (M4) Per-replica caps on open connections (also per client address, trusted proxies exempt) and in-flight requests; beyond them the gateway sheds load fast with 503 and `Retry-After` instead of queueing.
 - **GW-27** (M1) `GOMAXPROCS` and `GOMEMLIMIT` follow the container’s CPU and memory limits, so the scheduler and GC behave under Kubernetes quotas.
 - **GW-28** (M1) Server read-header, read, write and idle timeouts plus max header bytes, so slow clients cannot pin connections.
 
@@ -314,6 +314,7 @@ Prometheus scrapes RED metrics, limiter decisions and dependency health from the
 | `gw_ratelimit_deny_cache_entries` | gauge | none |
 | `gw_ratelimit_lease_total` | counter | result (local, granted, partial, denied, error, inflight, full) |
 | `gw_ratelimit_lease_tokens_dropped_total` | counter | reason (expired, reset, reserve) |
+| `gw_connections_capped_total` | counter | cap (global, per\_ip), action (closed\_waiting, shed) |
 | `gw_redis_errors_total` | counter | kind (timeout, conn, script) |
 | `gw_retries_total` | counter | upstream, outcome (sent, budget\_exhausted) |
 | `gw_circuit_state` | gauge | upstream |

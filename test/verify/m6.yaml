@@ -5,8 +5,9 @@
 # and no retries, and no rate-limit policy, so Redis is not in the path.
 # The exit spec (web/e2e/m6-exit.spec.ts) edits m6-propagation's response
 # headers in the Routes screen for its 20 timed publishes, and creates the
-# local policy m6-limit on m6-probe in the Policy editor; chaos m6 probe
-# sends its heavy and light clients to m6-probe on all five gateways.
+# local policy m6-limit-<run> (ADR-0072) on m6-probe in the Policy editor;
+# chaos m6 probe sends its heavy and light clients to m6-probe on all five
+# gateways.
 upstreams:
   - name: m6
     endpoints:

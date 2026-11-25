@@ -7,7 +7,7 @@
 //
 //   1. 20 timed publishes: m6-propagation's "Response headers to set"
 //      edited in the Routes screen (ADR-0064), then the publish page.
-//   2. Shadow: policy m6-limit created in the Policy editor (local GCRA,
+//   2. Shadow: policy m6-limit-<run> created in the Policy editor (local GCRA,
 //      50/s burst 50, keyed by X-Spillway-Probe-Client), published as S.
 //   3. Reviewed: its shadow report shows would-denies and a key row.
 //   4. Enforced: promoted from the report, published with the diff as E.
@@ -38,7 +38,6 @@ import { ciApi } from "./seed";
 const OUT = fileURLToPath(new URL("../test-results/m6-exit.json", import.meta.url));
 const GUARD = fileURLToPath(new URL("../test-results/m6-leak-guard.json", import.meta.url));
 const GATEWAYS = ["gateway-1", "gateway-2", "gateway-3", "gateway-4", "gateway-5"];
-const POLICY = "m6-limit";
 const ROUTE = "m6-propagation";
 const PROBE_HEADER = "X-Spillway-Probe-Client";
 const ROUTE_PUBLISHES = 20;
@@ -63,6 +62,9 @@ interface ShadowReport {
 }
 
 const run = process.env.SPILLWAY_VERIFY_M6_RUN ?? "";
+// A name of its own each run, so that the report's counts by policy name
+// are this run's only (O2, ADR-0072).
+const POLICY = `m6-limit-${run}`;
 const base = Number(process.env.SPILLWAY_VERIFY_M6_BASE);
 
 const record = {
@@ -193,8 +195,8 @@ test("make verify-m6: a new policy goes shadow → reviewed → enforced → rol
       api.post("heavy-hitters/lookup", { data: { policy_id: id, subject: { headers: { [PROBE_HEADER]: client } } } }))).key_digest;
     const heavyDigest = await digest("heavy");
     const lightDigest = await digest("light");
-    // The heavy key's row, by this run's policy ID: would_deny counts by
-    // policy name over 15 min and can include an earlier run's.
+    // The heavy key's row, by this run's policy ID (ADR-0067); would_deny
+    // is by this run's policy name (ADR-0072).
     const heavyRow = page.locator("table tbody tr").filter({ has: page.getByRole("rowheader", { name: heavyDigest, exact: true }) });
     let shown = "";
     let heavyShown: number | null = null;

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -38,17 +39,26 @@ func TestRateLimitExhausted(t *testing.T) {
 		fields []string
 		want   bool
 	}{
-		{[]string{`"m6-limit";r=0;t=1`}, true},
-		{[]string{`"other";r=5;t=1, "m6-limit";r=0;t=1`}, true},
-		{[]string{`"other";r=5;t=1`, `"m6-limit";t=1;r=0`}, true},
-		{[]string{`"m6-limit";r=3;t=1`}, false},
-		{[]string{`"m6-limit-2";r=0;t=1`}, false},
-		{[]string{`m6-limit;r=0`}, false},
+		{[]string{`"m6-limit-1764000000";r=0;t=1`}, true},
+		{[]string{`"other";r=5;t=1, "m6-limit-1764000000";r=0;t=1`}, true},
+		{[]string{`"other";r=5;t=1`, `"m6-limit-1764000000";t=1;r=0`}, true},
+		{[]string{`"m6-limit-1764000000";r=3;t=1`}, false},
+		{[]string{`"m6-limit-1763999999";r=0;t=1`}, false}, // an earlier run's (ADR-0072)
+		{[]string{`"m6-limit";r=0;t=1`}, false},
+		{[]string{`m6-limit-1764000000;r=0`}, false},
 		{nil, false},
 	} {
-		if got := rateLimitExhausted(c.fields, m6Policy); got != c.want {
+		if got := rateLimitExhausted(c.fields, m6Policy("1764000000")); got != c.want {
 			t.Errorf("%q: %v, want %v", c.fields, got, c.want)
 		}
+	}
+}
+
+// TestM6Policy: the policy's name is m6-limit-<run>, 19 characters for
+// m6.sh's ten-digit run ID, within the policy-name rule (ADR-0072).
+func TestM6Policy(t *testing.T) {
+	if got := m6Policy("1764000000"); got != "m6-limit-1764000000" || len(got) != 19 || !regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`).MatchString(got) {
+		t.Errorf("m6Policy = %q", got)
 	}
 }
 
@@ -368,7 +378,7 @@ func TestM6Probe(t *testing.T) {
 			w.WriteHeader(http.StatusNotFound)
 		case r.Header.Get(m6ProbeHeader) == "heavy":
 			if heavy.Add(1)%2 == 0 {
-				w.Header().Set("RateLimit", `"m6-limit";r=0;t=1`)
+				w.Header().Set("RateLimit", `"m6-limit-t1";r=0;t=1`)
 				w.Header().Set("Retry-After", "1")
 				w.WriteHeader(http.StatusTooManyRequests)
 			}
@@ -379,7 +389,7 @@ func TestM6Probe(t *testing.T) {
 		}
 	}))
 	t.Cleanup(gw.Close)
-	o, err := parseM6Flags([]string{"probe", "-heavy-rate", "100", "-light-rate", "20"}, io.Discard)
+	o, err := parseM6Flags([]string{"probe", "-heavy-rate", "100", "-light-rate", "20", "-run-id", "t1"}, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -47,6 +47,7 @@ func TestServeSheds(t *testing.T) {
 		dnsRefresh:     time.Minute,
 		shutdownGrace:  5 * time.Second,
 		maxConnections: 2,
+		maxPerIP:       3, // above the cap, so that the replica's cap is the one reached
 		maxInFlight:    2,
 	}
 	logs := &lockedBuffer{}
@@ -77,6 +78,7 @@ func TestServeSheds(t *testing.T) {
 	for _, series := range []string{
 		`gw_requests_total{code_class="5xx",method="GET",origin="gateway",reason="shed",route="none",tenant="none"} 1`,
 		`gw_requests_total{code_class="5xx",method="other",origin="gateway",reason="shed",route="none",tenant="none"} 1`,
+		`gw_connections_capped_total{action="shed",cap="global"} 1`,
 	} {
 		if code, body := get(t, admin+"/metrics"); code != http.StatusOK || !strings.Contains(body, "\n"+series+"\n") {
 			t.Errorf("/metrics: %d without %s", code, series)

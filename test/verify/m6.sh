@@ -6,9 +6,9 @@
 # managed mode (--profile replicas), as make verify-m5's do; "chaos m6
 # probe", in the compose network, drives route m6-probe on all five with
 # a heavy and a light client; and Playwright runs web/e2e/m6-exit.spec.ts
-# once as test-admin: 20 timed route publishes, then the policy m6-limit
-# in shadow (S), its shadow report, promoted and published (E), and the
-# rollback to B from History (R). The probe then judges, each once:
+# once as test-admin: 20 timed route publishes, then the policy
+# m6-limit-<run> (ADR-0072) in shadow (S), its shadow report, promoted
+# and published (E), and the rollback to B from History (R). The probe then judges, each once:
 #   (a)  NFR-08: every one of the 23 UI publishes, click → response (host
 #        clock) plus published_at → the last of the five apply
 #        heartbeats (Postgres clock), < 5 s;
@@ -16,7 +16,7 @@
 #   (b2) reviewed: the report has would-denies, the heavy client's digest
 #        among its keys, the light one's without, and the UI showed them,
 #        the heavy key's row included (the key rows are by this run's
-#        policy ID; would_deny is by name and may include earlier runs);
+#        policy ID, would_deny by its name, this run's own);
 #   (c)  enforced: >= 50 % of heavy requests 429 with the policy's
 #        RateLimit item and Retry-After, the rest 200, light all 200;
 #   (d)  rolled back: no 429s in R's window;

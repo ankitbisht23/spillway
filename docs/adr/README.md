@@ -86,3 +86,4 @@ Decisions that shape Spillway and are not obvious from the code or from docs/des
 | [0075](0075-kind-cluster-helm-chart-and-observability-as-code.md) | kind cluster, Helm chart and observability as code | Accepted | 2026-11-24 |
 | [0076](0076-release-and-supply-chain.md) | Release v1.0.0 and the supply chain | Accepted | 2026-11-24 |
 | [0077](0077-quotas-implementation-details.md) | Quotas: implementation details | Accepted | 2026-11-25 |
+| [0078](0078-hardening-carry-over-implementation-details.md) | Hardening carry-over: implementation details and the boundary 503s | Accepted | 2026-11-25 |

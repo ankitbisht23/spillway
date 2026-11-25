@@ -90,6 +90,12 @@ function Counts({ r }: { r: ShadowReport }) {
         Version {r.config_version} runs this policy in {r.mode} mode. From {time(r.since)} to {time(r.until)}. Counts are by its published name,{" "}
         <code>{r.policy_name}</code>: requests counted under an earlier name are not included.
       </p>
+      {/* O1, ADR-0071: the counts are by name, the keys by ID. */}
+      <p className="muted">
+        Would-deny counts come from Prometheus by policy name. A policy that reuses the name of a deleted policy shows that
+        policy's counts until they leave the window. The top keys come from heavy-hitter windows by policy ID and are this
+        policy's only.
+      </p>
       {r.metrics_error && (
         <p className="banner banner-warn" role="alert">Counts unavailable: {METRICS_ERRORS[r.metrics_error]}. The keys below still answer.</p>
       )}
