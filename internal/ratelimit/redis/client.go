@@ -50,6 +50,12 @@ type Error struct {
 	Kind string // KindTimeout, KindConn or KindScript
 	Node string // primary address owning the call's slot, e.g. "redis-1:6379"; "" if unknown
 	Err  error
+	// Late is set on a timeout whose call was still in flight when its
+	// context ended: it waits for the call to end and returns its reply,
+	// what Redis did with the call. The call ends within a few HardTimeouts,
+	// one per round trip it has left (ADR-0079). Its reply goes to Late
+	// only; nil otherwise.
+	Late func() (Result, error)
 }
 
 func (e *Error) Error() string {
@@ -143,13 +149,13 @@ type Auth struct {
 // MaxRetries 0 stops the node clients from retrying (RL-16). A call's
 // deadline does not reach the socket: Call and Refund answer at the
 // deadline, and the connection's reads and writes are bounded by
-// hardTimeout, so a reply that comes after the budget is read off and the
+// HardTimeout, so a reply that comes after the budget is read off and the
 // connection goes back to the pool (ADR-0079). DisableRoutingPolicies sends
 // each call straight to its slot's node: with routing policies on, go-redis
 // fetches COMMAND on the first call, inside that call's budget, and takes
 // one client-wide lock on every call (ADR-0025).
 func NewClient(addrs []string, addrMap map[string]string, auth Auth, clock ratelimit.Clock, log *slog.Logger) *Client {
-	opt := &goredis.ClusterOptions{Addrs: addrs, MaxRetries: 0, ReadTimeout: hardTimeout, WriteTimeout: hardTimeout, DisableRoutingPolicies: true,
+	opt := &goredis.ClusterOptions{Addrs: addrs, MaxRetries: 0, ReadTimeout: HardTimeout, WriteTimeout: HardTimeout, DisableRoutingPolicies: true,
 		Username: auth.Username, Password: auth.Password.Reveal()}
 	if addrMap != nil {
 		opt.Dialer = Dialer(addrMap)
@@ -165,12 +171,12 @@ func NewClient(addrs []string, addrMap map[string]string, auth Auth, clock ratel
 	return c
 }
 
-// hardTimeout bounds every read and write on a request connection, the
+// HardTimeout bounds every read and write on a request connection, the
 // handshake of a new one included: a call's late reply is read off within
 // it, and a connection to a node that stopped answering is closed after it,
 // so a stuck node holds at most the pool's connections, each for at most
-// hardTimeout (ADR-0079).
-const hardTimeout = time.Second
+// HardTimeout (ADR-0079).
+const HardTimeout = time.Second
 
 // reload reloads the slot map in the background; go-redis runs at most one
 // reload per 200 ms.
@@ -401,7 +407,8 @@ func (c *Client) run(ctx context.Context, args []any, limits []Limit) (Result, e
 	}
 	// The call runs on its own goroutine and the caller has its answer when
 	// ctx ends, a timeout as before; the goroutine finishes the call, so a
-	// late reply is read off and its connection kept (ADR-0079).
+	// late reply is read off and its connection kept, and the timeout's Late
+	// returns that reply (ADR-0079).
 	p := &pending{done: make(chan struct{})}
 	go func() {
 		defer close(p.done)
@@ -421,7 +428,13 @@ func (c *Client) run(ctx context.Context, args []any, limits []Limit) (Result, e
 	if addr := p.node.Load(); addr != nil {
 		node = *addr
 	}
-	return Result{}, &Error{Kind: KindTimeout, Node: node, Err: ctx.Err()}
+	return Result{}, &Error{Kind: KindTimeout, Node: node, Err: ctx.Err(), Late: p.wait}
+}
+
+// wait waits for the call to end and returns its reply.
+func (p *pending) wait() (Result, error) {
+	<-p.done
+	return p.res, p.err
 }
 
 // pending is one call in progress.

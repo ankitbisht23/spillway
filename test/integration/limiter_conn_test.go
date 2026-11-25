@@ -30,35 +30,13 @@ import (
 //     every connection a call was stuck on is closed within the 1 s hard
 //     timeout although the nodes still do not answer.
 func TestLimiterKeepsConnections(t *testing.T) {
-	nodes, err := redis.ParseAddrMap(os.Getenv(redis.AddrMapEnv))
-	if err != nil || nodes == nil {
-		t.Fatalf("%s: %v; run make test-integration", redis.AddrMapEnv, err)
-	}
-	var proxies []*lagProxy
-	addrMap := make(map[string]string)
-	for i := range 6 {
-		node := fmt.Sprintf("redis-%d:6379", i)
-		p := newLagProxy(t, nodes[node])
-		proxies = append(proxies, p)
-		addrMap[node] = p.addr
-	}
-	set := func(lag time.Duration, down bool) {
-		for _, p := range proxies {
-			p.lag.Store(int64(lag))
-			p.down.Store(down)
-		}
-	}
+	c, proxies, set := newLagClient(t)
 	accepted := func() (n int64) {
 		for _, p := range proxies {
 			n += p.accepted.Load()
 		}
 		return n
 	}
-	c := redis.NewClient([]string{"redis-0:6379"}, addrMap, redis.Auth{}, ratelimit.SystemClock, slog.New(slog.DiscardHandler))
-	t.Cleanup(func() { set(0, false); _ = c.Close() })
-	warm, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-	c.Warm(warm, 100*time.Millisecond)
-	cancel()
 
 	limits := []redis.Limit{gcraLimit(redis.GlobalKey(scriptName("conns"), time.Second, redis.KeyDigest("k")), "global", true, 1_000_000, time.Second, 1_000_000)}
 	const burst = 20
@@ -145,6 +123,72 @@ func TestLimiterKeepsConnections(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Logf("measure: every connection a call was stuck on closed %v after the cut", time.Since(cut))
+}
+
+// newLagClient returns a warmed limiter client on the compose Redis Cluster
+// through one lagProxy per node, the proxies, and set, which sets every
+// proxy's lag and down.
+func newLagClient(t *testing.T) (c *redis.Client, proxies []*lagProxy, set func(lag time.Duration, down bool)) {
+	t.Helper()
+	nodes, err := redis.ParseAddrMap(os.Getenv(redis.AddrMapEnv))
+	if err != nil || nodes == nil {
+		t.Fatalf("%s: %v; run make test-integration", redis.AddrMapEnv, err)
+	}
+	addrMap := make(map[string]string)
+	for i := range 6 {
+		node := fmt.Sprintf("redis-%d:6379", i)
+		p := newLagProxy(t, nodes[node])
+		proxies = append(proxies, p)
+		addrMap[node] = p.addr
+	}
+	set = func(lag time.Duration, down bool) {
+		for _, p := range proxies {
+			p.lag.Store(int64(lag))
+			p.down.Store(down)
+		}
+	}
+	c = redis.NewClient([]string{"redis-0:6379"}, addrMap, redis.Auth{}, ratelimit.SystemClock, slog.New(slog.DiscardHandler))
+	t.Cleanup(func() { set(0, false); _ = c.Close() })
+	warm, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	c.Warm(warm, 100*time.Millisecond)
+	cancel()
+	return c, proxies, set
+}
+
+// TestLimiterLateReply: a lease reservation whose reply comes after its
+// 5 ms budget is answered as a timeout, and its Late returns what the
+// script did: an admission with the grant written. Refunding each limit's
+// granted units as of the reply's now_us, as the gateway's late refund
+// does, leaves the key as if the call had never run (RL-23, ADR-0079).
+func TestLimiterLateReply(t *testing.T) {
+	c, _, set := newLagClient(t)
+	// 10 per minute: nothing comes back with time during the test.
+	lim := gcraLimit(redis.GlobalKey(scriptName("late"), time.Minute, redis.KeyDigest("k")), "global", true, 10, time.Minute, 10)
+	lease := lim
+	lease.LeaseK, lease.Group = 5, 1
+
+	set(30*time.Millisecond, false)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
+	_, err := c.Call(ctx, 1, []redis.Limit{lease})
+	cancel()
+	var e *redis.Error
+	if !errors.As(err, &e) || e.Kind != redis.KindTimeout || e.Late == nil {
+		t.Fatalf("late reply: %v, want a timeout with Late", err)
+	}
+	res, err := e.Late()
+	if err != nil || !res.Allowed || len(res.Granted) != 1 || res.Granted[0] != 5 {
+		t.Fatalf("Late: %+v, %v; want an admission granting 5", res, err)
+	}
+	set(0, false)
+
+	ctx, cancel = context.WithTimeout(context.Background(), redis.HardTimeout)
+	defer cancel()
+	if _, err := c.Refund(ctx, res.Granted[0], res.NowUS, []redis.Limit{lim}); err != nil {
+		t.Fatalf("refund: %v", err)
+	}
+	if res, err := c.Call(ctx, 1, []redis.Limit{lim}); err != nil || res.Remaining != 9 {
+		t.Errorf("next call: %+v, %v; want 9 left, the late grant refunded", res, err)
+	}
 }
 
 // lagProxy forwards a local port to a Redis node. Replies on connections

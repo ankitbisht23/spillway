@@ -678,6 +678,15 @@ func TestTimedOutCallKeepsConnection(t *testing.T) {
 	if took > late/2 {
 		t.Errorf("answered after %v, want at the 5 ms budget", took)
 	}
+	// The late reply goes to the timeout's Late, which a late refund reads
+	// (ADR-0079).
+	var e *Error
+	if !errors.As(err, &e) || e.Late == nil {
+		t.Fatalf("late reply: %#v, want a timeout with Late", err)
+	}
+	if res, err := e.Late(); err != nil || !res.Allowed || res.NowUS != 1 {
+		t.Fatalf("Late: %+v, %v; want the late reply, allowed at now_us 1", res, err)
+	}
 	freed := waitFreed(t, c, 5*time.Second)
 	t.Logf("measure: answered after %v; connection back in the pool %v later", took, freed)
 	// By now the node has sent the late reply: a client that had closed
@@ -703,7 +712,7 @@ func TestTimedOutCallKeepsConnection(t *testing.T) {
 
 // TestStuckNodeFreesConnections: calls to a node that stopped answering are
 // answered at their budget; the pool never holds more than its size, and
-// every connection the calls took is closed within hardTimeout though the
+// every connection the calls took is closed within HardTimeout though the
 // node still does not answer (ADR-0079).
 func TestStuckNodeFreesConnections(t *testing.T) {
 	f := newFakeNode(t, "8.0.0", func(string) string { return allowedReply })
@@ -718,19 +727,45 @@ func TestStuckNodeFreesConnections(t *testing.T) {
 	f.paused.Store(true)
 	defer f.paused.Store(false)
 	var wg sync.WaitGroup
-	for range size + 10 {
+	lates := make([]func() (Result, error), size+10)
+	for i := range lates {
 		wg.Go(func() {
-			if _, took, err := within5ms(c); !isKind(err, KindTimeout) || took > 150*time.Millisecond {
+			_, took, err := within5ms(c)
+			if !isKind(err, KindTimeout) || took > 150*time.Millisecond {
 				t.Errorf("stuck node: %v after %v, want a timeout at the 5 ms budget", err, took)
+			}
+			var e *Error
+			if errors.As(err, &e) {
+				lates[i] = e.Late
 			}
 		})
 	}
 	wg.Wait()
+	// Every call still in flight at its timeout ends, with no reply, within
+	// the hard timeout: a late refund waiting on it is never stuck. A call
+	// that had ended as its context did (its wait for a pool turn) has no
+	// Late (ADR-0079).
+	start, inFlight := time.Now(), 0
+	for i, late := range lates {
+		if late == nil {
+			continue
+		}
+		inFlight++
+		if res, err := late(); err == nil || res.Allowed {
+			t.Errorf("call %d: Late %+v, %v; want an error", i, res, err)
+		}
+	}
+	if inFlight == 0 {
+		t.Error("no call in flight at its timeout, want those holding connections")
+	}
+	if took := time.Since(start); took > HardTimeout+2*time.Second {
+		t.Errorf("calls ended %v after their timeouts, want within the %v hard timeout", took, HardTimeout)
+	}
 	if total, _ := poolStats(c); total > uint32(size) { //nolint:gosec // G115: a pool size
 		t.Errorf("%d request connections, more than the pool size %d", total, size)
 	}
-	freed := waitFreed(t, c, hardTimeout+2*time.Second)
-	t.Logf("measure: every connection freed %v after the calls were answered (hard timeout %v)", freed, hardTimeout)
+	freed := waitFreed(t, c, HardTimeout+2*time.Second)
+	t.Logf("measure: every connection freed %v after the calls were answered (hard timeout %v)", freed, HardTimeout)
 
 	f.paused.Store(false)
 	if res, err := callFake(t, c); err != nil || !res.Allowed {

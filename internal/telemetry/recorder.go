@@ -62,6 +62,10 @@ var (
 	leaseDropReasons = []string{"expired", "reset", "reserve"}
 )
 
+// lateRefundResults are the label values of
+// gw_ratelimit_late_refunds_total{result} (RL-23, ADR-0079).
+var lateRefundResults = []string{"refunded", "failed"}
+
 // cappedCaps and cappedActions are the label values of
 // gw_connections_capped_total{cap,action} (GW-26, ADR-0071).
 var (
@@ -125,6 +129,7 @@ type Recorder struct {
 	checks     *prometheus.HistogramVec
 	redis      *prometheus.CounterVec
 	refunds    prometheus.Counter
+	late       *prometheus.CounterVec
 	keyCap     *prometheus.CounterVec
 
 	denyCache    *prometheus.CounterVec
@@ -178,6 +183,10 @@ func NewRecorder(reg prometheus.Registerer, log *slog.Logger, sampleRate float64
 			Name: "gw_ratelimit_refund_failures_total",
 			Help: "Redis refunds that failed; each leaves at most a request's cost held until the limit's state decays.",
 		}),
+		late: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "gw_ratelimit_late_refunds_total",
+			Help: "Redis refunds of late admissions (RL-23): calls that timed out, whose request a failure mode did not let through, and whose late reply admitted it; result refunded or failed (also counted in gw_ratelimit_refund_failures_total).",
+		}, []string{"result"}),
 		keyCap: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "gw_ratelimit_key_cap_skips_total",
 			Help: "Limits of in-memory limiters skipped for a request because its key was new and the limiter held its cap of keys.",
@@ -212,6 +221,9 @@ func NewRecorder(reg prometheus.Registerer, log *slog.Logger, sampleRate float64
 	for _, r := range leaseDropReasons {
 		rec.leaseDropped.WithLabelValues(r)
 	}
+	for _, r := range lateRefundResults {
+		rec.late.WithLabelValues(r)
+	}
 	for _, c := range cappedCaps {
 		for _, a := range cappedActions {
 			rec.capped.WithLabelValues(c, a)
@@ -226,7 +238,7 @@ func NewRecorder(reg prometheus.Registerer, log *slog.Logger, sampleRate float64
 		}
 		return 0
 	})
-	reg.MustRegister(rec.requests, rec.duration, rec.upstream, rec.retries, rec.decisions, rec.checks, rec.redis, rec.refunds, rec.keyCap, rec.denyCache, entries, rec.leases, rec.leaseDropped, rec.capped)
+	reg.MustRegister(rec.requests, rec.duration, rec.upstream, rec.retries, rec.decisions, rec.checks, rec.redis, rec.refunds, rec.late, rec.keyCap, rec.denyCache, entries, rec.leases, rec.leaseDropped, rec.capped)
 	return rec
 }
 
@@ -300,6 +312,16 @@ func (rec *Recorder) RedisError(kind string) {
 // RefundFailure records a Redis refund that failed (ADR-0021).
 func (rec *Recorder) RefundFailure() {
 	rec.refunds.Inc()
+}
+
+// LateRefund records a Redis refund of a late admission that went through,
+// or failed if ok is false (RL-23, ADR-0079).
+func (rec *Recorder) LateRefund(ok bool) {
+	result := "refunded"
+	if !ok {
+		result = "failed"
+	}
+	rec.late.WithLabelValues(result).Inc()
 }
 
 // DenyCache records a deny cache outcome: one of hit, insert or full

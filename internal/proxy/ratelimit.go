@@ -78,6 +78,9 @@ type limits struct {
 	// leaseUS is the latest decision time of the policies served from
 	// leases: a grant's Redis TIME plus the time since it arrived.
 	leaseUS int64
+	// late are the Redis calls that timed out while in flight: their late
+	// replies are refunded if the request ends here (ADR-0079).
+	late []lateCall
 }
 
 // leaseUse is one batched policy of the request that took its cost from a
@@ -114,6 +117,12 @@ type redisCall struct {
 	checks   []int            // index in limits.checks of each limit, once answered; -1 for a quota the script skipped
 	nowUS    int64            // the call's Redis TIME, which its refund names
 	slot     string           // the hash slot's kind, for its span: "tenant", "key" or "global"
+}
+
+// lateCall is a Redis call that timed out while in flight (ADR-0079).
+type lateCall struct {
+	limits []rlredis.Limit
+	reply  func() (rlredis.Result, error) // the timeout's Late
 }
 
 // errBudgetSpent fails a Redis call that the request's budget left no time
@@ -312,6 +321,10 @@ func (l *limits) checkRedis() bool {
 			}
 			res, err = l.redis.Call(ctx, l.cost, c.limits)
 			endRedisSpan(span, res.Allowed, err)
+			var e *rlredis.Error
+			if errors.As(err, &e) && e.Late != nil {
+				l.late = append(l.late, lateCall{limits: c.limits, reply: e.Late})
+			}
 		}
 		l.reserved(c, res, err, sent)
 		if err != nil {
@@ -813,10 +826,15 @@ func (l *limits) addQuotas(c *redisCall, q config.Quotas) {
 // refund gives back everything a denied request holds, shadow limits
 // included: local deductions at once, Redis ones asynchronously, one refund
 // call per Redis call with the limits it wrote (ADR-0021); costs taken from
-// leases go back to them (ADR-0069). The headers show the state after the
-// refunds.
+// leases go back to them (ADR-0069); and whatever the late replies of its
+// timed-out calls wrote (ADR-0079). The headers show the state after the
+// refunds, late ones aside.
 func (l *limits) refund() {
 	l.putBack()
+	for _, c := range l.late {
+		go l.refundLate(c)
+	}
+	l.late = nil
 	for i := range l.checks {
 		c := &l.checks[i]
 		if !c.held || c.limiter == nil {
@@ -863,6 +881,42 @@ func (l *limits) refundRedis(admittedUS int64, span trace.Span, written []rlredi
 		l.rec.RedisError(kind)
 		l.rec.RefundFailure()
 		l.log.Debug("redis limiter refund failed", "kind", kind, "node", node, "request_id", l.q.ID)
+	}
+}
+
+// refundLate waits for c's late reply and reverses what it wrote, per limit
+// the units granted_i says, a lease group's grant included: one refund call
+// per distinct amount, as of the reply's now_us, under one HardTimeout
+// (ADR-0079). The request ended without being let through, so whatever
+// Redis admitted for it after its answer is given back. Like refundRedis it
+// is never retried; a failure is counted.
+func (l *limits) refundLate(c lateCall) {
+	res, err := c.reply()
+	if err != nil {
+		return // no reply: whether the call ran is unknown, so nothing is refunded
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(l.r.Context()), rlredis.HardTimeout)
+	defer cancel()
+	done := make([]bool, len(res.Granted))
+	for i, units := range res.Granted {
+		if units <= 0 || done[i] {
+			continue
+		}
+		var written []rlredis.Limit
+		for j := i; j < len(res.Granted); j++ {
+			if res.Granted[j] == units {
+				written = append(written, c.limits[j])
+				done[j] = true
+			}
+		}
+		_, err := l.redis.Refund(ctx, units, res.NowUS, written)
+		l.rec.LateRefund(err == nil)
+		if err != nil {
+			kind, node := errorKind(err)
+			l.rec.RedisError(kind)
+			l.rec.RefundFailure()
+			l.log.Debug("redis limiter late refund failed", "kind", kind, "node", node, "request_id", l.q.ID)
+		}
 	}
 }
 
