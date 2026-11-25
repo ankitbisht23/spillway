@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"os"
 	"regexp"
+	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -214,6 +215,24 @@ func ReplicaName(leaf *x509.Certificate) (string, error) {
 	}
 	return leaf.DNSNames[0], nil
 }
+
+// FleetReplica checks that id may be a replica of the fleet whose shared
+// client certificate is named fleet (ADR-0075 §D11): id is fleet, a '-'
+// and at least one more character, and a DNS label as a whole (at most 63
+// characters). In Kubernetes, fleet is the Deployment's name and id a pod's.
+func FleetReplica(fleet, id string) error {
+	if !strings.HasPrefix(id, fleet+"-") || len(id) == len(fleet)+1 {
+		return fmt.Errorf("replica ID %q does not start with %q followed by more characters", id, fleet+"-")
+	}
+	if !replicaLabel.MatchString(id) {
+		return fmt.Errorf("replica ID %q is not a DNS label (lower-case letters, digits and '-', at most 63)", id)
+	}
+	return nil
+}
+
+// ValidReplicaName reports whether name may be a replica name or a fleet
+// name: a DNS label.
+func ValidReplicaName(name string) bool { return replicaLabel.MatchString(name) }
 
 // LoadGateway loads a gateway's files and returns its replica name, the
 // certificate's (D7, ADR-0040). A later certificate that names another

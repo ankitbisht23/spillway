@@ -6,9 +6,10 @@
 # --context kind-spillway. The Redis password stays in the pods' own
 # environment and is never printed.
 #
-# Until the Helm chart exists (the helm task), it checks the cluster and the
-# dependencies only; the helm task adds the gateway, control-plane,
-# NetworkPolicy and Prometheus-target lines.
+# With the chart (ADR-0086) it also checks the gateway and control-plane
+# rollouts, the gateway through its Service, the admin ports closed to an
+# ordinary pod (GW-25's NetworkPolicies), Prometheus's targets, and the edge
+# from the host: https://127.0.0.1:443 with the mkcert CA, nothing on :80.
 set -uo pipefail
 
 : "${BIN:?BIN is set by the Makefile}"
@@ -40,7 +41,7 @@ for ns in spillway-deps spillway-obs spillway; do
 	notready=$(awk 'NF && $2 != "Succeeded" && $3 != "True" {printf "%s ", $1}' <<<"$pods")
 	ok=1
 	if [ -n "$notready" ]; then ok=0; fi
-	if [ "$ns" != spillway ] && [ "$total" -eq 0 ]; then ok=0; fi
+	if [ "$total" -eq 0 ]; then ok=0; fi
 	if [ "$ok" -eq 1 ]; then result PASS "pods Ready in $ns" "$total pods"; else result FAIL "pods Ready in $ns" "$total pods; not Ready: ${notready:-none}"; fi
 done
 
@@ -66,13 +67,31 @@ port80=$(docker ps --filter label=io.x-k8s.kind.cluster=spillway --format '{{.Po
 [ "$edge" -eq 1 ] && [ "$others" -eq 0 ] && [ "$workers" -eq 0 ] && [ "$port80" -eq 0 ]
 check $? "edge 127.0.0.1:443 -> 30443 only, no :80" "$(tr '\n' ',' <<<"$cp_ports" | sed 's/,$//'); worker mappings $workers"
 
-# 5. From inside the cluster: Keycloak over HTTPS (chaos kindsmoke).
+# 5. The chart: the gateways and the control plane fully rolled out and
+# Ready (the kubelet's /readyz on their admin ports, GW-24).
+gw=$(kubectl -n spillway get deployment spillway-gateway -o jsonpath='{.spec.replicas} {.status.readyReplicas} {.status.updatedReplicas}' 2>&1)
+read -r gw_want gw_ready gw_updated <<<"$gw"
+[ -n "$gw_want" ] && [ "$gw_want" -ge 1 ] 2>/dev/null && [ "${gw_ready:-0}" = "$gw_want" ] && [ "${gw_updated:-0}" = "$gw_want" ]
+check $? "gateway Deployment ready" "ready/updated/wanted ${gw_ready:-0}/${gw_updated:-0}/${gw_want:-?}"
+cp=$(kubectl -n spillway get deployment spillway-controlplane -o jsonpath='{.spec.replicas} {.status.readyReplicas}' 2>&1)
+read -r cp_want cp_ready <<<"$cp"
+[ "$cp_want" = 1 ] && [ "${cp_ready:-0}" = 1 ]
+check $? "control plane ready, replicas: 1 (CP-22)" "ready ${cp_ready:-0} of ${cp_want:-?} (its /readyz, by the kubelet)"
+
+# The admin addresses an ordinary pod must not reach (GW-25): every gateway
+# pod's :8001 and the control plane's :8081, on the pod IPs.
+closed=$(kubectl -n spillway get pods -l 'app.kubernetes.io/name in (spillway-gateway,spillway-controlplane)' \
+	-o jsonpath='{range .items[*]}{.metadata.labels.app\.kubernetes\.io/name} {.status.podIP}{"\n"}{end}' 2>/dev/null |
+	awk '$2 != "" { printf "%s%s:%s", sep, $2, ($1 == "spillway-gateway" ? 8001 : 8081); sep = "," }')
+
+# 6. From inside the cluster (chaos kindsmoke): Keycloak over HTTPS, the
+# gateway through its Service, the admin ports closed, Prometheus's targets.
 kubectl -n spillway delete job kind-smoke --ignore-not-found --wait=true >/dev/null 2>&1
-if kubectl apply -f test/kind/smoke-job.yaml >/dev/null 2>&1; then
+if [ -n "$closed" ] && sed -e "s/CLOSED_ADDRS/$closed/" -e "s/GATEWAY_REPLICAS/${gw_want:-3}/" test/kind/smoke-job.yaml | kubectl apply -f - >/dev/null 2>&1; then
 	state=
 	# A deadline, not an iteration count, so slow kubectl calls cannot
-	# stretch the wait past 100 s (the Job's own deadline is 90 s).
-	deadline=$((SECONDS + 100))
+	# stretch the wait past 110 s (the Job's own deadline is 100 s).
+	deadline=$((SECONDS + 110))
 	while [ "$SECONDS" -lt "$deadline" ]; do
 		state=$(kubectl -n spillway get job kind-smoke -o jsonpath='{.status.conditions[?(@.status=="True")].type}' 2>/dev/null)
 		case "$state" in *Complete* | *Failed*) break ;; esac
@@ -83,12 +102,24 @@ if kubectl apply -f test/kind/smoke-job.yaml >/dev/null 2>&1; then
 	fails=$((fails + $(grep -c '^FAIL' <<<"$out")))
 	case "$state" in
 	*Complete*) result PASS "in-cluster checks (Job kind-smoke)" "complete" ;;
-	*) result FAIL "in-cluster checks (Job kind-smoke)" "state: ${state:-not finished in 100 s}" ;;
+	*) result FAIL "in-cluster checks (Job kind-smoke)" "state: ${state:-not finished in 110 s}" ;;
 	esac
 	kubectl -n spillway delete job kind-smoke --ignore-not-found --wait=false >/dev/null 2>&1
 else
-	result FAIL "in-cluster checks (Job kind-smoke)" "could not create the Job"
+	result FAIL "in-cluster checks (Job kind-smoke)" "could not create the Job (admin addresses: ${closed:-none found})"
 fi
+
+# 7. The edge from the host (GW-25, SEC-01): HTTPS on 127.0.0.1:443 through
+# kind's port mapping and the NodePort, trusting only the mkcert CA; and no
+# listener on 127.0.0.1:80 (curl: 7 = refused, 28 = timed out). 10 s and 3 s
+# are far above a host stall (ADR-0034).
+edge=$(curl -sS --max-time 10 --cacert "$("$BIN/mkcert" -CAROOT)/rootCA.pem" -o /dev/null -w '%{http_code} %{size_download}' https://127.0.0.1:443/bytes/16 2>&1)
+[ "$edge" = "200 16" ]
+check $? "host https://127.0.0.1:443/bytes/16 -> 200" "$edge"
+curl -sS --max-time 3 -o /dev/null http://127.0.0.1:80/ >/dev/null 2>&1
+rc=$?
+[ "$rc" -eq 7 ] || [ "$rc" -eq 28 ]
+check $? "nothing listening on host 127.0.0.1:80" "curl exit $rc"
 
 echo "kind smoke: $(($(date +%s) - start)) s"
 if [ "$fails" -eq 0 ]; then echo "kind smoke: PASS"; else echo "kind smoke: FAIL ($fails)"; exit 1; fi

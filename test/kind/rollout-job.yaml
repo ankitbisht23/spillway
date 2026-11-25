@@ -1,0 +1,50 @@
+# NFR-14's load (ADR-0075 §D11, test/kind/rollout.sh): loadgen inside the
+# cluster against the gateway's NodePort Service by its ClusterIP name (the
+# same Service, endpoints and pod lifecycle as the edge, without Docker
+# Desktop's port forwarding in the measurement), trusting only the mkcert
+# CA: 300 rps for 4 minutes, no warm-up, 50 connections, 10 s timeout.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nfr14-rollout
+  namespace: spillway
+  labels: { app.kubernetes.io/name: nfr14-rollout }
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 330
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: nfr14-rollout }
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: loadgen
+          image: spillway-loadgen:kind
+          imagePullPolicy: Never
+          args:
+            - -url=https://spillway-gateway.spillway.svc/bytes/1024
+            - -cacert=/etc/spillway-ca/ca.pem
+            - -rate=300
+            - -warmup=0s
+            - -duration=4m
+            - -conns=50
+            - -timeout=10s
+          resources:
+            requests: { cpu: 250m, memory: 128Mi }
+            limits: { memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: ca, mountPath: /etc/spillway-ca, readOnly: true }
+      volumes:
+        - name: ca
+          configMap: { name: mkcert-ca }

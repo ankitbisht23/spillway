@@ -33,6 +33,11 @@ type settings struct {
 	// DNS name (D7).
 	streamTLS    mtls.Files // SPILLWAY_GATEWAY_CP_CERT, SPILLWAY_GATEWAY_CP_KEY: the client certificate and key; SPILLWAY_GATEWAY_CP_CA: the stream CA the control plane's certificate must chain to
 	cpServerName string     // SPILLWAY_GATEWAY_CP_SERVER_NAME: the name the control plane's certificate must carry, default the host part of SPILLWAY_GATEWAY_CONTROL_PLANE
+	// replicaID names the replica when its client certificate stands for a
+	// fleet (ADR-0075 §D11): it must be the certificate's name, '-' and
+	// more, a DNS label; Helm sets it to the pod name. Unset, the
+	// certificate's name is the replica name (D7).
+	replicaID string // SPILLWAY_GATEWAY_REPLICA_ID: managed mode only
 	// heavyHitterSecret keys the heavy-hitter digests heartbeats report
 	// (RL-21, SEC-09, ADR-0053); the control plane's lookup needs the same.
 	heavyHitterSecret secret.Value // SPILLWAY_GATEWAY_HEAVY_HITTER_SECRET or _FILE: required in managed mode
@@ -111,6 +116,7 @@ func loadSettings(getenv func(string) string) (settings, error) {
 	s.controlPlane, s.snapshot = getenv("SPILLWAY_GATEWAY_CONTROL_PLANE"), getenv("SPILLWAY_GATEWAY_SNAPSHOT")
 	s.streamTLS = mtls.Files{Cert: getenv("SPILLWAY_GATEWAY_CP_CERT"), Key: getenv("SPILLWAY_GATEWAY_CP_KEY"), CA: getenv("SPILLWAY_GATEWAY_CP_CA")}
 	s.cpServerName = getenv("SPILLWAY_GATEWAY_CP_SERVER_NAME")
+	s.replicaID = getenv("SPILLWAY_GATEWAY_REPLICA_ID")
 	if err := s.mode(); err != nil {
 		return s, err
 	}
@@ -256,6 +262,9 @@ func (s *settings) mode() error {
 		}
 		if s.snapshot != "" {
 			return errors.New("SPILLWAY_GATEWAY_SNAPSHOT: managed mode only; set SPILLWAY_GATEWAY_CONTROL_PLANE")
+		}
+		if s.replicaID != "" {
+			return errors.New("SPILLWAY_GATEWAY_REPLICA_ID: managed mode only; set SPILLWAY_GATEWAY_CONTROL_PLANE")
 		}
 		return nil
 	}

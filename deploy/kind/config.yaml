@@ -1,0 +1,15 @@
+# The config make kind-up publishes through the control plane's REST API
+# (chaos kindseed, ADR-0086), so the chart's managed gateways get their first
+# config and become ready: every path to the demo upstream (go-httpbin in
+# spillway-deps, in the Service range the allow-list admits, SEC-06), no
+# authentication and no rate-limit policy. Change it through the API or the
+# admin UI afterwards; a later kind-up imports this file again.
+upstreams:
+  - name: demo
+    endpoints:
+      - address: upstream.spillway-deps.svc.cluster.local:8080
+routes:
+  - name: demo
+    match: { path_prefix: / }
+    upstream: demo
+    auth_mode: none

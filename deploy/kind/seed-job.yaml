@@ -1,0 +1,60 @@
+# make kind-up's seed (ADR-0086): chaos kindseed imports and publishes
+# deploy/kind/config.yaml (the ConfigMap kind-config) through the control
+# plane's REST API with a spillway-ci service token from Keycloak over HTTPS,
+# trusting only the mkcert CA; the client secret is a file from dev-secrets,
+# never printed.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kind-seed
+  namespace: spillway
+  labels: { app.kubernetes.io/name: kind-seed }
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 180
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: kind-seed }
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532 # the secret file's group, so 65532 reads it (mode 0440)
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: seed
+          image: spillway-chaos:kind
+          imagePullPolicy: Never
+          args:
+            - kindseed
+            - -config=/etc/spillway-kind/config.yaml
+            - -ca=/etc/spillway-ca/ca.pem
+            - -wait=150s
+          env:
+            - { name: SPILLWAY_CI_CLIENT_SECRET_FILE, value: /etc/spillway-secrets/ci/value }
+          resources:
+            requests: { cpu: 50m, memory: 32Mi }
+            limits: { memory: 64Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: config, mountPath: /etc/spillway-kind, readOnly: true }
+            - { name: ca, mountPath: /etc/spillway-ca, readOnly: true }
+            - { name: ci, mountPath: /etc/spillway-secrets/ci, readOnly: true }
+      volumes:
+        - name: config
+          configMap: { name: kind-config }
+        - name: ca
+          configMap: { name: mkcert-ca }
+        - name: ci
+          secret:
+            secretName: dev-secrets
+            defaultMode: 0440
+            items:
+              - { key: SPILLWAY_CI_CLIENT_SECRET, path: value }

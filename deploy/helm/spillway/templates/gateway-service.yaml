@@ -1,0 +1,28 @@
+{{- /*
+The edge (GW-25, SEC-01, ADR-0075 §D11): HTTPS on 443 only, no port 80,
+no ingress controller; the admin port is in no Service.
+*/}}
+{{- $s := .Values.gateway.service }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: spillway-gateway
+  labels:
+    {{- include "spillway.labels" . | nindent 4 }}
+    app.kubernetes.io/name: spillway-gateway
+spec:
+  type: {{ $s.type }}
+  {{- if eq $s.type "NodePort" "LoadBalancer" }}
+  externalTrafficPolicy: {{ $s.externalTrafficPolicy }}
+  {{- end }}
+  selector:
+    app.kubernetes.io/name: spillway-gateway
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: https
+      protocol: TCP
+      port: {{ $s.port }}
+      targetPort: https
+      {{- if and (eq $s.type "NodePort") $s.nodePort }}
+      nodePort: {{ $s.nodePort }}
+      {{- end }}

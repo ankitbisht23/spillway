@@ -94,3 +94,4 @@ Decisions that shape Spillway and are not obvious from the code or from docs/des
 | [0083](0083-nfr-load-and-chaos-implementation-details.md) | NFR load tests and the chaos suite: implementation details | Accepted | 2026-11-25 |
 | [0084](0084-nfr-02-shared-load-side-cpus.md) | NFR-02: loadgen and the upstream share CPUs 1 and 3 | Accepted | 2026-11-25 |
 | [0085](0085-kind-cluster-implementation-details.md) | kind cluster: implementation details | Accepted | 2026-11-26 |
+| [0086](0086-helm-chart-implementation-details.md) | Helm chart: implementation details | Accepted | 2026-11-26 |

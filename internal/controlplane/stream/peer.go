@@ -97,11 +97,26 @@ const maxLoggedID = 64
 
 // replica is the call's replica name, from its client certificate. A
 // request's replica_id must be empty or equal to it; a differing one is
-// PERMISSION_DENIED and logged with both names (ADR-0038, ADR-0040).
+// PERMISSION_DENIED and logged with both names (ADR-0038, ADR-0040). A
+// fleet certificate (ADR-0075 §D11) is the exception: its calls must name
+// their replica in replica_id, as the fleet's name, '-' and more, a DNS
+// label, which is then the replica name.
 func (s *Service) replica(ctx context.Context, method, requested string) (string, error) {
 	name, _ := ctx.Value(replicaKey{}).(string)
 	if name == "" {
 		return "", status.Error(codes.Unauthenticated, "a client certificate of the stream CA is required")
+	}
+	if s.fleet[name] {
+		if requested == "" {
+			s.log.Warn("config stream: a fleet certificate's call without replica_id", "method", method, "fleet", name)
+			return "", status.Errorf(codes.PermissionDenied, "the client certificate %q stands for a fleet: replica_id is required", name)
+		}
+		if err := mtls.FleetReplica(name, requested); err != nil {
+			s.log.Warn("config stream: replica_id is not a replica of the fleet", "method", method,
+				"fleet", name, "replica_id", requested[:min(len(requested), maxLoggedID)])
+			return "", status.Errorf(codes.PermissionDenied, "replica_id %q is not a replica of the fleet %q", requested[:min(len(requested), maxLoggedID)], name)
+		}
+		return requested, nil
 	}
 	if requested != "" && requested != name {
 		s.log.Warn("config stream: replica_id differs from the client certificate's name", "method", method,

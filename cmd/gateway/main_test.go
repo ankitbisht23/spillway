@@ -192,6 +192,7 @@ func TestLoadSettings(t *testing.T) {
 		{map[string]string{"SPILLWAY_GATEWAY_CONFIG": "", "SPILLWAY_GATEWAY_CONTROL_PLANE": "cp:9090"}, "SPILLWAY_GATEWAY_CP_CERT, SPILLWAY_GATEWAY_CP_KEY and SPILLWAY_GATEWAY_CP_CA: required"},
 		{map[string]string{"SPILLWAY_GATEWAY_CONFIG": "", "SPILLWAY_GATEWAY_CONTROL_PLANE": "cp:9090", "SPILLWAY_GATEWAY_CP_CERT": "/c", "SPILLWAY_GATEWAY_CP_KEY": "/k"}, "SPILLWAY_GATEWAY_CP_CERT, SPILLWAY_GATEWAY_CP_KEY and SPILLWAY_GATEWAY_CP_CA: required"},
 		{map[string]string{"SPILLWAY_GATEWAY_SNAPSHOT": "/s.pb"}, "SPILLWAY_GATEWAY_SNAPSHOT: managed mode only"},
+		{map[string]string{"SPILLWAY_GATEWAY_REPLICA_ID": "spillway-gateway-a1"}, "SPILLWAY_GATEWAY_REPLICA_ID: managed mode only"},
 		{map[string]string{"SPILLWAY_GATEWAY_REDIS_USERNAME": "spillway"}, "SPILLWAY_GATEWAY_REDIS_USERNAME: set with SPILLWAY_GATEWAY_REDIS_PASSWORD"},
 		{map[string]string{"SPILLWAY_GATEWAY_REDIS_PASSWORD": "a", "SPILLWAY_GATEWAY_REDIS_PASSWORD_FILE": "/p"}, "set SPILLWAY_GATEWAY_REDIS_PASSWORD or SPILLWAY_GATEWAY_REDIS_PASSWORD_FILE, not both"},
 		{map[string]string{"SPILLWAY_GATEWAY_REDIS_PASSWORD_FILE": "/nonexistent/p"}, "SPILLWAY_GATEWAY_REDIS_PASSWORD_FILE: cannot read the file"},
@@ -479,6 +480,30 @@ func TestServeTokenRoutes(t *testing.T) {
 	snap.Routes = snap.Routes[:1]
 	if err := checkAuth(snap, false, false); err != nil {
 		t.Errorf("an api_key route, static, without JWT settings: %v", err)
+	}
+}
+
+// TestReplicaName: unset, SPILLWAY_GATEWAY_REPLICA_ID leaves the replica
+// name the certificate's (D7); set, it must be a replica of the fleet the
+// certificate names, or the gateway does not start (ADR-0075 §D11).
+func TestReplicaName(t *testing.T) {
+	if got, err := replicaName("gateway-1", ""); err != nil || got != "gateway-1" {
+		t.Errorf("unset: %q, %v", got, err)
+	}
+	if got, err := replicaName("spillway-gateway", "spillway-gateway-7d9f8c6b5-x2k4p"); err != nil || got != "spillway-gateway-7d9f8c6b5-x2k4p" {
+		t.Errorf("a pod name: %q, %v", got, err)
+	}
+	for _, id := range []string{"spillway-gateway", "spillway-gateway-", "gateway-1-a", "spillway-gateway-A", "spillway-gateway-" + strings.Repeat("a", 47)} {
+		if _, err := replicaName("spillway-gateway", id); err == nil || !strings.HasPrefix(err.Error(), "SPILLWAY_GATEWAY_REPLICA_ID: ") || !strings.Contains(err.Error(), `names the fleet "spillway-gateway"`) {
+			t.Errorf("%q: %v", id, err)
+		}
+	}
+	kv := map[string]string{"SPILLWAY_GATEWAY_CONTROL_PLANE": "cp:9090", "SPILLWAY_GATEWAY_HTTP_ADDR": ":8000", "SPILLWAY_GATEWAY_ALLOWED_NETWORKS": "10.244.0.0/16",
+		"SPILLWAY_GATEWAY_CP_CERT": "/c", "SPILLWAY_GATEWAY_CP_KEY": "/k", "SPILLWAY_GATEWAY_CP_CA": "/ca",
+		"SPILLWAY_GATEWAY_HEAVY_HITTER_SECRET": devHitterSecret, "SPILLWAY_GATEWAY_REPLICA_ID": "spillway-gateway-a1"}
+	s, err := loadSettings(func(k string) string { return kv[k] })
+	if err != nil || s.replicaID != "spillway-gateway-a1" {
+		t.Errorf("managed with a replica ID: %q, %v", s.replicaID, err)
 	}
 }
 

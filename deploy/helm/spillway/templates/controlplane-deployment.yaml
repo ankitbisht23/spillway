@@ -1,0 +1,130 @@
+{{- /*
+The control plane (ADR-0075 §D11): one replica (CP-22); a rollout starts the
+new pod as a standby that takes over when the old one releases the active
+lock (ADR-0038). REST and the admin UI on 8080 and gRPC on 9090 behind a
+ClusterIP Service, internal (SEC-02); admin on the pod IP (GW-25).
+*/}}
+{{- $c := .Values.controlplane }}
+{{- if ne (int $c.replicas) 1 }}
+{{- fail "controlplane.replicas must be 1: v1 runs one active control-plane replica (CP-22)" }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spillway-controlplane
+  labels:
+    {{- include "spillway.labels" . | nindent 4 }}
+    app.kubernetes.io/name: spillway-controlplane
+    app.kubernetes.io/component: controlplane
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: spillway-controlplane
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        {{- include "spillway.labels" . | nindent 8 }}
+        app.kubernetes.io/name: spillway-controlplane
+        app.kubernetes.io/component: controlplane
+    spec:
+      serviceAccountName: spillway-controlplane
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        {{- include "spillway.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: controlplane
+          image: {{ include "spillway.image" (dict "image" $c.image "root" .) }}
+          imagePullPolicy: {{ $c.image.pullPolicy }}
+          args: ["serve"]
+          ports:
+            - { name: http, containerPort: 8080, protocol: TCP }
+            - { name: grpc, containerPort: 9090, protocol: TCP }
+            - { name: admin, containerPort: 8081, protocol: TCP }
+          env:
+            - name: POD_IP
+              valueFrom: { fieldRef: { fieldPath: status.podIP } }
+            - { name: SPILLWAY_CP_HTTP_ADDR, value: ":8080" }
+            - { name: SPILLWAY_CP_GRPC_ADDR, value: ":9090" }
+            - { name: SPILLWAY_CP_ADMIN_ADDR, value: "$(POD_IP):8081" }
+            - { name: SPILLWAY_CP_GRPC_TLS_CERT, value: /etc/spillway-stream/cert.pem }
+            - { name: SPILLWAY_CP_GRPC_TLS_KEY, value: /etc/spillway-stream/key.pem }
+            - { name: SPILLWAY_CP_GRPC_CLIENT_CA, value: /etc/spillway-stream/ca.pem }
+            # The gateways' shared certificate stands for their fleet
+            # (ADR-0075 §D11).
+            - { name: SPILLWAY_CP_GRPC_FLEET_IDENTITIES, value: {{ .Values.gateway.stream.fleetName | quote }} }
+            - { name: SPILLWAY_CP_DATABASE_URL, value: {{ required "controlplane.database.url: the app role's postgres:// URL, without a password" $c.database.url | quote }} }
+            - { name: SPILLWAY_CP_DATABASE_PASSWORD_FILE, value: /etc/spillway-secrets/database/value }
+            - { name: SPILLWAY_CP_HEAVY_HITTER_SECRET_FILE, value: /etc/spillway-secrets/heavy-hitter/value }
+            - { name: SPILLWAY_CP_ALLOWED_NETWORKS, value: {{ required "controlplane.allowedNetworks: the gateways' upstream allow-list (SEC-06)" $c.allowedNetworks | quote }} }
+            - { name: SPILLWAY_CP_OIDC_ISSUER, value: {{ required "controlplane.oidc.issuer: the https issuer (SEC-04)" $c.oidc.issuer | quote }} }
+            - { name: SPILLWAY_CP_OIDC_JWKS_URL, value: {{ required "controlplane.oidc.jwksURL: the https JWKS URL (SEC-04)" $c.oidc.jwksURL | quote }} }
+            - { name: SPILLWAY_CP_OIDC_AUDIENCE, value: {{ $c.oidc.audience | quote }} }
+            {{- if .Values.oidc.caConfigMap }}
+            - { name: SPILLWAY_CP_OIDC_CA, value: /etc/spillway-ca/ca.pem }
+            {{- end }}
+            {{- with $c.prometheusURL }}
+            - { name: SPILLWAY_CP_PROMETHEUS_URL, value: {{ . | quote }} }
+            {{- end }}
+            {{- if $c.redis.addrs }}
+            # The quota flusher's Redis Cluster (RL-10, ADR-0070).
+            - { name: SPILLWAY_CP_REDIS_ADDRS, value: {{ $c.redis.addrs | quote }} }
+            {{- with $c.redis.username }}
+            - { name: SPILLWAY_CP_REDIS_USERNAME, value: {{ . | quote }} }
+            {{- end }}
+            {{- if $c.redis.secretName }}
+            - { name: SPILLWAY_CP_REDIS_PASSWORD_FILE, value: /etc/spillway-secrets/redis/value }
+            {{- end }}
+            {{- end }}
+          readinessProbe:
+            httpGet: { path: /readyz, port: admin }
+            periodSeconds: 2
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: { path: /healthz, port: admin }
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          resources:
+            {{- toYaml $c.resources | nindent 12 }}
+          securityContext:
+            {{- include "spillway.containerSecurityContext" . | nindent 12 }}
+          volumeMounts:
+            - { name: stream, mountPath: /etc/spillway-stream, readOnly: true }
+            - { name: database, mountPath: /etc/spillway-secrets/database, readOnly: true }
+            - { name: heavy-hitter, mountPath: /etc/spillway-secrets/heavy-hitter, readOnly: true }
+            {{- if and $c.redis.addrs $c.redis.secretName }}
+            - { name: redis, mountPath: /etc/spillway-secrets/redis, readOnly: true }
+            {{- end }}
+            {{- if .Values.oidc.caConfigMap }}
+            - { name: ca, mountPath: /etc/spillway-ca, readOnly: true }
+            {{- end }}
+      volumes:
+        - name: stream
+          secret:
+            secretName: {{ $c.stream.secretName }}
+            defaultMode: 0440
+            items:
+              - { key: cert.pem, path: cert.pem }
+              - { key: key.pem, path: key.pem }
+              - { key: ca.pem, path: ca.pem }
+        {{- include "spillway.secretFile" (dict "name" "database" "secretName" $c.database.secretName "key" $c.database.passwordKey) | nindent 8 }}
+        {{- include "spillway.secretFile" (dict "name" "heavy-hitter" "secretName" .Values.heavyHitter.secretName "key" .Values.heavyHitter.key) | nindent 8 }}
+        {{- if and $c.redis.addrs $c.redis.secretName }}
+        {{- include "spillway.secretFile" (dict "name" "redis" "secretName" $c.redis.secretName "key" $c.redis.passwordKey) | nindent 8 }}
+        {{- end }}
+        {{- if .Values.oidc.caConfigMap }}
+        - name: ca
+          configMap:
+            name: {{ .Values.oidc.caConfigMap }}
+            items:
+              - { key: ca.pem, path: ca.pem }
+        {{- end }}

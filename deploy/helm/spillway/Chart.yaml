@@ -1,0 +1,14 @@
+# The Helm chart `spillway` (ADR-0075 §D11, ADR-0086): the gateway and the
+# control plane only. Dependencies (Redis Cluster, Postgres, Keycloak,
+# observability) are plain manifests in deploy/kind/ on kind and are
+# expected to exist elsewhere.
+apiVersion: v2
+name: spillway
+description: Spillway API gateway and distributed rate limiter (gateway + control plane)
+type: application
+version: 0.1.0
+appVersion: "dev"
+kubeVersion: ">=1.30.0-0"
+home: https://github.com/ankitbisht23/spillway
+sources:
+  - https://github.com/ankitbisht23/spillway

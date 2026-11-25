@@ -1,0 +1,188 @@
+{{- /*
+The gateway (ADR-0075 §D11): TLS on 8443 only, no plain-HTTP listener
+(SPILLWAY_GATEWAY_HTTP_ADDR is never set, SEC-01); admin on the pod IP
+(GW-25); managed mode with the fleet certificate and the pod name as replica
+ID; the snapshot on an emptyDir (CP-07); surge 1, unavailable 0 and a
+preStop sleep, so a rolling restart fails no request (NFR-14).
+*/}}
+{{- $g := .Values.gateway }}
+{{- /* Pod names, the replica IDs, start with spillway-gateway-; the control
+plane accepts them only from a fleet whose name they start with. */}}
+{{- if not (hasPrefix (printf "%s-" $g.stream.fleetName) "spillway-gateway-") }}
+{{- fail "gateway.stream.fleetName: the pod names (spillway-gateway-…) must start with it and '-' (ADR-0075 §D11)" }}
+{{- end }}
+{{- $cpHost := printf "spillway-controlplane.%s.svc" .Release.Namespace }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spillway-gateway
+  labels:
+    {{- include "spillway.labels" . | nindent 4 }}
+    app.kubernetes.io/name: spillway-gateway
+    app.kubernetes.io/component: gateway
+spec:
+  replicas: {{ $g.replicas }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: spillway-gateway
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        {{- include "spillway.labels" . | nindent 8 }}
+        app.kubernetes.io/name: spillway-gateway
+        app.kubernetes.io/component: gateway
+    spec:
+      serviceAccountName: spillway-gateway
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: {{ $g.terminationGracePeriodSeconds }}
+      securityContext:
+        {{- include "spillway.podSecurityContext" . | nindent 8 }}
+      {{- if $g.snapshotSeed.secretName }}
+      initContainers:
+        # CP-07's seed (docs/runbooks/gateway-snapshot.md): copies the
+        # Secret's snapshot.pb into an empty snapshot volume; does nothing
+        # when the volume has one or the Secret is gone.
+        - name: snapshot-seed
+          image: {{ include "spillway.image" (dict "image" $g.image "root" .) }}
+          imagePullPolicy: {{ $g.image.pullPolicy }}
+          args: ["snapshot-seed", "--from", "/etc/spillway-seed/snapshot.pb", "--to", "/var/lib/spillway/snapshot.pb"]
+          resources:
+            {{- toYaml $g.resources | nindent 12 }}
+          securityContext:
+            {{- include "spillway.containerSecurityContext" . | nindent 12 }}
+          volumeMounts:
+            - { name: state, mountPath: /var/lib/spillway }
+            - { name: seed, mountPath: /etc/spillway-seed, readOnly: true }
+      {{- end }}
+      containers:
+        - name: gateway
+          image: {{ include "spillway.image" (dict "image" $g.image "root" .) }}
+          imagePullPolicy: {{ $g.image.pullPolicy }}
+          ports:
+            - { name: https, containerPort: 8443, protocol: TCP }
+            - { name: admin, containerPort: 8001, protocol: TCP }
+          env:
+            - name: POD_IP
+              valueFrom: { fieldRef: { fieldPath: status.podIP } }
+            - name: SPILLWAY_GATEWAY_REPLICA_ID
+              valueFrom: { fieldRef: { fieldPath: metadata.name } }
+            - { name: SPILLWAY_GATEWAY_TLS_ADDR, value: ":8443" }
+            - { name: SPILLWAY_GATEWAY_TLS_CERT, value: /etc/spillway-tls/tls.crt }
+            - { name: SPILLWAY_GATEWAY_TLS_KEY, value: /etc/spillway-tls/tls.key }
+            - { name: SPILLWAY_GATEWAY_ADMIN_ADDR, value: "$(POD_IP):8001" }
+            - { name: SPILLWAY_GATEWAY_CONTROL_PLANE, value: {{ printf "%s:9090" $cpHost | quote }} }
+            - { name: SPILLWAY_GATEWAY_CP_CERT, value: /etc/spillway-stream/cert.pem }
+            - { name: SPILLWAY_GATEWAY_CP_KEY, value: /etc/spillway-stream/key.pem }
+            - { name: SPILLWAY_GATEWAY_CP_CA, value: /etc/spillway-stream/ca.pem }
+            - { name: SPILLWAY_GATEWAY_HEAVY_HITTER_SECRET_FILE, value: /etc/spillway-secrets/heavy-hitter/value }
+            - { name: SPILLWAY_GATEWAY_SNAPSHOT, value: /var/lib/spillway/snapshot.pb }
+            - { name: SPILLWAY_GATEWAY_ALLOWED_NETWORKS, value: {{ required "gateway.allowedNetworks: the upstream allow-list (SEC-06)" $g.allowedNetworks | quote }} }
+            {{- with $g.trustedProxies }}
+            - { name: SPILLWAY_GATEWAY_TRUSTED_PROXIES, value: {{ . | quote }} }
+            {{- end }}
+            - { name: SPILLWAY_GATEWAY_MAX_CONNECTIONS, value: {{ $g.maxConnections | quote }} }
+            - { name: SPILLWAY_GATEWAY_MAX_CONNECTIONS_PER_IP, value: {{ $g.maxConnectionsPerIP | quote }} }
+            - { name: SPILLWAY_GATEWAY_MAX_IN_FLIGHT, value: {{ $g.maxInFlight | quote }} }
+            - { name: SPILLWAY_GATEWAY_DRAIN, value: {{ $g.drain | quote }} }
+            - { name: SPILLWAY_GATEWAY_SHUTDOWN_GRACE, value: {{ $g.shutdownGrace | quote }} }
+            - { name: SPILLWAY_GATEWAY_ACCESS_LOG_SAMPLE_RATE, value: {{ $g.accessLogSampleRate | quote }} }
+            - { name: SPILLWAY_GATEWAY_TRACE_SAMPLE_RATIO, value: {{ $g.traceSampleRatio | quote }} }
+            {{- with $g.otlpEndpoint }}
+            - { name: SPILLWAY_GATEWAY_OTLP_ENDPOINT, value: {{ . | quote }} }
+            {{- end }}
+            {{- if $g.redis.addrs }}
+            - { name: SPILLWAY_GATEWAY_REDIS_ADDRS, value: {{ $g.redis.addrs | quote }} }
+            {{- with $g.redis.username }}
+            - { name: SPILLWAY_GATEWAY_REDIS_USERNAME, value: {{ . | quote }} }
+            {{- end }}
+            {{- if $g.redis.secretName }}
+            - { name: SPILLWAY_GATEWAY_REDIS_PASSWORD_FILE, value: /etc/spillway-secrets/redis/value }
+            {{- end }}
+            {{- end }}
+            {{- if $g.jwt.issuer }}
+            - { name: SPILLWAY_GATEWAY_JWT_ISSUER, value: {{ $g.jwt.issuer | quote }} }
+            - { name: SPILLWAY_GATEWAY_JWT_JWKS_URL, value: {{ required "gateway.jwt.jwksURL: required with gateway.jwt.issuer" $g.jwt.jwksURL | quote }} }
+            - { name: SPILLWAY_GATEWAY_JWT_AUDIENCE, value: {{ $g.jwt.audience | quote }} }
+            {{- if .Values.oidc.caConfigMap }}
+            - { name: SPILLWAY_GATEWAY_JWT_CA, value: /etc/spillway-ca/ca.pem }
+            {{- end }}
+            {{- end }}
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: {{ $g.preStopSleepSeconds }}
+          # Probes on the admin port, from the kubelet on the node (the
+          # NetworkPolicy admits the node network). The 2 s timeout covers
+          # the host stalls of up to ~0.8 s seen on the dev laptop
+          # (ADR-0034); readiness fails at once when shutdown starts.
+          readinessProbe:
+            httpGet: { path: /readyz, port: admin }
+            periodSeconds: 2
+            timeoutSeconds: 2
+            failureThreshold: 1
+          livenessProbe:
+            httpGet: { path: /healthz, port: admin }
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          resources:
+            {{- toYaml $g.resources | nindent 12 }}
+          securityContext:
+            {{- include "spillway.containerSecurityContext" . | nindent 12 }}
+          volumeMounts:
+            - { name: state, mountPath: /var/lib/spillway }
+            - { name: tls, mountPath: /etc/spillway-tls, readOnly: true }
+            - { name: stream, mountPath: /etc/spillway-stream, readOnly: true }
+            - { name: heavy-hitter, mountPath: /etc/spillway-secrets/heavy-hitter, readOnly: true }
+            {{- if and $g.redis.addrs $g.redis.secretName }}
+            - { name: redis, mountPath: /etc/spillway-secrets/redis, readOnly: true }
+            {{- end }}
+            {{- if and $g.jwt.issuer .Values.oidc.caConfigMap }}
+            - { name: ca, mountPath: /etc/spillway-ca, readOnly: true }
+            {{- end }}
+      volumes:
+        - name: state
+          emptyDir:
+            sizeLimit: {{ $g.snapshot.sizeLimit }}
+        - name: tls
+          secret:
+            secretName: {{ $g.tls.secretName }}
+            defaultMode: 0440
+            items:
+              - { key: tls.crt, path: tls.crt }
+              - { key: tls.key, path: tls.key }
+        - name: stream
+          secret:
+            secretName: {{ $g.stream.secretName }}
+            defaultMode: 0440
+            items:
+              - { key: cert.pem, path: cert.pem }
+              - { key: key.pem, path: key.pem }
+              - { key: ca.pem, path: ca.pem }
+        {{- include "spillway.secretFile" (dict "name" "heavy-hitter" "secretName" .Values.heavyHitter.secretName "key" .Values.heavyHitter.key) | nindent 8 }}
+        {{- if and $g.redis.addrs $g.redis.secretName }}
+        {{- include "spillway.secretFile" (dict "name" "redis" "secretName" $g.redis.secretName "key" $g.redis.passwordKey) | nindent 8 }}
+        {{- end }}
+        {{- if and $g.jwt.issuer .Values.oidc.caConfigMap }}
+        - name: ca
+          configMap:
+            name: {{ .Values.oidc.caConfigMap }}
+            items:
+              - { key: ca.pem, path: ca.pem }
+        {{- end }}
+        {{- if $g.snapshotSeed.secretName }}
+        - name: seed
+          secret:
+            secretName: {{ $g.snapshotSeed.secretName }}
+            optional: true
+            defaultMode: 0440
+            items:
+              - { key: snapshot.pb, path: snapshot.pb }
+        {{- end }}

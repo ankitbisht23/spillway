@@ -26,6 +26,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -140,6 +141,28 @@ func NewClient(roots *x509.CertPool) *http.Client {
 		c.Transport = t
 	}
 	return c
+}
+
+// NewClientWithCA is NewClient trusting the system roots plus the PEM
+// certificates in caFile, or the system roots alone when caFile is empty
+// (SEC-04). Errors start with setting, the name of the setting that names
+// the file.
+func NewClientWithCA(caFile, setting string) (*http.Client, error) {
+	if caFile == "" {
+		return NewClient(nil), nil
+	}
+	pem, err := os.ReadFile(caFile) //nolint:gosec // G304: a path from the process's own settings
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", setting, err)
+	}
+	roots, err := x509.SystemCertPool()
+	if err != nil {
+		roots = x509.NewCertPool()
+	}
+	if !roots.AppendCertsFromPEM(pem) {
+		return nil, fmt.Errorf("%s: no PEM certificate in %s", setting, caFile)
+	}
+	return NewClient(roots), nil
 }
 
 // CheckURL accepts an absolute https:// URL, or an http:// one when

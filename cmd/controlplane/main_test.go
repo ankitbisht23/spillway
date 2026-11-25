@@ -71,6 +71,30 @@ func TestLoadSettings(t *testing.T) {
 	}
 }
 
+// TestFleetAndOIDCCA: SPILLWAY_CP_GRPC_FLEET_IDENTITIES lists the fleet
+// certificates' names, none by default (ADR-0075 §D11);
+// SPILLWAY_CP_OIDC_CA names the CA file the JWKS URL is trusted with, none
+// by default (SEC-04).
+func TestFleetAndOIDCCA(t *testing.T) {
+	kv := withOIDC(map[string]string{
+		"SPILLWAY_CP_DATABASE_URL":      "postgres://spillway_app@db:5432/spillway",
+		"SPILLWAY_CP_DATABASE_PASSWORD": secretValue,
+		"SPILLWAY_CP_ALLOWED_NETWORKS":  "10.244.0.0/16,10.96.0.0/16",
+	})
+	s, err := loadSettings(env(kv))
+	if err != nil || len(s.fleet) != 0 || s.oidcCA != "" {
+		t.Fatalf("defaults: fleet %v, OIDC CA %q, %v", s.fleet, s.oidcCA, err)
+	}
+	kv["SPILLWAY_CP_GRPC_FLEET_IDENTITIES"] = " spillway-gateway, edge ,"
+	kv["SPILLWAY_CP_OIDC_CA"] = "/etc/spillway-ca/ca.pem"
+	if s, err = loadSettings(env(kv)); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(s.fleet, ",") != "spillway-gateway,edge" || s.oidcCA != "/etc/spillway-ca/ca.pem" {
+		t.Errorf("fleet %v, OIDC CA %q", s.fleet, s.oidcCA)
+	}
+}
+
 // TestRedisSettings: the quota flusher's Redis is optional (unset, the
 // flusher is off); its seeds, AUTH and the dev address map (RL-10,
 // ADR-0070, SEC-09).
@@ -155,6 +179,7 @@ func TestSettingsErrors(t *testing.T) {
 		{"no JWKS URL", with("SPILLWAY_CP_OIDC_JWKS_URL", ""), "SPILLWAY_CP_OIDC_JWKS_URL: required"},
 		{"http:// without dev mode", with("SPILLWAY_CP_DEV_MODE", ""), "accepted only in dev mode (SEC-04)"},
 		{"dev mode not a bool", with("SPILLWAY_CP_DEV_MODE", "yes"), `SPILLWAY_CP_DEV_MODE: "yes" is not true or false`},
+		{"fleet name not a DNS label", with("SPILLWAY_CP_GRPC_FLEET_IDENTITIES", "spillway-gateway,Fleet.1"), `SPILLWAY_CP_GRPC_FLEET_IDENTITIES: "Fleet.1" is not a DNS label`},
 		{"bad Redis address", with("SPILLWAY_CP_REDIS_ADDRS", "redis-0"), `SPILLWAY_CP_REDIS_ADDRS: "redis-0" is not host:port`},
 		{"Redis username without a password", with("SPILLWAY_CP_REDIS_USERNAME", "flusher"), "SPILLWAY_CP_REDIS_USERNAME: set with SPILLWAY_CP_REDIS_PASSWORD"},
 		{"Redis password and file", func() map[string]string {

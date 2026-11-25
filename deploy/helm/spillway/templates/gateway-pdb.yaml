@@ -1,0 +1,17 @@
+{{- /*
+CP-07's Helm part: voluntary evictions never take every gateway, and so
+every snapshot, at once.
+*/}}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: spillway-gateway
+  labels:
+    {{- include "spillway.labels" . | nindent 4 }}
+    app.kubernetes.io/name: spillway-gateway
+spec:
+  maxUnavailable: {{ .Values.gateway.podDisruptionBudget.maxUnavailable }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: spillway-gateway
+      app.kubernetes.io/instance: {{ .Release.Name }}
