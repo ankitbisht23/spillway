@@ -57,12 +57,23 @@ The arm64 scaling efficiency itself is also low: gateway CPU per answer rises fr
 
 ### 3. The measured dispatch
 
-One `bench.yml -f mode=scaling` dispatch on the branch after these changes, both arches, budget 60 minutes per arch (ADR-0074), judged by the rule above and never re-run. Its numbers are in the PR description and in the follow-up section below.
+One `bench.yml -f mode=scaling` dispatch on the branch after these changes, both arches, budget 60 minutes per arch (ADR-0074), judged by the rule above and never re-run.
+
+**[Run 45661905238](https://github.com/ankitbisht23/spillway/actions/runs/45661905238) (commit d488f06), 40.5 min per job: INVALID on both arches (neither PASS nor FAIL).** Stored on `bench-results` as `results/x64/20261125T171042Z.json` and `results/arm64/20261125T171047Z.json` (ungated).
+
+| Arch, CPU model | n | probes: 2xx/s; vCPU gateway / loadgen / upstream (load side) | P | R | measured run set | gateway-bound |
+| --- | --- | --- | --- | --- | --- | --- |
+| x64, AMD EPYC 9V74 | 1 | 8,898 / 8,808 / 8,836; 0.999–1.000 / 0.63 / 0.53 (1.16) | 8,836 | 7,900 | valid, 5 × 7,900 rps, p99 median 7.5 ms | yes |
+| x64, AMD EPYC 9V74 | 2 | 17,515 / 17,928 / 17,696; **1.758 / 1.780 / 1.778** / 0.93–0.95 / 0.73 (1.66–1.68) | 17,696 | 15,900 | valid, 5 × 15,900 rps, p99 median 82.8 ms | **no**: gateway < 1.90 |
+| arm64, Neoverse N2 (0xd49) | 1 | 13,700 / 13,135 / 13,183; 1.000 / 0.82–0.83 / 0.61 (1.43–1.45) | 13,183 | 11,800 | valid, 5 × 11,800 rps, p99 median 8.8 ms | yes |
+| arm64, Neoverse N2 (0xd49) | 2 | 20,481 / 19,904 / 19,996; **1.846 / 1.842 / 1.834** / 1.09–1.10 / 0.69 (1.77–1.79) | 19,996 | 17,900 | valid, 5 × 17,900 rps, p99 median 15.3 ms | **no**: gateway < 1.90 |
+
+S would be 2.013 on x64 and **1.517 on arm64** (< 1.70), but neither result is valid. The n = 1 probes are now gateway-bound on both arches (the in-flight fix; arm64 P(1) rose from 11,697 to 13,183); the load side stayed within 1.80 everywhere (arm64 n = 2 at 1.77–1.79); every n = 2 probe failed only on the gateway's own 1.90. NFR-02 stays open: as the user's instructions require, the run is not repeated and the decision goes to the user (PR description).
 
 ## Consequences
 
 - The x64 n = 2 loadgen saturation of run 45626436921 cannot recur as such: the load side has two CPUs, and the runners' load side stayed at ≤ 1.76 vCPU on x64. On arm64 the load side sits at 1.78–1.79 vCPU at n = 2, close to the 1.80 limit.
-- The exploratory numbers predict that with the default `GOMAXPROCS` the n = 2 gateway reaches 1.84–1.89 vCPU, under 1.90; if the measured dispatch confirms it, NFR-02 stays open and the user decides (see the PR).
+- With the default `GOMAXPROCS` the n = 2 gateway reaches 1.76–1.85 vCPU on the runners, under 1.90 (measured run 45661905238), so NFR-02 stays open and the user decides (see the PR). Even when gateway-bound, arm64 scales by about 1.5–1.7, not 1.70 reliably.
 - `test/load/scaling.jq` is the one place the probe rule is written; verify-m7's NFR-02 line (task verify) uses it, or the result's `valid` and `pass`, which it decides.
 
 ## Alternatives considered
