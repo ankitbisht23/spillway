@@ -74,7 +74,8 @@ check $([ "$reloads" -ge "$min_reloads" ]; echo $?) "config reloads applied unde
 if [ "$mode" = all ]; then
 	echo "== NFR-01 baseline on bench-results"
 
-	# The newest valid result per arch from a bench.yml run on main (ADR-0003).
+	# The newest valid result per arch from a bench.yml run on main that the
+	# gate passed, or one from before the gate (ADR-0003, ADR-0073 §D8).
 	files=""
 	if git fetch -q origin bench-results 2>/dev/null; then
 		files=$(git ls-tree -r --name-only origin/bench-results results/)
@@ -84,7 +85,7 @@ if [ "$mode" = all ]; then
 		if [ "$arch" = arm64 ]; then floor=8800; fi
 		found=""
 		for f in $(grep "^results/$arch/" <<<"$files" | sort -r); do
-			if git show "origin/bench-results:$f" | jq -e '.valid and .ref == "refs/heads/main"' >/dev/null; then
+			if git show "origin/bench-results:$f" | jq -e '.valid and .ref == "refs/heads/main" and (.gate == null or .gate.verdict == "pass" or .gate.verdict == "first")' >/dev/null; then
 				found=$f
 				break
 			fi
