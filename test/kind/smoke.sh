@@ -70,7 +70,10 @@ check $? "edge 127.0.0.1:443 -> 30443 only, no :80" "$(tr '\n' ',' <<<"$cp_ports
 kubectl -n spillway delete job kind-smoke --ignore-not-found --wait=true >/dev/null 2>&1
 if kubectl apply -f test/kind/smoke-job.yaml >/dev/null 2>&1; then
 	state=
-	for _ in $(seq 1 100); do
+	# A deadline, not an iteration count, so slow kubectl calls cannot
+	# stretch the wait past 100 s (the Job's own deadline is 90 s).
+	deadline=$((SECONDS + 100))
+	while [ "$SECONDS" -lt "$deadline" ]; do
 		state=$(kubectl -n spillway get job kind-smoke -o jsonpath='{.status.conditions[?(@.status=="True")].type}' 2>/dev/null)
 		case "$state" in *Complete* | *Failed*) break ;; esac
 		sleep 1

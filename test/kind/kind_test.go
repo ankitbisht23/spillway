@@ -232,7 +232,8 @@ func TestManifestShape(t *testing.T) {
 			if kind == "Secret" {
 				t.Errorf("%s: Secret %s in a manifest", f, name)
 			}
-			if kind != "Namespace" && !slices.Contains(namespaces, get(d, "metadata", "namespace").(string)) {
+			ns, _ := get(d, "metadata", "namespace").(string)
+			if kind != "Namespace" && !slices.Contains(namespaces, ns) {
 				t.Errorf("%s: %s %s outside the three namespaces", f, kind, name)
 			}
 			s := podSpec(d)
