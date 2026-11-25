@@ -7,7 +7,10 @@
 // tag's commit. A run is flagged when its median throughput drops, or its
 // median p99 rises, by more than 10% and more than the baseline's run-to-run
 // spread, against either baseline; the job then re-runs the set once and
-// passes -rerun-of, and a re-run flagged again fails both.
+// passes -rerun-of, and a re-run flagged again fails both. A run set with
+// nothing comparable (verdict first) is also shown, for information only,
+// against the newest eligible baseline on another CPU model (P34, ADR-0083):
+// that never flags, fails or makes a baseline.
 //
 // It prints the gate's verdict as JSON on stdout and a Markdown summary on
 // stderr (also appended to -summary), writes the result with its gate field

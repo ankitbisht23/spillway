@@ -514,3 +514,101 @@ func TestBadInput(t *testing.T) {
 		t.Errorf("-h: code %d", code)
 	}
 }
+
+// P34 (ADR-0081, ADR-0083): a run set with verdict first is also compared,
+// for information only, with the newest eligible baseline of the same arch,
+// target rate and setup on another CPU model.
+func TestCrossModelInfo(t *testing.T) {
+	const genoa = "AMD EPYC 9V45 96-Core Processor"
+	t.Run("shown, never flagged, never failing", func(t *testing.T) {
+		dir := t.TempDir()
+		store(t, dir, fixture(t, "result.json", at(t1, mainRef, "pass"))) // Xeon, older
+		epycBase := store(t, dir, fixture(t, "result.json", edits(at(t2, mainRef, "pass"), with("hardware.cpu_model", epyc))))
+		// Not eligible, or stored after the candidate: never the info baseline.
+		store(t, dir, fixture(t, "result.json", edits(at("2026-11-21T09:00:00Z", mainRef, verdictFlagged), with("hardware.cpu_model", xeon))))
+		store(t, dir, fixture(t, "result.json", edits(at("2026-11-21T10:00:00Z", "refs/heads/m7-x", verdictPass), with("hardware.cpu_model", xeon))))
+		store(t, dir, fixture(t, "result.json", edits(at(t4, mainRef, verdictPass), with("hardware.cpu_model", xeon))))
+		// 50% less throughput and 3.6× the p99 of the EPYC baseline: far over
+		// any threshold, yet only information.
+		cand := fixture(t, "result.json", edits(at(t3, mainRef, ""), with("hardware.cpu_model", genoa),
+			with("achieved_rps.median", 2300.0), with("latency_us.p99.median", 9000.0)))
+		c := candidate(t, cand)
+		code, g, md := gateRun(t, "-results", dir, "-candidate", c, "-out", c)
+		if code != 0 || g.Verdict != verdictFirst || g.Baseline != nil || len(g.Comparisons) != 0 || len(flagged(g)) != 0 {
+			t.Fatalf("code %d, gate %+v, want 0 first with no comparisons\n%s", code, g, md)
+		}
+		x := g.CrossModel
+		if x == nil || x.Baseline != epycBase || x.CPUModel != epyc || x.Info != crossModelInfo {
+			t.Fatalf("cross_model = %+v, want the EPYC baseline %s", x, epycBase)
+		}
+		want := []infoComparison{
+			{Metric: "achieved_rps_median", Base: 4600, Value: 2300, Change: -0.5},
+			{Metric: "p99_us_median", Base: 2500, Value: 9000, Change: 2.6},
+		}
+		if len(x.Comparisons) != 2 || x.Comparisons[0] != want[0] || x.Comparisons[1] != want[1] {
+			t.Errorf("comparisons = %+v, want %+v", x.Comparisons, want)
+		}
+		for _, s := range []string{
+			"Compared on CPU model: none. **first**",
+			"Information only (P34): against the newest eligible baseline on another CPU model, `" + epycBase + "`",
+			"on **" + epyc + "**. Never flagged, never fails the job, never makes or blocks a baseline.",
+			"| " + epyc + " | achieved_rps_median | 4600 rps | 2300 rps | -50.0% |",
+			"| " + epyc + " | p99_us_median | 2.500 ms | 9.000 ms | +260.0% |",
+			"Verdict **first**: the job passes.",
+			"This run set becomes the nightly baseline for **" + genoa + "**",
+		} {
+			if !strings.Contains(md, s) {
+				t.Errorf("summary lacks %q:\n%s", s, md)
+			}
+		}
+		if got := readGate(t, c).CrossModel; got == nil || got.Baseline != epycBase {
+			t.Errorf("stored cross_model = %+v", got)
+		}
+		// It made no difference to baselines: stored, the run set is its
+		// model's first baseline, and the EPYC chain still uses its own.
+		data, _ := os.ReadFile(filepath.Clean(c))
+		genoaBase := store(t, dir, data)
+		_, g, _ = gateRun(t, "-results", dir, "-candidate", candidate(t, fixture(t, "result.json", edits(at("2026-11-22T12:00:00Z", mainRef, ""), with("hardware.cpu_model", genoa)))))
+		if g.Verdict != verdictPass || g.Baseline == nil || *g.Baseline != genoaBase || g.CrossModel != nil {
+			t.Errorf("next run on the new model: gate %+v, want pass against %s and no cross_model", g, genoaBase)
+		}
+		_, g, _ = gateRun(t, "-results", dir, "-candidate", candidate(t, fixture(t, "result.json", edits(at("2026-11-22T13:00:00Z", mainRef, ""), with("hardware.cpu_model", epyc)))))
+		if g.Baseline == nil || *g.Baseline != epycBase {
+			t.Errorf("next EPYC run: baseline %v, want %s", g.Baseline, epycBase)
+		}
+	})
+	for _, tt := range []struct {
+		name string
+		base func(m map[string]any) // the only stored result, Xeon unless edited
+		cand func(m map[string]any)
+	}{
+		{"same model: a normal comparison", nil, nil},
+		{"another target rate", nil, edits(with("hardware.cpu_model", epyc), with("target_rps", 5000.0))},
+		{"another setup", nil, edits(with("hardware.cpu_model", epyc), with("setup.duration", "1m"))},
+		{"no CPU model recorded on the candidate", nil, with("hardware.cpu_model", "")},
+		{"no CPU model recorded on the baseline", with("hardware.cpu_model", ""), with("hardware.cpu_model", epyc)},
+		{"the other model's result is not eligible", with("valid", false), with("hardware.cpu_model", epyc)},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			store(t, dir, fixture(t, "result.json", edits(at(t1, mainRef, "pass"), func(m map[string]any) {
+				if tt.base != nil {
+					tt.base(m)
+				}
+			})))
+			c := candidate(t, fixture(t, "result.json", edits(at(t2, mainRef, ""), func(m map[string]any) {
+				if tt.cand != nil {
+					tt.cand(m)
+				}
+			})))
+			code, g, md := gateRun(t, "-results", dir, "-candidate", c, "-out", c)
+			if code != 0 || g.CrossModel != nil || strings.Contains(md, "Information only") {
+				t.Errorf("code %d, cross_model %+v, want 0 and none\n%s", code, g.CrossModel, md)
+			}
+			raw, _ := os.ReadFile(filepath.Clean(c))
+			if strings.Contains(string(raw), "cross_model") {
+				t.Errorf("stored result has a cross_model field: %s", raw)
+			}
+		})
+	}
+}
