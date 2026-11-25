@@ -143,6 +143,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// The gateway's trace ID, sampled or not (ADR-0030).
 		r, span = startServerSpan(h.tracer, r)
 		q.TraceID = span.SpanContext().TraceID().String()
+		q.Sampled = span.SpanContext().IsSampled() // its exemplars (OB-06)
 	}
 	h.serve(rw, r, body, &q)
 }

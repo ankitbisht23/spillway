@@ -63,3 +63,44 @@ func TestAdminServer(t *testing.T) {
 		t.Errorf("/ = %d, want 404", code)
 	}
 }
+
+// TestAdminServerExemplars: /metrics serves a sampled request's exemplar in
+// the OpenMetrics format, which Prometheus asks for, and the classic text
+// format, which has no exemplars, to anything else (OB-06).
+func TestAdminServerExemplars(t *testing.T) {
+	reg := NewRegistry()
+	rec := NewRecorder(reg, slog.New(slog.DiscardHandler), 0)
+	const trace = "4bf92f3577b34da6a3ce929d0e0e4736"
+	rec.Request(t.Context(), &Request{ID: "x", TraceID: trace, Sampled: true, Route: "r", Method: "GET", Status: 200, Origin: OriginUpstream, Reason: ReasonNone, Tenant: NoTenant})
+	srv := httptest.NewServer(NewAdminServer(reg, func() bool { return true }, slog.New(slog.DiscardHandler)).Handler)
+	t.Cleanup(srv.Close)
+
+	for _, tt := range []struct {
+		accept   string
+		exemplar bool
+	}{
+		{"application/openmetrics-text;version=1.0.0,text/plain;version=0.0.4;q=0.5", true},
+		{"", false},
+	} {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/metrics", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tt.accept != "" {
+			req.Header.Set("Accept", tt.accept)
+		}
+		resp, err := srv.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		has := strings.Contains(string(body), `# {trace_id="`+trace+`"}`)
+		if has != tt.exemplar || !strings.Contains(string(body), "gw_request_duration_seconds_bucket") {
+			t.Errorf("Accept %q (%s): exemplar served %v, want %v", tt.accept, resp.Header.Get("Content-Type"), has, tt.exemplar)
+		}
+	}
+}
