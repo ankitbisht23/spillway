@@ -1,0 +1,44 @@
+# gateway-1's config during the NFR-11 availability soak (make nfr-soak,
+# ADR-0074 §D9): one route over three upstream endpoints with timeouts of
+# 2 s per try and 5 s in all, resolving each request's tenant and consumer
+# from its static API key (the identity is made at run time,
+# test/load/lib.sh); a local per-IP policy far above the run's rate; a
+# tenant-level Redis GCRA policy, degraded, 600/s, burst 600 per tenant;
+# and a consumer-level Redis sliding window, fail_open, 1,000 per second.
+# Tenants A, B and C send 400 rps each, under their limit; D sends 800, so
+# about a quarter of D's requests get 429s.
+version: 72
+upstreams:
+  - name: soak
+    endpoints:
+      - address: upstream-1:8080
+      - address: upstream-2:8080
+      - address: upstream-3:8080
+routes:
+  - name: soak
+    match: { path_prefix: /bytes }
+    upstream: soak
+    auth_mode: api_key
+    timeouts: { per_try: 2s, total: 5s }
+policies:
+  - name: soak-per-ip
+    level: global
+    match: { routes: [soak] }
+    key_template: '{ip}'
+    algorithm: gcra
+    limits: [{ rate: 20000, period: 1s }]
+    local: true
+  - name: soak-tenant
+    level: tenant
+    match: { routes: [soak] }
+    key_template: '{tenant}'
+    algorithm: gcra
+    limits: [{ rate: 600, period: 1s, burst: 600 }]
+    failure_mode: degraded
+  - name: soak-consumer
+    level: consumer
+    match: { routes: [soak] }
+    key_template: '{consumer}'
+    algorithm: sliding_window
+    limits: [{ rate: 1000, period: 1s }]
+    failure_mode: fail_open

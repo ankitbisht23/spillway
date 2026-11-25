@@ -11,7 +11,7 @@ FUZZTIME ?= 5s
 # Committed dev defaults first, then local overrides if present (ADR-0004).
 COMPOSE := docker compose --env-file .env.example $(if $(wildcard .env.local),--env-file .env.local)
 
-.PHONY: tools hooks certs dev test test-go test-web test-e2e fuzz test-integration proto api sqlc web-gen web-build lint lint-go lint-web lint-proto lint-api lint-sql bench bench-gate verify-m0 verify-m0-stack verify-m1 verify-m1-reload verify-m2 verify-m2-shadow verify-m3 verify-m4 verify-m5 verify-m6 accuracy chaos-redis-outage chaos-redis-primary chaos-cp-outage nfr-keys
+.PHONY: tools hooks certs dev test test-go test-web test-e2e fuzz test-integration proto api sqlc web-gen web-build lint lint-go lint-web lint-proto lint-api lint-sql bench bench-gate verify-m0 verify-m0-stack verify-m1 verify-m1-reload verify-m2 verify-m2-shadow verify-m3 verify-m4 verify-m5 verify-m6 accuracy chaos-redis-outage chaos-redis-primary chaos-cp-outage nfr-keys nfr-soak nfr-noisy
 
 # Host-run processes and tests reach Redis Cluster nodes through this map
 # (ADR-0004). Set only here, never in compose or .env files.
@@ -239,7 +239,7 @@ bench-gate:
 # trace head ratio (OB-02, D6, ADR-0030): their dev prerequisite recreates
 # the gateways with it. make dev alone, and make verify-m4, recreate them at
 # compose's default of 1.
-verify-m1 verify-m2 verify-m3 accuracy chaos-redis-outage chaos-redis-primary: export SPILLWAY_GATEWAY_TRACE_SAMPLE_RATIO = 0.01
+verify-m1 verify-m2 verify-m3 accuracy chaos-redis-outage chaos-redis-primary nfr-soak nfr-noisy: export SPILLWAY_GATEWAY_TRACE_SAMPLE_RATIO = 0.01
 
 # M0 exit checks (docs/design.md): the dev stack, then CI and the main ruleset
 # on GitHub. CI runs only the stack part, since it can't check its own result.
@@ -340,3 +340,17 @@ chaos-cp-outage: dev
 # removed after.
 nfr-keys: dev
 	@test/load/keys.sh
+
+# NFR-11 (ADR-0074 §D9): a 2,000-rps soak of gateway-1 by four tenants with
+# keys made at run time, 30 s + 10 min; gateway-caused 5xx (reason not
+# shed, circuit_open or fail_closed) <= 0.1% of requests, from gateway-1's
+# /metrics deltas. About 12 minutes; config and identity go back after.
+nfr-soak: dev
+	@test/load/soak.sh
+
+# NFR-15 (ADR-0074 §D9): quiet tenants at 100 rps each while a noisy one
+# sends 2,000 rps (10x its limit) every other 10 s, 30 s + 10 min; each
+# quiet tenant's median p99(on) / p99(off) over the 30 slot pairs < 1.10.
+# About 12 minutes; config and identity go back after.
+nfr-noisy: dev
+	@test/load/noisy.sh

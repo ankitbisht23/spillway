@@ -1,0 +1,23 @@
+# gateway-1's config during the NFR-15 noisy-neighbour run (make nfr-noisy,
+# ADR-0074 §D9): one route that resolves each request's tenant from its
+# static API key (the identity is made at run time, test/load/lib.sh), and
+# one tenant-level Redis GCRA policy of 200/s, burst 200, per tenant. The
+# noisy tenant sends 2,000 rps, 10x its limit, every other 10 s.
+version: 71
+upstreams:
+  - name: upstream-1
+    endpoints:
+      - address: upstream-1:8080
+routes:
+  - name: noisy
+    match: { path_prefix: /bytes }
+    upstream: upstream-1
+    auth_mode: api_key
+policies:
+  - name: noisy-tenant
+    level: tenant
+    match: { routes: [noisy] }
+    key_template: '{tenant}'
+    algorithm: gcra
+    limits: [{ rate: 200, period: 1s, burst: 200 }]
+    failure_mode: fail_open
