@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
 # NFR-02 scaling run (docs/design.md, Benchmark method; ADR-0074 §D9,
-# ADR-0083). The gateway runs on 1 vCPU (CPU 0), then on 2 (CPUs 0 and 2,
-# never one SMT core), with loadgen on CPU 1, a no-op upstream (loadgen
-# serve, 1,024 bytes) on CPU 3 and no Redis, in a Docker network of its own.
+# ADR-0083, ADR-0084). The gateway runs on 1 vCPU (CPU 0), then on 2 (CPUs 0
+# and 2, never one SMT core), with loadgen and a no-op upstream (loadgen
+# serve, 1,024 bytes) sharing CPUs 1 and 3 and no Redis, in a Docker network
+# of its own.
 # For n = 1, then 2:
 #   1. probe: 3 runs of 10 s warm-up + 30 s at 3 × r × n rps (r = BENCH_RATE,
-#      the arch's NFR-01 floor), -conns 200; P(n) is the median of their 2xx
+#      the arch's NFR-01 floor), -conns 200, -max-in-flight 400 (the excess is
+#      dropped, not queued, ADR-0084); P(n) is the median of their 2xx
 #      answers per second. During each probe's measured 30 s the script
 #      reads every container's cgroup CPU usage (Docker's stats API, which
 #      reports cpu.stat usage_usec): a probe is gateway-bound when the
-#      gateway used >= 0.95 × n vCPU and loadgen and the upstream <= 0.90
-#      vCPU each.
+#      gateway used >= 0.95 × n vCPU and loadgen and the upstream together
+#      <= 1.80 vCPU.
 #   2. measured: 5 runs of 30 s + 3 min at R(n) = 0.9 × P(n), rounded down
 #      to 100 (ADR-0016), each valid as in bench.sh (99% of target, every
 #      answer 2xx).
@@ -34,10 +36,11 @@ warmup=${BENCH_WARMUP:-30s}
 duration=${BENCH_DURATION:-3m}
 conns=200
 probe_factor=3
-loadgen_cpus=1 upstream_cpus=3
+probe_max_in_flight=$((2 * conns)) # ADR-0084: a probe's excess is dropped, not queued in loadgen
+loadgen_cpus=1,3 upstream_cpus=1,3 # shared (ADR-0084)
 gateway_cpus_1=0 gateway_cpus_2=0,2
 sample_rate=0.01 # as bench.sh (ADR-0015); no OTLP exporter, so no Collector shares a CPU
-min_gateway=0.95 max_other=0.90 min_scaling=1.70
+min_gateway=0.95 max_side=1.80 min_scaling=1.70
 net=spillway-scaling
 
 log() { echo "scaling: $*" >&2; }
@@ -81,12 +84,15 @@ cpu_snapshot() {
 }
 
 # loadgen_run <rate> <warmup> <duration> [probe]: one loadgen run on its
-# CPU; prints its JSON result, with the containers' vCPUs over the measured
-# time when probe is set.
+# CPUs; prints its JSON result, with the containers' vCPUs over the measured
+# time when probe is set. A probe holds at most probe_max_in_flight requests
+# in flight; a measured run keeps loadgen's default (10,000), so that a
+# short stall cannot drop its requests.
 loadgen_run() {
-	local rate=$1 w=$2 d=$3 probe=${4:-} a b out
+	local rate=$1 w=$2 d=$3 probe=${4:-} a b out extra=()
+	if [ -n "$probe" ]; then extra=(-max-in-flight "$probe_max_in_flight"); fi
 	docker run -d --name "$net-loadgen" --network "$net" --cpuset-cpus "$loadgen_cpus" --ulimit nofile=65536 --read-only \
-		spillway-loadgen:bench -url http://gateway:8000/bytes/1024 -rate "$rate" -warmup "$w" -duration "$d" -conns "$conns" >/dev/null
+		spillway-loadgen:bench -url http://gateway:8000/bytes/1024 -rate "$rate" -warmup "$w" -duration "$d" -conns "$conns" ${extra[@]+"${extra[@]}"} >/dev/null
 	if [ -n "$probe" ]; then
 		# From 1 s into the measured time to 1 s before its end.
 		sleep $(($(seconds "$w") + 1))
@@ -130,7 +136,7 @@ step() {
 	for i in $(seq "$probe_runs"); do
 		log "n=$n probe $i/$probe_runs: $target rps offered, $probe_warmup + $probe_duration"
 		out=$(loadgen_run "$target" "$probe_warmup" "$probe_duration" probe)
-		log "n=$n probe $i: $(jq -r '"\((.status["2xx"] // 0) / .duration_s | round) 2xx/s; vCPU gateway \(.vcpu.gateway * 100 | round / 100), loadgen \(.vcpu.loadgen * 100 | round / 100), upstream \(.vcpu.upstream * 100 | round / 100)"' <<<"$out")"
+		log "n=$n probe $i: $(jq -r '"\((.status["2xx"] // 0) / .duration_s | round) 2xx/s; vCPU gateway \(.vcpu.gateway * 100 | round / 100), loadgen \(.vcpu.loadgen * 100 | round / 100), upstream \(.vcpu.upstream * 100 | round / 100), together \((.vcpu.loadgen + .vcpu.upstream) * 100 | round / 100)"' <<<"$out")"
 		probes+=("$out")
 	done
 	p=$(printf '%s\n' "${probes[@]}" | jq -s '[.[] | (.status["2xx"] // 0) / .duration_s] | sort | .[(length - 1) / 2 | floor]')
@@ -149,8 +155,9 @@ step() {
 	{
 		printf '%s\n' "${probes[@]}" | jq -cs .
 		if [ "${#set[@]}" -gt 0 ]; then printf '%s\n' "${set[@]}" | jq -cs .; else echo '[]'; fi
-	} | jq -s --argjson n "$n" --arg cpus "$cpus" --argjson p "$p" --argjson r "$rr" \
-		--argjson min_gw "$min_gateway" --argjson max_other "$max_other" '
+	} | jq -s -L test/load --argjson n "$n" --arg cpus "$cpus" --argjson p "$p" --argjson r "$rr" \
+		--argjson min_gw "$min_gateway" --argjson max_side "$max_side" '
+		include "scaling";
 		def stats(f): [.[] | f] | sort as $v | ($v | length) as $k
 			| if $k == 0 then null else
 				(if $k % 2 == 1 then $v[($k - 1) / 2] else ($v[$k / 2 - 1] + $v[$k / 2]) / 2 end) as $m
@@ -161,11 +168,11 @@ step() {
 			([.status | to_entries[] | select(.key != "2xx") | .value] | add // 0 | if . > 0 then "n=\($n) run \(i): \(.) answers not 2xx" else empty end);
 		.[0] as $probes | .[1] as $set
 		| [$probes[] | . + {rps_2xx: ((.status["2xx"] // 0) / .duration_s),
-			gateway_bound: (.vcpu.gateway >= $min_gw * $n and .vcpu.loadgen <= $max_other and .vcpu.upstream <= $max_other)}] as $probes
+			gateway_bound: gateway_bound($n; $min_gw; $max_side)}] as $probes
 		| ([$set | to_entries[] | .key as $k | .value | problems($k + 1)]
 			+ (if ($set | length) == 0 then ["n=\($n): no measured run set (R = 0)"] else [] end)) as $set_reasons
 		| ([$probes | to_entries[] | select(.value.gateway_bound | not)
-			| "n=\($n) probe \(.key + 1): not gateway-bound (vCPU gateway \(.value.vcpu.gateway * 100 | round / 100) < \($min_gw * $n) or loadgen \(.value.vcpu.loadgen * 100 | round / 100) / upstream \(.value.vcpu.upstream * 100 | round / 100) > \($max_other))"]) as $probe_reasons
+			| .key as $k | .value | not_bound_reason($n; $k + 1; $min_gw; $max_side)]) as $probe_reasons
 		| {
 			gateway_vcpus: $n, gateway_cpus: $cpus,
 			p: $p, r: $r,
@@ -220,10 +227,10 @@ hardware_model=$(jq -r '.runs[0].hardware.cpu_model // .probes[0].hardware.cpu_m
 result=$(jq -n --argjson one "$one" --argjson two "$two" \
 	--arg timestamp "$timestamp" --arg commit "$commit" --arg ref "$ref" --arg run_url "$run_url" --arg arch "$arch" \
 	--argjson host "$host" --argjson topology "$topology" --arg cpu_model "$hardware_model" \
-	--argjson r "$r" --argjson conns "$conns" --argjson factor "$probe_factor" --argjson probe_runs "$probe_runs" \
+	--argjson r "$r" --argjson conns "$conns" --argjson factor "$probe_factor" --argjson probe_runs "$probe_runs" --argjson probe_mif "$probe_max_in_flight" \
 	--arg probe_warmup "$probe_warmup" --arg probe_duration "$probe_duration" --arg warmup "$warmup" --arg duration "$duration" \
 	--arg loadgen_cpus "$loadgen_cpus" --arg upstream_cpus "$upstream_cpus" --argjson sample_rate "$sample_rate" \
-	--argjson min_scaling "$min_scaling" --argjson min_gw "$min_gateway" --argjson max_other "$max_other" '
+	--argjson min_scaling "$min_scaling" --argjson min_gw "$min_gateway" --argjson max_side "$max_side" '
 	($one.invalid_reasons + $two.invalid_reasons) as $reasons
 	| (if $one.r > 0 then $two.r / $one.r else null end) as $s
 	| ($reasons | length == 0) as $valid
@@ -231,13 +238,13 @@ result=$(jq -n --argjson one "$one" --argjson two "$two" \
 		timestamp: $timestamp, commit: $commit, ref: $ref, run_url: $run_url, arch: $arch,
 		valid: $valid, invalid_reasons: $reasons,
 		scaling: $s, pass: ($valid and $s != null and $s >= $min_scaling),
-		rule: {min_scaling: $min_scaling, gateway_bound: {gateway_min_vcpu_per_n: $min_gw, loadgen_max_vcpu: $max_other, upstream_max_vcpu: $max_other}},
+		rule: {min_scaling: $min_scaling, gateway_bound: {gateway_min_vcpu_per_n: $min_gw, loadgen_plus_upstream_max_vcpu: $max_side}},
 		setup: {
 			mode: "scaling",
 			cpus: {gateway_1: $one.gateway_cpus, gateway_2: $two.gateway_cpus, loadgen: $loadgen_cpus, upstream: $upstream_cpus},
 			upstream: "loadgen serve -bytes 1024", url: "http://gateway:8000/bytes/1024",
 			rate_per_vcpu: $r, conns: $conns,
-			probe: {runs: $probe_runs, offered: "\($factor) x rate_per_vcpu x n", warmup: $probe_warmup, duration: $probe_duration},
+			probe: {runs: $probe_runs, offered: "\($factor) x rate_per_vcpu x n", max_in_flight: $probe_mif, warmup: $probe_warmup, duration: $probe_duration},
 			warmup: $warmup, duration: $duration,
 			access_log_sample_rate: $sample_rate, otlp: "none"
 		},

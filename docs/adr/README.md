@@ -92,3 +92,4 @@ Decisions that shape Spillway and are not obvious from the code or from docs/des
 | [0081](0081-bench-gate-implementation-details.md) | Bench gate: implementation details and CPU-model rotation | Accepted | 2026-11-25 |
 | [0082](0082-nfr-01-floor-on-any-cpu-model.md) | NFR-01's floor on any CPU model | Accepted | 2026-11-25 |
 | [0083](0083-nfr-load-and-chaos-implementation-details.md) | NFR load tests and the chaos suite: implementation details | Accepted | 2026-11-25 |
+| [0084](0084-nfr-02-shared-load-side-cpus.md) | NFR-02: loadgen and the upstream share CPUs 1 and 3 | Accepted | 2026-11-25 |
