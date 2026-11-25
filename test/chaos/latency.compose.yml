@@ -1,0 +1,13 @@
+# Test-only compose override for make chaos-redis-latency (ADR-0074 §D9):
+# gateway-4 reaches every Redis node through its toxiproxy proxy
+# (toxiproxy:26370 … 26375, created by test/chaos/redis-latency.sh through
+# toxiproxy's API; inside the compose network only, docs/ports.md) with the
+# dev and test address map (ADR-0004), and runs test/chaos/latency.yaml.
+#   docker compose -f compose.yaml -f test/chaos/latency.compose.yml --profile replicas up -d gateway-4
+services:
+  gateway-4:
+    environment:
+      SPILLWAY_GATEWAY_CONFIG: /etc/spillway-chaos/latency.yaml
+      SPILLWAY_REDIS_ADDR_MAP: redis-0:6379=toxiproxy:26370,redis-1:6379=toxiproxy:26371,redis-2:6379=toxiproxy:26372,redis-3:6379=toxiproxy:26373,redis-4:6379=toxiproxy:26374,redis-5:6379=toxiproxy:26375
+    volumes:
+      - ./test/chaos:/etc/spillway-chaos:ro

@@ -1,0 +1,14 @@
+# gateway-1 … gateway-3's config during make chaos-gateway-kill (ADR-0074
+# §D9): one route over the three mock upstreams and no rate-limit policy, so
+# every request the sender makes is a 2xx unless its gateway is gone.
+version: 74
+upstreams:
+  - name: upstreams
+    endpoints:
+      - address: upstream-1:8080
+      - address: upstream-2:8080
+      - address: upstream-3:8080
+routes:
+  - name: gwkill
+    match: { path_prefix: /bytes }
+    upstream: upstreams

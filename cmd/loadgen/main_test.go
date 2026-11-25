@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -23,8 +24,8 @@ func TestParseFlags(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := options{url: "http://gateway-1:8000/bytes/1024", rate: 10000, warmup: 30 * time.Second, duration: 3 * time.Minute,
-		maxInFlight: 10000, conns: 100, timeout: 10 * time.Second}
-	if o != want {
+		maxInFlight: 10000, conns: 100, timeout: 10 * time.Second, slot: 10 * time.Second}
+	if !reflect.DeepEqual(o, want) {
 		t.Errorf("options = %+v, want %+v", o, want)
 	}
 

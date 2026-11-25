@@ -41,6 +41,20 @@ func summary(c *result, g gate, hist []*result, releaseCommit string) string {
 		if other := otherModels(hist, c); other != "" {
 			p("- Baselines exist for this arch, target rate and setup on other CPU models only: %s. Results on different CPU models are never compared (NFR-05).", other)
 		}
+		if x := g.CrossModel; x != nil {
+			p("- Information only (P34): against the newest eligible baseline on another CPU model, %s on %s. Never flagged, never fails the job, never makes or blocks a baseline.", ref(&x.Baseline, hist), model(x.CPUModel))
+			p("")
+			p("| Information only | Metric | Other model's baseline | This run | Change |")
+			p("| --- | --- | --- | --- | --- |")
+			for _, m := range x.Comparisons {
+				base, value := num(m.Base)+" rps", num(m.Value)+" rps"
+				if m.Metric == "p99_us_median" {
+					base, value = ms(m.Base)+" ms", ms(m.Value)+" ms"
+				}
+				p("| %s | %s | %s | %s | %+.1f%% |", x.CPUModel, m.Metric, base, value, m.Change*100)
+			}
+			p("")
+		}
 	default:
 		p("- Compared on CPU model: %s (same arch, target rate and setup)", model(c.Hardware.CPUModel))
 	}

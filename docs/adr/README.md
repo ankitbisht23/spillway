@@ -90,3 +90,5 @@ Decisions that shape Spillway and are not obvious from the code or from docs/des
 | [0079](0079-keep-redis-connections-after-a-timed-out-limiter-call.md) | Keep Redis connections after a timed-out limiter call (rejected: boundary 503s a known limit) | Rejected | 2026-11-25 |
 | [0080](0080-nfr-01-re-baseline-and-the-pprof-pass.md) | NFR-01 re-baseline (P19) and the pprof pass | Accepted | 2026-11-25 |
 | [0081](0081-bench-gate-implementation-details.md) | Bench gate: implementation details and CPU-model rotation | Accepted | 2026-11-25 |
+| [0082](0082-nfr-01-floor-on-any-cpu-model.md) | NFR-01's floor on any CPU model | Accepted | 2026-11-25 |
+| [0083](0083-nfr-load-and-chaos-implementation-details.md) | NFR load tests and the chaos suite: implementation details | Accepted | 2026-11-25 |

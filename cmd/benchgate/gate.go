@@ -66,7 +66,33 @@ type gate struct {
 	ReleaseTag      *string      `json:"release_tag"`
 	Comparisons     []comparison `json:"comparisons"`
 	RerunOf         *string      `json:"rerun_of"` // the flagged run set this one confirms or clears
+	// CrossModel is set only with verdict first, when another CPU model has
+	// an eligible baseline (P34): information only.
+	CrossModel *crossModel `json:"cross_model,omitempty"`
 }
+
+// crossModel is P34's information-only comparison (ADR-0081, ADR-0083): a
+// run set with verdict first against the newest eligible baseline of the
+// same arch, target rate and setup on another CPU model. It never flags,
+// never fails the job and never makes or blocks a baseline.
+type crossModel struct {
+	Info        string           `json:"info"`
+	Baseline    string           `json:"baseline"`  // its stored file
+	CPUModel    string           `json:"cpu_model"` // its CPU model
+	Comparisons []infoComparison `json:"comparisons"`
+}
+
+// infoComparison is one metric of a crossModel. Change is (value − base) ÷
+// base, as in comparison.
+type infoComparison struct {
+	Metric string  `json:"metric"` // "achieved_rps_median" or "p99_us_median"
+	Base   float64 `json:"base"`
+	Value  float64 `json:"value"`
+	Change float64 `json:"change"`
+}
+
+// crossModelInfo is crossModel's Info.
+const crossModelInfo = "information only (P34): another CPU model, never flagged, never fails, never makes or blocks a baseline"
 
 // comparison is one metric of the candidate against one baseline. Change is
 // (value − base) ÷ base, so a throughput drop is negative.
@@ -141,6 +167,17 @@ func comparable(b, c *result) bool {
 		reflect.DeepEqual(b.setup, c.setup)
 }
 
+// comparableButModel reports whether b and c would be comparable if b had
+// c's CPU model: b has another recorded model, and c has one.
+func comparableButModel(b, c *result) bool {
+	if b.Hardware.CPUModel == "" || c.Hardware.CPUModel == "" || b.Hardware.CPUModel == c.Hardware.CPUModel {
+		return false
+	}
+	bb := *b
+	bb.Hardware.CPUModel = c.Hardware.CPUModel
+	return comparable(&bb, c)
+}
+
 // eligible reports whether r can be a baseline: a valid result from main
 // whose gate passed it, or an M1-era result stored before the gate existed.
 func eligible(r *result) bool {
@@ -167,6 +204,29 @@ func baselines(hist []*result, c *result, releaseCommit string) (nightly, releas
 		}
 	}
 	return nightly, release
+}
+
+// crossModelCompare is P34's comparison of c against the newest eligible
+// result stored before it with the same arch, target rate and setup on
+// another CPU model; nil when there is none.
+func crossModelCompare(hist []*result, c *result) *crossModel {
+	for _, b := range hist {
+		if b.name >= c.name || !eligible(b) || !comparableButModel(b, c) {
+			continue
+		}
+		x := &crossModel{Info: crossModelInfo, Baseline: b.name, CPUModel: b.Hardware.CPUModel}
+		for _, m := range []struct {
+			metric      string
+			base, value float64
+		}{
+			{"achieved_rps_median", b.AchievedRPS.Median, c.AchievedRPS.Median},
+			{"p99_us_median", b.Latency.P99.Median, c.Latency.P99.Median},
+		} {
+			x.Comparisons = append(x.Comparisons, infoComparison{Metric: m.metric, Base: m.base, Value: m.value, Change: (m.value - m.base) / m.base})
+		}
+		return x
+	}
+	return nil
 }
 
 // compare compares c with baseline b. A metric is flagged when its change
@@ -208,6 +268,7 @@ func judge(hist []*result, c *result, releaseTag, releaseCommit, rerunOf string)
 	nightly, release := baselines(hist, c, releaseCommit)
 	if nightly == nil {
 		g.Verdict = verdictFirst
+		g.CrossModel = crossModelCompare(hist, c)
 		return g
 	}
 	g.Baseline = &nightly.name
