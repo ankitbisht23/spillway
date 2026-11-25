@@ -32,7 +32,8 @@
 // "chaos keys" (keys.go) is NFR-10's key-count sweep, and "chaos latency"
 // (latency.go) and "chaos gwkill" (gwkill.go) are the senders of the Redis
 // latency and gateway kill chaos tests (ADR-0074 §D9). "chaos kindsmoke"
-// (kindsmoke.go) is the in-cluster half of make kind-smoke (ADR-0075 §D10).
+// (kindsmoke.go) is the in-cluster half of make kind-smoke (ADR-0075 §D10);
+// "chaos kindseed" (kindseed.go) publishes kind's config (ADR-0086).
 package main
 
 import (
@@ -97,6 +98,8 @@ func main() {
 		code = runGwkill(ctx, args[1:], os.Stdout, os.Stderr)
 	case len(args) > 0 && args[0] == "kindsmoke":
 		code = runKindsmoke(ctx, args[1:], os.Stdout, os.Stderr)
+	case len(args) > 0 && args[0] == "kindseed":
+		code = runKindseed(ctx, args[1:], os.Getenv, os.Stdout, os.Stderr)
 	default:
 		code = run(ctx, args, os.Stdin, os.Stdout, os.Stderr)
 	}

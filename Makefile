@@ -11,7 +11,7 @@ FUZZTIME ?= 5s
 # Committed dev defaults first, then local overrides if present (ADR-0004).
 COMPOSE := docker compose --env-file .env.example $(if $(wildcard .env.local),--env-file .env.local)
 
-.PHONY: tools hooks certs dev kind-up kind-down kind-smoke kind-images kind-grafana kind-prometheus test test-go test-web test-e2e fuzz test-integration proto api sqlc web-gen web-build lint lint-go lint-web lint-proto lint-api lint-sql bench bench-gate verify-m0 verify-m0-stack verify-m1 verify-m1-reload verify-m2 verify-m2-shadow verify-m3 verify-m4 verify-m5 verify-m6 accuracy chaos-redis-outage chaos-redis-primary chaos-cp-outage nfr-keys nfr-soak nfr-noisy chaos-redis-latency chaos-gateway-kill chaos
+.PHONY: tools hooks certs dev kind-up kind-down kind-smoke kind-rollout kind-images kind-grafana kind-prometheus test test-go test-web test-e2e fuzz test-integration proto api sqlc web-gen web-build lint lint-go lint-web lint-proto lint-api lint-sql lint-helm bench bench-gate verify-m0 verify-m0-stack verify-m1 verify-m1-reload verify-m2 verify-m2-shadow verify-m3 verify-m4 verify-m5 verify-m6 accuracy chaos-redis-outage chaos-redis-primary chaos-cp-outage nfr-keys nfr-soak nfr-noisy chaos-redis-latency chaos-gateway-kill chaos
 
 # Host-run processes and tests reach Redis Cluster nodes through this map
 # (ADR-0004). Set only here, never in compose or .env files.
@@ -185,8 +185,9 @@ KUBECTL := $(BIN)/kubectl --context kind-spillway
 
 # Creates the cluster if absent, its Secrets and ConfigMaps (from the dev
 # files, by reference), the dependencies and observability, the local
-# images, and waits until all are ready; refuses while the compose stack
-# runs (memory). The Helm chart comes with the helm task.
+# images, and waits until all are ready; then the Helm chart, the published
+# kind config (deploy/kind/config.yaml) and the gateways (ADR-0086). Refuses
+# while the compose stack runs (memory).
 kind-up: certs $(KIND_TOOLS)
 	@BIN=$(BIN) deploy/kind/up.sh
 
@@ -197,8 +198,13 @@ kind-down: tool-kind
 	rm -f $(KUBECONFIG)
 
 # The cluster's checks, PASS/FAIL, at most 3 minutes (test/kind/smoke.sh).
-kind-smoke: tool-kubectl
+kind-smoke: tool-kubectl tool-mkcert
 	@BIN=$(BIN) test/kind/smoke.sh
+
+# NFR-14 on kind: zero failed requests through a rolling restart of the
+# gateways under 300 rps (test/kind/rollout.sh, ADR-0086); about 5 minutes.
+kind-rollout: tool-kubectl
+	@BIN=$(BIN) test/kind/rollout.sh
 
 # Rebuilds the local images and loads them into the running cluster.
 kind-images: tool-kind
@@ -273,7 +279,16 @@ web-build:
 sqlc: tool-sqlc
 	cd internal/controlplane/store && $(BIN)/sqlc generate
 
-lint: lint-go lint-web lint-proto lint-api lint-sql
+lint: lint-go lint-web lint-proto lint-api lint-sql lint-helm
+
+# The Helm chart (ADR-0075 §D11, ADR-0086): helm lint --strict and helm
+# template with the chart's values.yaml under deploy/kind/values.yaml, then
+# the chart's Go tests on the rendered manifests (test/kind/helm_test.go)
+# with the pinned helm, so they cannot skip. No cluster needed.
+lint-helm: tool-helm
+	$(BIN)/helm --kube-context kind-spillway lint --strict deploy/helm/spillway -f deploy/kind/values.yaml --set 'networkPolicy.kubeletCIDRs={172.18.0.0/16}'
+	$(BIN)/helm --kube-context kind-spillway template spillway deploy/helm/spillway -n spillway -f deploy/kind/values.yaml --set 'networkPolicy.kubeletCIDRs={172.18.0.0/16}' >/dev/null
+	SPILLWAY_HELM=$(BIN)/helm go test -count=1 -run '^TestChart' ./test/kind/
 
 # Then the webui build tag's files (ADR-0057) against the real build, or an
 # empty stand-in when there is none, removed after.

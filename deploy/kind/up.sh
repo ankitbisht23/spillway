@@ -5,7 +5,9 @@
 #
 #   up.sh          the cluster (created if absent), Secrets and ConfigMaps,
 #                  dependencies and observability, images; waits until every
-#                  dependency is ready
+#                  dependency is ready; then the chart (ADR-0086): helm
+#                  upgrade --install, the control plane, the seed Job that
+#                  publishes deploy/kind/config.yaml, and the gateways
 #   up.sh images   only builds the local images and loads them into kind
 #
 # kubectl below is a function that always passes --context kind-spillway,
@@ -21,6 +23,7 @@ case "$KUBECONFIG" in */.kube/spillway-kind) ;; *) echo "KUBECONFIG must be ~/.k
 
 CLUSTER=spillway
 kubectl() { "$BIN/kubectl" --context kind-spillway "$@"; }
+helm() { "$BIN/helm" --kube-context kind-spillway "$@"; }
 kind() { "$BIN/kind" "$@"; }
 
 start=$(date +%s)
@@ -100,6 +103,7 @@ apply_configmap spillway-obs grafana-datasources --from-file=datasources.yaml=de
 apply_configmap spillway-obs loki-config --from-file=loki.yaml=deploy/compose/loki/loki.yaml
 apply_configmap spillway-obs tempo-config --from-file=tempo.yaml=deploy/compose/tempo/tempo.yaml
 apply_configmap spillway-obs otel-collector-config --from-file=config.yaml=deploy/compose/otel-collector/config.yaml
+apply_configmap spillway kind-config --from-file=config.yaml=deploy/kind/config.yaml
 
 step "dependencies and observability"
 kubectl apply -f deploy/kind/deps/ -f deploy/kind/obs/ >/dev/null
@@ -117,4 +121,40 @@ for d in prometheus grafana loki tempo otel-collector redis-exporter; do
 done
 kubectl -n spillway-deps rollout status deployment/keycloak --timeout=8m >/dev/null
 
-step "done: dependencies ready (the chart comes with the helm task); make kind-smoke checks them"
+# The chart (ADR-0075 §D11, ADR-0086). The kubelet's probes come from the
+# node network, kind's Docker network, which the NetworkPolicies admit to
+# the admin ports (GW-25); its IPv4 subnet is read here.
+kubelet_cidr=$(docker network inspect kind -f '{{range .IPAM.Config}}{{.Subnet}} {{end}}' | tr ' ' '\n' | grep -m1 -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+$' || true)
+[ -n "$kubelet_cidr" ] || { echo "no IPv4 subnet on the kind Docker network" >&2; exit 1; }
+# helm waits for the migrate hook Job (hookOnly) but not for the gateways:
+# a managed gateway is not ready before its first config, which the seed
+# Job publishes once the control plane is up.
+step "helm upgrade --install spillway (kubelet network $kubelet_cidr)"
+helm upgrade --install spillway deploy/helm/spillway -n spillway -f deploy/kind/values.yaml \
+	--set-json "networkPolicy.kubeletCIDRs=[\"$kubelet_cidr\"]" --timeout 10m >/dev/null
+kubectl -n spillway rollout status deployment/spillway-controlplane --timeout=5m >/dev/null
+step "publishing deploy/kind/config.yaml (Job kind-seed)"
+kubectl -n spillway delete job kind-seed --ignore-not-found --wait=true >/dev/null
+kubectl apply -f deploy/kind/seed-job.yaml >/dev/null
+# Complete or Failed, whichever comes first (the Job's own deadline is
+# 180 s).
+state=
+deadline=$((SECONDS + 200))
+while [ "$SECONDS" -lt "$deadline" ]; do
+	state=$(kubectl -n spillway get job kind-seed -o jsonpath='{.status.conditions[?(@.status=="True")].type}' 2>/dev/null)
+	case "$state" in *Complete* | *Failed*) break ;; esac
+	sleep 1
+done
+case "$state" in
+*Complete*) ;;
+*)
+	kubectl -n spillway logs job/kind-seed >&2 || true
+	echo "the seed Job did not complete (${state:-no state in 200 s})" >&2
+	exit 1
+	;;
+esac
+kubectl -n spillway logs job/kind-seed | grep -E '^(PASS|FAIL)' || true
+kubectl -n spillway delete job kind-seed --ignore-not-found --wait=false >/dev/null
+kubectl -n spillway rollout status deployment/spillway-gateway --timeout=5m >/dev/null
+
+step "done: make kind-smoke checks the cluster"

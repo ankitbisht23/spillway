@@ -1,7 +1,9 @@
 # The in-cluster half of make kind-smoke (ADR-0075 §D10): chaos kindsmoke in
 # the spillway namespace, trusting only the mkcert CA (the ConfigMap
-# mkcert-ca). test/kind/smoke.sh applies it, waits for it and prints its
-# PASS/FAIL lines.
+# mkcert-ca). test/kind/smoke.sh fills in CLOSED_ADDRS (the admin ports on
+# the pod IPs) and GATEWAY_REPLICAS, applies it, waits for it and prints its
+# PASS/FAIL lines. The NetworkPolicies treat it as any pod of the namespace:
+# the gateway's traffic port is open to it, the admin ports are not.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -10,13 +12,14 @@ metadata:
   labels: { app.kubernetes.io/name: kind-smoke }
 spec:
   backoffLimit: 0
-  activeDeadlineSeconds: 90
+  activeDeadlineSeconds: 100
   template:
     metadata:
       labels: { app.kubernetes.io/name: kind-smoke }
     spec:
       restartPolicy: Never
       automountServiceAccountToken: false
+      enableServiceLinks: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
@@ -30,6 +33,11 @@ spec:
             - kindsmoke
             - -keycloak-issuer=https://keycloak.spillway-deps.svc.cluster.local:8443/auth/realms/spillway
             - -ca=/etc/spillway-ca/ca.pem
+            - -gateway=https://spillway-gateway.spillway.svc/bytes/16
+            - -closed=CLOSED_ADDRS
+            - -prometheus=http://prometheus.spillway-obs.svc:9090
+            - -targets=gateway=GATEWAY_REPLICAS,controlplane=1
+            - -targets-wait=45s
           resources:
             requests: { cpu: 50m, memory: 32Mi }
             limits: { memory: 64Mi }

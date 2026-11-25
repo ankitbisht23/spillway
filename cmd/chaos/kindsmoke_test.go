@@ -10,11 +10,14 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -127,6 +130,89 @@ func TestKindsmokeFlags(t *testing.T) {
 		var out, errOut bytes.Buffer
 		if code := runKindsmoke(t.Context(), args, &out, &errOut); code != 2 {
 			t.Errorf("%q: exit %d, want 2", args, code)
+		}
+	}
+}
+
+// TestKindsmokeChart: the chart's checks (ADR-0086): the gateway URL must
+// answer 200, every -closed address must not accept a connection, and
+// Prometheus's active targets of each job must all be up and as many as
+// -targets says, within -targets-wait.
+func TestKindsmokeChart(t *testing.T) {
+	srv, ca := fakeKeycloak(t, "", "", 1)
+	// httptest servers share one certificate, so ca trusts this one too.
+	gw := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/bytes/16" {
+			http.Error(w, "no route", http.StatusNotFound)
+			return
+		}
+		_, _ = w.Write(make([]byte, 16))
+	}))
+	t.Cleanup(gw.Close)
+	var up atomic.Int32 // gateway targets up; the last one comes up late
+	up.Store(2)
+	promSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/targets" || r.URL.Query().Get("state") != "active" {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		var ts []map[string]any
+		for i := range 3 {
+			h := "down"
+			if int32(i) < up.Load() {
+				h = "up"
+			}
+			ts = append(ts, map[string]any{"labels": map[string]string{"job": "gateway"}, "health": h})
+		}
+		ts = append(ts, map[string]any{"labels": map[string]string{"job": "controlplane"}, "health": "up"},
+			map[string]any{"labels": map[string]string{"job": "redis"}, "health": "down"})
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "success", "data": map[string]any{"activeTargets": ts}})
+	}))
+	t.Cleanup(promSrv.Close)
+	// An address that accepts connections, and one that does not.
+	lc := &net.ListenConfig{}
+	open, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = open.Close() })
+	l, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	refused := l.Addr().String()
+	_ = l.Close()
+
+	base := []string{"-keycloak-issuer", srv.URL + "/auth/realms/spillway", "-ca", ca}
+	run := func(extra ...string) (int, string) {
+		var out, errOut bytes.Buffer
+		code := runKindsmoke(t.Context(), append(slices.Clone(base), extra...), &out, &errOut)
+		return code, out.String() + errOut.String()
+	}
+
+	go func() { time.Sleep(1500 * time.Millisecond); up.Store(3) }()
+	code, out := run("-gateway", gw.URL+"/bytes/16", "-closed", refused, "-prometheus", promSrv.URL, "-targets", "gateway=3,controlplane=1", "-targets-wait", "20s")
+	if code != 0 || !strings.Contains(out, "PASS  gateway Service over https -> 200") || !strings.Contains(out, "16 bytes") ||
+		!strings.Contains(out, "PASS  admin "+refused) || !strings.Contains(out, "controlplane 1 of 1 up (want 1), gateway 3 of 3 up (want 3)") {
+		t.Fatalf("pass: exit %d:\n%s", code, out)
+	}
+
+	code, out = run("-gateway", gw.URL+"/missing", "-closed", open.Addr().String()+","+refused, "-prometheus", promSrv.URL, "-targets", "gateway=4", "-targets-wait", "1s")
+	if code != 1 || !strings.Contains(out, "FAIL  gateway Service over https -> 200") || !strings.Contains(out, "404") ||
+		!strings.Contains(out, "FAIL  admin "+open.Addr().String()) || !strings.Contains(out, "connected to") ||
+		!strings.Contains(out, "PASS  admin "+refused) || !strings.Contains(out, "FAIL  prometheus targets up") || !strings.Contains(out, "gateway 3 of 3 up (want 4)") {
+		t.Errorf("fail: exit %d:\n%s", code, out)
+	}
+
+	for _, extra := range [][]string{
+		{"-gateway", "http://spillway-gateway/bytes/16"},
+		{"-prometheus", promSrv.URL},
+		{"-targets", "gateway=3"},
+		{"-prometheus", promSrv.URL, "-targets", "gateway"},
+		{"-prometheus", promSrv.URL, "-targets", "gateway=0"},
+	} {
+		if code, out := run(extra...); code != 2 {
+			t.Errorf("%q: exit %d, want 2:\n%s", extra, code, out)
 		}
 	}
 }

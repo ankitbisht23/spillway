@@ -60,7 +60,7 @@ func docs(t *testing.T, name string) []map[string]any {
 // manifests are every Kubernetes manifest kind-up and kind-smoke apply.
 func manifests(t *testing.T) map[string][]map[string]any {
 	t.Helper()
-	files := []string{"deploy/kind/namespaces.yaml", "test/kind/smoke-job.yaml"}
+	files := []string{"deploy/kind/namespaces.yaml", "deploy/kind/seed-job.yaml", "test/kind/smoke-job.yaml", "test/kind/rollout-job.yaml"}
 	for _, dir := range []string{"deploy/kind/deps", "deploy/kind/obs"} {
 		m, err := fs.Glob(repo, path.Join(dir, "*.yaml"))
 		if err != nil {
@@ -299,7 +299,7 @@ func TestContextDiscipline(t *testing.T) {
 		{regexp.MustCompile(`(\$BIN|\$\(BIN\))/helm"?\s`), "--kube-context kind-spillway"},
 		{regexp.MustCompile(`\bkind (create|delete|load|export|get kubeconfig)\b`), "--name"},
 	}
-	files := []string{"Makefile", "deploy/kind/up.sh", "test/kind/smoke.sh"}
+	files := []string{"Makefile", "deploy/kind/up.sh", "test/kind/smoke.sh", "test/kind/rollout.sh"}
 	seen := 0
 	for _, f := range files {
 		fh, err := repo.Open(f)
@@ -309,7 +309,10 @@ func TestContextDiscipline(t *testing.T) {
 		sc := bufio.NewScanner(fh)
 		for n := 1; sc.Scan(); n++ {
 			line := sc.Text()
-			if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			// Comments, and SPILLWAY_HELM=… (lint-helm hands the binary's
+			// path to the chart tests, which only run helm template), invoke
+			// nothing.
+			if strings.HasPrefix(strings.TrimSpace(line), "#") || strings.HasPrefix(strings.TrimSpace(line), "SPILLWAY_HELM=") {
 				continue
 			}
 			for _, r := range rules {
@@ -327,7 +330,7 @@ func TestContextDiscipline(t *testing.T) {
 		t.Errorf("only %d kubectl/helm/kind lines found; the patterns are stale", seen)
 	}
 	// The scripts call kubectl through a function that carries the context.
-	for _, f := range []string{"deploy/kind/up.sh", "test/kind/smoke.sh"} {
+	for _, f := range []string{"deploy/kind/up.sh", "test/kind/smoke.sh", "test/kind/rollout.sh"} {
 		b, err := fs.ReadFile(repo, f)
 		if err != nil {
 			t.Fatal(err)
