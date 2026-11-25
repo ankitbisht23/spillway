@@ -304,7 +304,7 @@ func (l *limits) checkRedis() bool {
 		called = true
 		var res rlredis.Result
 		var sent time.Time
-		err := error(&rlredis.Error{Kind: rlredis.KindTimeout, Err: errBudgetSpent})
+		var err error
 		if time.Now().Before(deadline) {
 			span := l.startRedisSpan(ctx, c.slot, false)
 			if l.deny != nil || l.lease != nil {
@@ -312,6 +312,8 @@ func (l *limits) checkRedis() bool {
 			}
 			res, err = l.redis.Call(ctx, l.cost, c.limits)
 			endRedisSpan(span, res.Allowed, err)
+		} else {
+			err = &rlredis.Error{Kind: rlredis.KindTimeout, Err: errBudgetSpent}
 		}
 		l.reserved(c, res, err, sent)
 		if err != nil {
