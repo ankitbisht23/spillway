@@ -1,0 +1,697 @@
+{
+  "arch": "x64",
+  "commit": "a3a0c87111a3d2a9afc8cdd28458566ca12b597b",
+  "gate": {
+    "verdict": "ungated",
+    "baseline": null,
+    "release_baseline": null,
+    "release_tag": null,
+    "comparisons": [],
+    "rerun_of": null
+  },
+  "hardware": {
+    "cpu_model": "AMD EPYC 9V74 80-Core Processor",
+    "cpus": 4,
+    "memory_bytes": 16759435264,
+    "os": "Ubuntu 26.04.1 LTS",
+    "kernel": "7.0.0-1020-azure",
+    "topology": [
+      {
+        "cpu": 0,
+        "core": 0,
+        "socket": 0,
+        "thread_siblings": "0-1"
+      },
+      {
+        "cpu": 1,
+        "core": 0,
+        "socket": 0,
+        "thread_siblings": "0-1"
+      },
+      {
+        "cpu": 2,
+        "core": 1,
+        "socket": 0,
+        "thread_siblings": "2-3"
+      },
+      {
+        "cpu": 3,
+        "core": 1,
+        "socket": 0,
+        "thread_siblings": "2-3"
+      }
+    ]
+  },
+  "invalid_reasons": [
+    "n=2 probe 1: not gateway-bound (vCPU gateway 1.7 \u003c 1.9 or loadgen 0.93 / upstream 0.68 \u003e 0.90)",
+    "n=2 probe 2: not gateway-bound (vCPU gateway 1.71 \u003c 1.9 or loadgen 0.94 / upstream 0.68 \u003e 0.90)",
+    "n=2 probe 3: not gateway-bound (vCPU gateway 1.71 \u003c 1.9 or loadgen 0.94 / upstream 0.68 \u003e 0.90)"
+  ],
+  "n1": {
+    "gateway_vcpus": 1,
+    "gateway_cpus": "0",
+    "p": 8834.366666666667,
+    "r": 7900,
+    "probes_gateway_bound": true,
+    "run_set_valid": true,
+    "invalid_reasons": [],
+    "achieved_rps": {
+      "median": 7900,
+      "min": 7900,
+      "max": 7900,
+      "spread": 0
+    },
+    "latency_us": {
+      "p50": {
+        "median": 363,
+        "min": 362,
+        "max": 373,
+        "spread": 0.030303030303030304
+      },
+      "p99": {
+        "median": 5427,
+        "min": 4895,
+        "max": 6403,
+        "spread": 0.27786990971070574
+      },
+      "p99_9": {
+        "median": 7967,
+        "min": 7427,
+        "max": 10247,
+        "spread": 0.3539600853520773
+      }
+    },
+    "probes": [
+      {
+        "url": "http://gateway:8000/bytes/1024",
+        "protocol": "HTTP/1.1",
+        "target_rps": 13800,
+        "achieved_rps": 8834.366666666667,
+        "valid": false,
+        "warmup_s": 10,
+        "duration_s": 30,
+        "requests": {
+          "scheduled": 414000,
+          "sent": 265031,
+          "dropped": 148969
+        },
+        "status": {
+          "2xx": 265031
+        },
+        "errors": {},
+        "latency_us": {
+          "p50": 1130495,
+          "p99": 1177599,
+          "p99_9": 1207295,
+          "max": 1234943
+        },
+        "hardware": {
+          "cpu_model": "AMD EPYC 9V74 80-Core Processor",
+          "goarch": "amd64",
+          "num_cpu": 1,
+          "gomaxprocs": 1
+        },
+        "vcpu": {
+          "window_s": 28.0533618927002,
+          "gateway": 0.9602293337615796,
+          "loadgen": 0.7060382664921862,
+          "upstream": 0.3139866100074102
+        },
+        "rps_2xx": 8834.366666666667,
+        "gateway_bound": true
+      },
+      {
+        "url": "http://gateway:8000/bytes/1024",
+        "protocol": "HTTP/1.1",
+        "target_rps": 13800,
+        "achieved_rps": 8801.933333333332,
+        "valid": false,
+        "warmup_s": 10,
+        "duration_s": 30,
+        "requests": {
+          "scheduled": 414000,
+          "sent": 264058,
+          "dropped": 149942
+        },
+        "status": {
+          "2xx": 264058
+        },
+        "errors": {},
+        "latency_us": {
+          "p50": 1136639,
+          "p99": 1182719,
+          "p99_9": 1196031,
+          "max": 1221631
+        },
+        "hardware": {
+          "cpu_model": "AMD EPYC 9V74 80-Core Processor",
+          "goarch": "amd64",
+          "num_cpu": 1,
+          "gomaxprocs": 1
+        },
+        "vcpu": {
+          "window_s": 28.055459022522,
+          "gateway": 0.9611343367561134,
+          "loadgen": 0.7048020844758394,
+          "upstream": 0.31364833464089864
+        },
+        "rps_2xx": 8801.933333333332,
+        "gateway_bound": true
+      },
+      {
+        "url": "http://gateway:8000/bytes/1024",
+        "protocol": "HTTP/1.1",
+        "target_rps": 13800,
+        "achieved_rps": 8864.2,
+        "valid": false,
+        "warmup_s": 10,
+        "duration_s": 30,
+        "requests": {
+          "scheduled": 414000,
+          "sent": 265926,
+          "dropped": 148074
+        },
+        "status": {
+          "2xx": 265926
+        },
+        "errors": {},
+        "latency_us": {
+          "p50": 1128447,
+          "p99": 1166335,
+          "p99_9": 1193983,
+          "max": 1217535
+        },
+        "hardware": {
+          "cpu_model": "AMD EPYC 9V74 80-Core Processor",
+          "goarch": "amd64",
+          "num_cpu": 1,
+          "gomaxprocs": 1
+        },
+        "vcpu": {
+          "window_s": 28.0555191040039,
+          "gateway": 0.9600882414667531,
+          "loadgen": 0.7098307440391616,
+          "upstream": 0.31603753140802227
+        },
+        "rps_2xx": 8864.2,
+        "gateway_bound": true
+      }
+    ],
+    "runs": [
+      {
+        "url": "http://gateway:8000/bytes/1024",
+        "protocol": "HTTP/1.1",
+        "target_rps": 7900,
+        "achieved_rps": 7900,
+        "valid": true,
+        "warmup_s": 30,
+        "duration_s": 180,
+        "requests": {
+          "scheduled": 1422000,
+          "sent": 1422000,
+          "dropped": 0
+        },
+        "status": {
+          "2xx": 1422000
+        },
+        "errors": {},
+        "latency_us": {
+          "p50": 362,
+          "p99": 5059,
+          "p99_9": 7679,
+          "max": 14215
+        },
+        "hardware": {
+          "cpu_model": "AMD EPYC 9V74 80-Core Processor",
+          "goarch": "amd64",
+          "num_cpu": 1,
+          "gomaxprocs": 1
+        }
+      },
+      {
+        "url": "http://gateway:8000/bytes/1024",
+        "protocol": "HTTP/1.1",
+        "target_rps": 7900,
+        "achieved_rps": 7900,
+        "valid": true,
+        "warmup_s": 30,
+        "duration_s": 180,
+        "requests": {
+          "scheduled": 1422000,
+          "sent": 1422000,
+          "dropped": 0
+        },
+        "status": {
+          "2xx": 1422000
+        },
+        "errors": {},
+        "latency_us": {
+          "p50": 364,
+          "p99": 5503,
+          "p99_9": 8407,
+          "max": 14239
+        },
+        "hardware": {
+          "cpu_model": "AMD EPYC 9V74 80-Core Processor",
+          "goarch": "amd64",
+          "num_cpu": 1,
+          "gomaxprocs": 1
+        }
+      },
+      {
+        "url": "http://gateway:8000/bytes/1024",
+        "protocol": "HTTP/1.1",
+        "target_rps": 7900,
+        "achieved_rps": 7900,
+        "valid": true,
+        "warmup_s": 30,
+        "duration_s": 180,
+        "requests": {
+          "scheduled": 1422000,
+          "sent": 1422000,
+          "dropped": 0
+        },
+        "status": {
+          "2xx": 1422000
+        },
+        "errors": {},
+        "latency_us": {
+          "p50": 363,
+          "p99": 5427,
+          "p99_9": 7967,
+          "max": 15527
+        },
+        "hardware": {
+          "cpu_model": "AMD EPYC 9V74 80-Core Processor",
+          "goarch": "amd64",
+          "num_cpu": 1,
+          "gomaxprocs": 1
+        }
+      },
+      {
+        "url": "http://gateway:8000/bytes/1024",
+        "protocol": "HTTP/1.1",
+        "target_rps": 7900,
+        "achieved_rps": 7900,
+        "valid": true,
+        "warmup_s": 30,
+        "duration_s": 180,
+        "requests": {
+          "scheduled": 1422000,
+          "sent": 1422000,
+          "dropped": 0
+        },
+        "status": {
+          "2xx": 1422000
+        },
+        "errors": {},
+        "latency_us": {
+          "p50": 373,
+          "p99": 6403,
+          "p99_9": 10247,
+          "max": 47455
+        },
+        "hardware": {
+          "cpu_model": "AMD EPYC 9V74 80-Core Processor",
+          "goarch": "amd64",
+          "num_cpu": 1,
+          "gomaxprocs": 1
+        }
+      },
+      {
+        "url": "http://gateway:8000/bytes/1024",
+        "protocol": "HTTP/1.1",
+        "target_rps": 7900,
+        "achieved_rps": 7900,
+        "valid": true,
+        "warmup_s": 30,
+        "duration_s": 180,
+        "requests": {
+          "scheduled": 1422000,
+          "sent": 1422000,
+          "dropped": 0
+        },
+        "status": {
+          "2xx": 1422000
+        },
+        "errors": {},
+        "latency_us": {
+          "p50": 362,
+          "p99": 4895,
+          "p99_9": 7427,
+          "max": 14519
+        },
+        "hardware": {
+          "cpu_model": "AMD EPYC 9V74 80-Core Processor",
+          "goarch": "amd64",
+          "num_cpu": 1,
+          "gomaxprocs": 1
+        }
+      }
+    ]
+  },
+  "n2": {
+    "gateway_vcpus": 2,
+    "gateway_cpus": "0,2",
+    "p": 17185.8,
+    "r": 15400,
+    "probes_gateway_bound": false,
+    "run_set_valid": true,
+    "invalid_reasons": [
+      "n=2 probe 1: not gateway-bound (vCPU gateway 1.7 \u003c 1.9 or loadgen 0.93 / upstream 0.68 \u003e 0.90)",
+      "n=2 probe 2: not gateway-bound (vCPU gateway 1.71 \u003c 1.9 or loadgen 0.94 / upstream 0.68 \u003e 0.90)",
+      "n=2 probe 3: not gateway-bound (vCPU gateway 1.71 \u003c 1.9 or loadgen 0.94 / upstream 0.68 \u003e 0.90)"
+    ],
+    "achieved_rps": {
+      "median": 15400,
+      "min": 15400,
+      "max": 15400,
+      "spread": 0
+    },
+    "latency_us": {
+      "p50": {
+        "median": 2329,
+        "min": 2311,
+        "max": 2449,
+        "spread": 0.059252898239587806
+      },
+      "p99": {
+        "median": 19423,
+        "min": 18031,
+        "max": 22783,
+        "spread": 0.24465839468671163
+      },
+      "p99_9": {
+        "median": 43551,
+        "min": 33919,
+        "max": 58847,
+        "spread": 0.5723863975568874
+      }
+    },
+    "probes": [
+      {
+        "url": "http://gateway:8000/bytes/1024",
+        "protocol": "HTTP/1.1",
+        "target_rps": 27600,
+        "achieved_rps": 17335.9,
+        "valid": false,
+        "warmup_s": 10,
+        "duration_s": 30,
+        "requests": {
+          "scheduled": 828000,
+          "sent": 520077,
+          "dropped": 307923
+        },
+        "status": {
+          "2xx": 520077
+        },
+        "errors": {},
+        "latency_us": {
+          "p50": 573951,
+          "p99": 643583,
+          "p99_9": 668671,
+          "max": 717311
+        },
+        "hardware": {
+          "cpu_model": "AMD EPYC 9V74 80-Core Processor",
+          "goarch": "amd64",
+          "num_cpu": 1,
+          "gomaxprocs": 1
+        },
+        "vcpu": {
+          "window_s": 28.1100370883942,
+          "gateway": 1.7044931263993957,
+          "loadgen": 0.9335021479154875,
+          "upstream": 0.6822546672454627
+        },
+        "rps_2xx": 17335.9,
+        "gateway_bound": false
+      },
+      {
+        "url": "http://gateway:8000/bytes/1024",
+        "protocol": "HTTP/1.1",
+        "target_rps": 27600,
+        "achieved_rps": 17185.8,
+        "valid": false,
+        "warmup_s": 10,
+        "duration_s": 30,
+        "requests": {
+          "scheduled": 828000,
+          "sent": 515574,
+          "dropped": 312426
+        },
+        "status": {
+          "2xx": 515574
+        },
+        "errors": {},
+        "latency_us": {
+          "p50": 577535,
+          "p99": 649215,
+          "p99_9": 674815,
+          "max": 690175
+        },
+        "hardware": {
+          "cpu_model": "AMD EPYC 9V74 80-Core Processor",
+          "goarch": "amd64",
+          "num_cpu": 1,
+          "gomaxprocs": 1
+        },
+        "vcpu": {
+          "window_s": 28.0982849597931,
+          "gateway": 1.7067835659231327,
+          "loadgen": 0.9397839418948807,
+          "upstream": 0.6770751676560719
+        },
+        "rps_2xx": 17185.8,
+        "gateway_bound": false
+      },
+      {
+        "url": "http://gateway:8000/bytes/1024",
+        "protocol": "HTTP/1.1",
+        "target_rps": 27600,
+        "achieved_rps": 17150.966666666667,
+        "valid": false,
+        "warmup_s": 10,
+        "duration_s": 30,
+        "requests": {
+          "scheduled": 828000,
+          "sent": 514529,
+          "dropped": 313471
+        },
+        "status": {
+          "2xx": 514529
+        },
+        "errors": {},
+        "latency_us": {
+          "p50": 579071,
+          "p99": 650751,
+          "p99_9": 698879,
+          "max": 722943
+        },
+        "hardware": {
+          "cpu_model": "AMD EPYC 9V74 80-Core Processor",
+          "goarch": "amd64",
+          "num_cpu": 1,
+          "gomaxprocs": 1
+        },
+        "vcpu": {
+          "window_s": 28.0866210460663,
+          "gateway": 1.7061775754870163,
+          "loadgen": 0.9365952193699102,
+          "upstream": 0.6784083770257817
+        },
+        "rps_2xx": 17150.966666666667,
+        "gateway_bound": false
+      }
+    ],
+    "runs": [
+      {
+        "url": "http://gateway:8000/bytes/1024",
+        "protocol": "HTTP/1.1",
+        "target_rps": 15400,
+        "achieved_rps": 15400,
+        "valid": true,
+        "warmup_s": 30,
+        "duration_s": 180,
+        "requests": {
+          "scheduled": 2772000,
+          "sent": 2772000,
+          "dropped": 0
+        },
+        "status": {
+          "2xx": 2772000
+        },
+        "errors": {},
+        "latency_us": {
+          "p50": 2311,
+          "p99": 22783,
+          "p99_9": 58847,
+          "max": 82047
+        },
+        "hardware": {
+          "cpu_model": "AMD EPYC 9V74 80-Core Processor",
+          "goarch": "amd64",
+          "num_cpu": 1,
+          "gomaxprocs": 1
+        }
+      },
+      {
+        "url": "http://gateway:8000/bytes/1024",
+        "protocol": "HTTP/1.1",
+        "target_rps": 15400,
+        "achieved_rps": 15400,
+        "valid": true,
+        "warmup_s": 30,
+        "duration_s": 180,
+        "requests": {
+          "scheduled": 2772000,
+          "sent": 2772000,
+          "dropped": 0
+        },
+        "status": {
+          "2xx": 2772000
+        },
+        "errors": {},
+        "latency_us": {
+          "p50": 2449,
+          "p99": 19807,
+          "p99_9": 47231,
+          "max": 76351
+        },
+        "hardware": {
+          "cpu_model": "AMD EPYC 9V74 80-Core Processor",
+          "goarch": "amd64",
+          "num_cpu": 1,
+          "gomaxprocs": 1
+        }
+      },
+      {
+        "url": "http://gateway:8000/bytes/1024",
+        "protocol": "HTTP/1.1",
+        "target_rps": 15400,
+        "achieved_rps": 15400,
+        "valid": true,
+        "warmup_s": 30,
+        "duration_s": 180,
+        "requests": {
+          "scheduled": 2772000,
+          "sent": 2772000,
+          "dropped": 0
+        },
+        "status": {
+          "2xx": 2772000
+        },
+        "errors": {},
+        "latency_us": {
+          "p50": 2331,
+          "p99": 19423,
+          "p99_9": 43551,
+          "max": 85503
+        },
+        "hardware": {
+          "cpu_model": "AMD EPYC 9V74 80-Core Processor",
+          "goarch": "amd64",
+          "num_cpu": 1,
+          "gomaxprocs": 1
+        }
+      },
+      {
+        "url": "http://gateway:8000/bytes/1024",
+        "protocol": "HTTP/1.1",
+        "target_rps": 15400,
+        "achieved_rps": 15400,
+        "valid": true,
+        "warmup_s": 30,
+        "duration_s": 180,
+        "requests": {
+          "scheduled": 2772000,
+          "sent": 2772000,
+          "dropped": 0
+        },
+        "status": {
+          "2xx": 2772000
+        },
+        "errors": {},
+        "latency_us": {
+          "p50": 2329,
+          "p99": 18879,
+          "p99_9": 41951,
+          "max": 73471
+        },
+        "hardware": {
+          "cpu_model": "AMD EPYC 9V74 80-Core Processor",
+          "goarch": "amd64",
+          "num_cpu": 1,
+          "gomaxprocs": 1
+        }
+      },
+      {
+        "url": "http://gateway:8000/bytes/1024",
+        "protocol": "HTTP/1.1",
+        "target_rps": 15400,
+        "achieved_rps": 15400,
+        "valid": true,
+        "warmup_s": 30,
+        "duration_s": 180,
+        "requests": {
+          "scheduled": 2772000,
+          "sent": 2772000,
+          "dropped": 0
+        },
+        "status": {
+          "2xx": 2772000
+        },
+        "errors": {},
+        "latency_us": {
+          "p50": 2325,
+          "p99": 18031,
+          "p99_9": 33919,
+          "max": 66943
+        },
+        "hardware": {
+          "cpu_model": "AMD EPYC 9V74 80-Core Processor",
+          "goarch": "amd64",
+          "num_cpu": 1,
+          "gomaxprocs": 1
+        }
+      }
+    ]
+  },
+  "pass": false,
+  "ref": "refs/heads/m7-nfr-load",
+  "rule": {
+    "min_scaling": 1.70,
+    "gateway_bound": {
+      "gateway_min_vcpu_per_n": 0.95,
+      "loadgen_max_vcpu": 0.90,
+      "upstream_max_vcpu": 0.90
+    }
+  },
+  "run_url": "https://github.com/ankitbisht23/spillway/actions/runs/45626436921",
+  "scaling": 1.9493670886075949,
+  "setup": {
+    "mode": "scaling",
+    "cpus": {
+      "gateway_1": "0",
+      "gateway_2": "0,2",
+      "loadgen": "1",
+      "upstream": "3"
+    },
+    "upstream": "loadgen serve -bytes 1024",
+    "url": "http://gateway:8000/bytes/1024",
+    "rate_per_vcpu": 4600,
+    "conns": 200,
+    "probe": {
+      "runs": 3,
+      "offered": "3 x rate_per_vcpu x n",
+      "warmup": "10s",
+      "duration": "30s"
+    },
+    "warmup": "30s",
+    "duration": "3m",
+    "access_log_sample_rate": 0.01,
+    "otlp": "none"
+  },
+  "timestamp": "2026-11-25T13:43:22Z",
+  "valid": false
+}
