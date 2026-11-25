@@ -76,6 +76,7 @@ Each new scenario ran three times on the laptop (Apple M4 Pro, Docker Desktop 14
 | NFR-15 noisy neighbour | 3/3 PASS | median p99(on) ÷ p99(off) over 30 of 30 pairs: B 0.378 / 0.347 / 0.337, C 0.377 / 0.343 / 0.340, D 0.376 / 0.342 / 0.342; pooled p99 noisy off about 6.2–6.6 ms, on about 2.2–2.7 ms |
 | Redis latency +50 ms | 3/3 PASS | fail_open 1,900/1,900 2xx; fail_closed 1,899–1,900/1,900 503 fail_closed; degraded 950 admitted (expected 1,000 ± 10%); medians fell under the toxic (−0.03 to −0.38 ms: calls end at the budget, then the breakers open); Redis decides on every answer from +45 s |
 | Gateway `kill -9` | 3/3 PASS | 0 failed of about 4,992 on each of gateway-1 and gateway-3; gateway-2: 1 failed (transport), sent before its first observed failure 134–154 ms after the kill request |
+| `make chaos` (whole compose suite) | 1/1 PASS | Redis latency, Redis full outage, Redis primary killed, control-plane outage, gateway kill, verify-m4 and NFR-15 (medians 0.350 / 0.349 / 0.347) all PASS |
 | NFR-02 scaling (run 45626436921) | INVALID on both arches | see below |
 
 NFR-15's ratios are below 1 because the quiet tenants' p99 is *lower* while the noisy tenant sends: at 300 rps the gateway and the Docker Desktop VM idle between requests and pay wake-up latency, which the noisy tenant's 2,000 rps keeps away. The rule (< 1.10) is met by a wide margin; the effect is reported, not corrected.
