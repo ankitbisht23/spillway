@@ -79,6 +79,13 @@ What changed:
 - **2xx fell too, and 429s rose.** Strict 2xx went from 37,676–44,168 to 31,422–32,183, and admitted per key from 63–74/s to 52–54/s. Batched went from 49,383–50,977 to 34,810–39,110. 429s went up three to four times. Why: in strict mode, Redis admits about the same number per key in each run (about 100/s plus the burst, so about 61,000 over the minute). The 2xx are the admissions whose reply came back within the budget. The rest are admissions for requests that already had their failure-mode answer, a 503 under the harness's `fail_closed` policy. Keeping the connections lets about 1.8 times as many calls reach Redis. The queue per primary stays longer than 5 ms, so more of the admissions land after their requests' budgets: about 29,000 of the 61,000 after, against 17,000–23,000 before. A later request on the key then finds the tokens spent, and gets a 429.
 - **Latency:** the boundary p99 decision latency fell (strict 61–68 ms from 69–83 ms, batched 63–65 ms from 115–175 ms). Every 503 still comes at the budget.
 
+Other checks on this branch:
+
+- `make verify-m6`: 1 of 1 PASS.
+- `make verify-m3`: 1 run. FAIL on one check: NFR-04's third gateway run voided its pair, with 2 timeouts 3.3 s apart (not excused under ADR-0034's 1 s span). Its accuracy and both chaos tests passed. verify-m3 failing some runs on this laptop was already accepted.
+- `make chaos-redis-outage`: 4 of 4 PASS (the one in verify-m3 and 3 more). 27,999–28,000 of 28,000 Redis checks within 7 ms.
+- `make chaos-redis-primary`: 6 of 7 PASS. The one failure, which came right after an outage run, was 1 of 16,000 requests on a surviving primary's key, answered after 7 ms (a single timeout). Two more runs after an outage passed, and so did three runs on their own.
+
 ### The open question
 
 The fix does what it was meant to do: no churn, about half the CPU per call, a third fewer 503s, no over-admission, and fewer batched over-admissions. But in the boundary pattern a client also gets about 20–30 % fewer 2xx, and three to four times as many 429s, because more of the tokens go to requests that were already answered 503. NFR-06 bounds over-admission, not under-admission, so it still passes. But the user's outcome rule asks for no regression in accuracy, and fewer admissions under the limit is a client-visible change. This ADR therefore stays Proposed, and the user decides:
