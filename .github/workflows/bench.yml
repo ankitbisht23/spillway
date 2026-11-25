@@ -9,8 +9,16 @@
 # in the same job; a re-run flagged again fails both. Every run set's JSON,
 # with its gate field, is pushed to the bench-results branch as
 # results/<arch>/<UTC-timestamp>.json, valid or not; an invalid run set or a
-# confirmed regression then fails its job. Actions are pinned to commit SHAs.
+# confirmed regression then fails its job. A dispatch with mode scaling runs
+# test/load/scaling.sh instead (NFR-02, ADR-0074 §D9): never gated, stored
+# with setup.mode "scaling", and its job fails unless the result is valid and
+# passes. Actions are pinned to commit SHAs.
 name: bench
+# Names the mode, rates and gate, so a script can find its run (ADR-0074).
+run-name: >-
+  bench ${{ inputs.mode || 'throughput' }}
+  x64=${{ inputs.rate_x64 || 4600 }} arm64=${{ inputs.rate_arm64 || 8800 }}
+  gate=${{ (github.event_name == 'schedule' || inputs.gate) && inputs.mode != 'scaling' }}
 
 on:
   schedule:
@@ -32,6 +40,11 @@ on:
         description: Gate the run set against its baselines (NFR-05)
         type: boolean
         default: false
+      mode:
+        description: throughput (NFR-01, NFR-05) or scaling (NFR-02, never gated; the rates are each arch's rate per vCPU)
+        type: choice
+        options: [throughput, scaling]
+        default: throughput
 
 permissions:
   contents: write # push to bench-results (ADR-0003)
@@ -48,9 +61,12 @@ jobs:
           - runner: ubuntu-24.04-arm
             rate: ${{ inputs.rate_arm64 || 8800 }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 100 # two run sets and their builds
+    # Two run sets and their builds; a scaling run is probes and two run
+    # sets (ADR-0074 §D9).
+    timeout-minutes: ${{ inputs.mode == 'scaling' && 75 || 100 }}
     env:
-      GATE: ${{ github.event_name == 'schedule' || inputs.gate }}
+      GATE: ${{ (github.event_name == 'schedule' || inputs.gate) && inputs.mode != 'scaling' }}
+      MODE: ${{ inputs.mode || 'throughput' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -86,14 +102,29 @@ jobs:
             echo "no release tag yet: only the nightly baseline applies"
           fi
       - name: 5 runs of 30 s warm-up and 3 min measured
+        if: env.MODE != 'scaling'
         env:
           BENCH_RATE: ${{ matrix.rate }}
         run: test/load/bench.sh > result.json
+      - name: Scaling run, gateway on 1 then 2 vCPUs
+        if: env.MODE == 'scaling'
+        env:
+          BENCH_RATE: ${{ matrix.rate }}
+        run: |
+          test/load/scaling.sh > result.json
+          jq -r '"### Scaling (NFR-02), \(.arch): \(if .valid then (if .pass then "PASS" else "FAIL" end) else "INVALID" end)\n",
+            "- CPU model: **\(.hardware.cpu_model)**; commit \(.commit[:7]) on `\(.ref)`",
+            "- R(1) = \(.n1.r) rps (P \(.n1.p | round)), R(2) = \(.n2.r) rps (P \(.n2.p | round)); S = R(2) ÷ R(1) = \(.scaling // "n/a"), pass at >= 1.70",
+            (.n1, .n2 | .gateway_vcpus as $n | .probes | to_entries[] | "- n=\($n) probe \(.key + 1): \(.value.rps_2xx | round) 2xx/s; vCPU gateway \(.value.vcpu.gateway * 100 | round / 100), loadgen \(.value.vcpu.loadgen * 100 | round / 100), upstream \(.value.vcpu.upstream * 100 | round / 100); gateway-bound \(.value.gateway_bound)"),
+            (.invalid_reasons[] | "- invalid: \(.)")' result.json >> "$GITHUB_STEP_SUMMARY"
       - name: Gate the run set
         id: gate
         run: |
           args=(-candidate result.json -out result.json -summary "$GITHUB_STEP_SUMMARY")
-          if [ "$GATE" = true ]; then
+          if [ "$MODE" = scaling ]; then
+            # Never gated; its own summary is already written.
+            args=(-candidate result.json -out result.json -ungated)
+          elif [ "$GATE" = true ]; then
             args+=(-results "$RUNNER_TEMP/bench-results")
             if [ -n "${RELEASE_TAG:-}" ]; then args+=(-release-tag "$RELEASE_TAG" -release-commit "$RELEASE_COMMIT"); fi
           else
@@ -159,6 +190,9 @@ jobs:
           RERUN_VERDICT: ${{ steps.rerun.outputs.verdict }}
         run: |
           jq -e .valid result.json >/dev/null || { jq -r '.invalid_reasons[]' result.json; exit 1; }
+          if [ "$MODE" = scaling ]; then
+            jq -e .pass result.json >/dev/null || { jq -r '"NFR-02: S = \(.scaling), below 1.70"' result.json; exit 1; }
+          fi
           case "$RERUN_VERDICT" in
             fail) echo "NFR-05: the re-run confirmed the regression (see the job summary)"; exit 1 ;;
             invalid) jq -r '.invalid_reasons[]' rerun.json; exit 1 ;;
