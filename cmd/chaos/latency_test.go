@@ -151,6 +151,17 @@ type fakeToxiproxy struct {
 	mu     sync.Mutex
 	toxics map[string]map[string]any // proxy → its toxic's request body
 	on     atomic.Bool
+	offAt  atomic.Int64 // UnixNano of the last toxic's removal; 0 before
+}
+
+// broken reports whether a fake gateway behind it still fails its Redis
+// calls: while a toxic is on, and for 300 ms after the last one is removed,
+// as a real gateway's open breakers do. Without that grace a request due
+// just before the runner notes the removal could reach the fake after it
+// and be judged inside the toxic window (seen under -race).
+func (f *fakeToxiproxy) broken() bool {
+	off := f.offAt.Load()
+	return f.on.Load() || (off != 0 && time.Since(time.Unix(0, off)) < 300*time.Millisecond)
 }
 
 func (f *fakeToxiproxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -176,6 +187,7 @@ func (f *fakeToxiproxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		delete(f.toxics, p)
 		if len(f.toxics) == 0 {
+			f.offAt.Store(time.Now().UnixNano())
 			f.on.Store(false)
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -196,7 +208,7 @@ func TestLatencyRun(t *testing.T) {
 			_, _ = io.WriteString(w, "gw_config_version 73\n")
 			return
 		}
-		if !tox.on.Load() {
+		if !tox.broken() {
 			w.Header().Set(decisionTimeHeader, "1795600000000000")
 			return
 		}
