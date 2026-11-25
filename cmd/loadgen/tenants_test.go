@@ -224,6 +224,9 @@ func TestTenantRun(t *testing.T) {
 	if len(b.Slots) != 2 || !b.Slots[0].On || b.Slots[0].Requests != 50 || b.Slots[1].P99 <= 0 {
 		t.Errorf("B's slots = %+v", b.Slots)
 	}
+	if b.PooledP99 == nil || b.PooledP99.Even <= 0 || b.PooledP99.Odd <= 0 || a.PooledP99 == nil || a.PooledP99.Even != 0 || a.PooledP99.Odd <= 0 {
+		t.Errorf("pooled p99s: A %+v, B %+v; want both of B's and only A's odd slots measured", a.PooledP99, b.PooledP99)
+	}
 	if r.TargetRPS != 270 || r.Requests.Sent != 680 || r.Status["2xx"] != 600 || r.Status["4xx"] != 80 || r.LatencyUS.P99 <= 0 {
 		t.Errorf("top level: target %d, requests %+v, status %v, p99 %d", r.TargetRPS, r.Requests, r.Status, r.LatencyUS.P99)
 	}
@@ -235,7 +238,7 @@ func TestTenantRun(t *testing.T) {
 	var out map[string]any
 	_ = json.Unmarshal(stdout.Bytes(), &out)
 	tenant := out["tenants"].(map[string]any)["A"].(map[string]any)
-	for _, f := range []string{"target_rps", "toggle", "achieved_rps", "valid", "requests", "status", "errors", "latency_us", "slots"} {
+	for _, f := range []string{"target_rps", "toggle", "achieved_rps", "valid", "requests", "status", "errors", "latency_us", "pooled_p99", "slots"} {
 		if _, ok := tenant[f]; !ok {
 			t.Errorf("tenant JSON lacks %q", f)
 		}

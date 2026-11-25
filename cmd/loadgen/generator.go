@@ -113,6 +113,9 @@ func (g *generator) runStats(ctx context.Context) (result, *stats) {
 		for i := range s.slots {
 			s.slots[i] = hdrhistogram.New(1, slotMaxLatency.Microseconds(), 3)
 		}
+		for i := range s.pooled {
+			s.pooled[i] = hdrhistogram.New(1, slotMaxLatency.Microseconds(), 3)
+		}
 	}
 	inFlight := make(chan struct{}, g.maxInFlight)
 	var wg sync.WaitGroup
@@ -181,6 +184,10 @@ func (g *generator) runStats(ctx context.Context) (result, *stats) {
 		valid = float64(sent) >= 0.99*float64(sent+dropped)
 	}
 	var slots []slotResult
+	var pooled *pooledP99
+	if g.slot > 0 {
+		pooled = &pooledP99{Even: s.pooled[0].ValueAtQuantile(99), Odd: s.pooled[1].ValueAtQuantile(99)}
+	}
 	for i, h := range s.slots {
 		sr := slotResult{Index: i, On: !g.toggle || slotOn(i), Requests: h.TotalCount()}
 		if sr.Requests > 0 {
@@ -205,7 +212,8 @@ func (g *generator) runStats(ctx context.Context) (result, *stats) {
 			P999: s.latency.ValueAtQuantile(99.9),
 			Max:  s.latency.Max(),
 		},
-		Slots: slots,
+		Slots:  slots,
+		Pooled: pooled,
 	}, s
 }
 
@@ -216,12 +224,13 @@ const maxLatency = time.Hour
 // stats collects the measured requests' outcomes.
 type stats struct {
 	mu       sync.Mutex
-	latency  *hdrhistogram.Histogram   // microseconds, answered requests only
-	status   map[string]int64          // answered requests by status class
-	errors   map[string]int64          // unanswered requests by errorKind
-	protocol string                    // of the first answer
-	failures *failures                 // every request's, warm-up included; nil if none
-	slots    []*hdrhistogram.Histogram // per slot, settled answered requests only; nil without slots
+	latency  *hdrhistogram.Histogram    // microseconds, answered requests only
+	status   map[string]int64           // answered requests by status class
+	errors   map[string]int64           // unanswered requests by errorKind
+	protocol string                     // of the first answer
+	failures *failures                  // every request's, warm-up included; nil if none
+	slots    []*hdrhistogram.Histogram  // per slot, settled answered requests only; nil without slots
+	pooled   [2]*hdrhistogram.Histogram // the even and the odd slots' together
 }
 
 // recordSlot records the latency of an answered request in slot i's
@@ -232,7 +241,9 @@ func (s *stats) recordSlot(i int, latency time.Duration) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_ = s.slots[i].RecordValue(min(latency, slotMaxLatency).Microseconds()) // in range
+	v := min(latency, slotMaxLatency).Microseconds()
+	_ = s.slots[i].RecordValue(v)    // in range
+	_ = s.pooled[i&1].RecordValue(v) // in range
 }
 
 func (s *stats) record(status int, proto string, err error, latency time.Duration) {
@@ -298,11 +309,20 @@ type result struct {
 	Failures    *failures        `json:"failures,omitempty"`
 	LatencyUS   latencies        `json:"latency_us"`
 	Hardware    hardware.Info    `json:"hardware"`
-	// Slots is a tenant's, in the per-tenant mode only.
-	Slots []slotResult `json:"-"`
+	// Slots and Pooled are a tenant's, in the per-tenant mode only.
+	Slots  []slotResult `json:"-"`
+	Pooled *pooledP99   `json:"-"`
 	// Tenants is the per-tenant mode's result per tenant name (ADR-0074
 	// §D9); the top-level numbers are then the tenants' together.
 	Tenants map[string]tenantResult `json:"tenants,omitempty"`
+}
+
+// pooledP99 is a tenant's p99 (µs) over the settled answers of all its even
+// slots and of all its odd slots: with a toggled tenant, the slots it is off
+// and on.
+type pooledP99 struct {
+	Even int64 `json:"even_slots"`
+	Odd  int64 `json:"odd_slots"`
 }
 
 // slotResult is one slot of a tenant: whether the tenant sent in it, how

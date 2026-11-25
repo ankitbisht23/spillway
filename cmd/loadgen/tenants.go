@@ -117,6 +117,7 @@ type tenantResult struct {
 	Errors      map[string]int64 `json:"errors"`
 	Failures    *failures        `json:"failures,omitempty"`
 	LatencyUS   latencies        `json:"latency_us"`
+	PooledP99   *pooledP99       `json:"pooled_p99"`
 	Slots       []slotResult     `json:"slots"`
 }
 
@@ -156,7 +157,7 @@ func runTenants(ctx context.Context, o options, clk clock, do func(apiKey string
 		r.Tenants[t.name] = tenantResult{
 			TargetRPS: tr.TargetRPS, Toggle: t.toggle, AchievedRPS: tr.AchievedRPS, Valid: tr.Valid,
 			Requests: tr.Requests, Status: tr.Status, Errors: tr.Errors, Failures: tr.Failures,
-			LatencyUS: tr.LatencyUS, Slots: tr.Slots,
+			LatencyUS: tr.LatencyUS, PooledP99: tr.Pooled, Slots: tr.Slots,
 		}
 		r.TargetRPS += tr.TargetRPS
 		r.Valid = r.Valid && tr.Valid
