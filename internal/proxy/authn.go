@@ -54,7 +54,7 @@ func (h *Handler) SetTokens(v *auth.Verifier) { h.tokens = v }
 
 // apiKeyHeader is X-API-Key spelled as http.CanonicalHeaderKey returns it,
 // so that reading it costs no canonical copy on every request (NFR-01).
-const apiKeyHeader = "X-Api-Key"
+const apiKeyHeader = "X-Api-Key" //nolint:gosec // G101: a header name, not a credential
 
 // authenticate resolves a request's credential against identity id as its
 // route's auth mode says (GW-17 - GW-20, ADR-0039) and returns its

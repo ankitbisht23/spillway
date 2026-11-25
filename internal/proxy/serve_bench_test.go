@@ -33,7 +33,7 @@ policies:
 policies:
   - {name: per-ip, level: route, match: {routes: ['*']}, key_template: '{ip}', algorithm: gcra, limits: [{rate: 1000000, period: 1s}], failure_mode: fail_closed}
 `
-	benchAPIKey = `
+	benchTenant = `
 policies:
   - {id: 1, name: per-tenant, level: tenant, match: {routes: ['*']}, key_template: '{tenant}', algorithm: gcra, limits: [{rate: 1000000, period: 1s}], failure_mode: fail_closed}
 `
@@ -108,7 +108,7 @@ func BenchmarkServeHTTP(b *testing.B) {
 		{name: "plain"},
 		{name: "local", policies: benchLocal},
 		{name: "redis", policies: benchRedis, redis: true},
-		{name: "apikey", policies: benchAPIKey, managed: true, redis: true, id: managedIdentity(b, entry), header: http.Header{"X-Api-Key": {key.Secret.Reveal()}}},
+		{name: "apikey", policies: benchTenant, managed: true, redis: true, id: managedIdentity(b, entry), header: http.Header{"X-Api-Key": {key.Secret.Reveal()}}},
 		{name: "lease", policies: benchLease, redis: true},
 	} {
 		b.Run(bc.name, func(b *testing.B) {

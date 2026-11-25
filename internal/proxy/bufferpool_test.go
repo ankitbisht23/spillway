@@ -26,7 +26,7 @@ func TestCopyBuffersNotCarried(t *testing.T) {
 		body := bytes.Repeat([]byte(q.Get("b")), n)
 		for len(body) > 0 {
 			k := min(piece, len(body))
-			_, _ = w.Write(body[:k])
+			_, _ = w.Write(body[:k]) //nolint:gosec // G705: a test upstream's own bytes
 			w.(http.Flusher).Flush()
 			body = body[k:]
 		}
@@ -61,7 +61,7 @@ func TestCopyBuffersNotCarried(t *testing.T) {
 	for i := range 16 {
 		wg.Go(func() {
 			for j := range 20 {
-				get(t, byte('a'+i), (i*7919+j*104729)%(2*copyBufferSize)+1, 64*(1+(i*31+j*17)%64))
+				get(t, "abcdefghijklmnop"[i], (i*7919+j*104729)%(2*copyBufferSize)+1, 64*(1+(i*31+j*17)%64))
 			}
 		})
 	}
