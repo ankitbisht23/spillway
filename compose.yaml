@@ -218,15 +218,36 @@ services:
     # The image's defaults plus an explicit 15 d retention, which covers the
     # admin UI's 7 d range; the data volume keeps history across restarts
     # until docker compose down -v (UI-03, ADR-0059).
+    # Exemplar storage keeps the gateways' trace-ID exemplars (OB-06); the
+    # alert rules come from deploy/prometheus/rules (OB-05, ADR-0075).
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.path=/prometheus
       - --storage.tsdb.retention.time=15d
-    volumes: ["./deploy/compose/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro", "prometheus-data:/prometheus"]
+      - --enable-feature=exemplar-storage
+    volumes: ["./deploy/compose/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro", "./deploy/prometheus/rules:/etc/prometheus/rules:ro", "prometheus-data:/prometheus"]
     # Host 9091: 9090 is the control plane's gRPC port (docs/ports.md).
     ports: ["127.0.0.1:9091:9090"]
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9090/-/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # Redis Cluster's own metrics, per node, for the Redis dashboard and the
+  # memory alert (OB-04, OB-05, ADR-0075): Prometheus's redis job scrapes
+  # each node through its /scrape?target=… (compose's Redis has no
+  # password). No host port (docs/ports.md).
+  redis-exporter:
+    build: ./deploy/compose/redis-exporter
+    env_file: *env-local
+    environment:
+      REDIS_ADDR: redis://redis-0:6379 # its own /metrics; the redis job uses /scrape
+    read_only: true
+    depends_on:
+      redis-init: { condition: service_completed_successfully }
+    healthcheck:
+      test: ["CMD", "/busybox", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9121/health"]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -239,7 +260,9 @@ services:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-dev-only-not-secret}
       GF_ANALYTICS_REPORTING_ENABLED: "false"
       GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
-    volumes: ["./deploy/compose/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro"]
+    # Datasources, and the dashboards in deploy/grafana/dashboards through
+    # the file provider (OB-04, ADR-0075).
+    volumes: ["./deploy/compose/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro", "./deploy/compose/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro", "./deploy/grafana/dashboards:/var/lib/grafana-dashboards:ro"]
     ports: ["127.0.0.1:3000:3000"]
     depends_on: [prometheus, tempo, loki]
     healthcheck:
