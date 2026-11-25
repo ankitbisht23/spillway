@@ -11,7 +11,7 @@ FUZZTIME ?= 5s
 # Committed dev defaults first, then local overrides if present (ADR-0004).
 COMPOSE := docker compose --env-file .env.example $(if $(wildcard .env.local),--env-file .env.local)
 
-.PHONY: tools hooks certs dev test test-go test-web test-e2e fuzz test-integration proto api sqlc web-gen web-build lint lint-go lint-web lint-proto lint-api lint-sql bench bench-gate verify-m0 verify-m0-stack verify-m1 verify-m1-reload verify-m2 verify-m2-shadow verify-m3 verify-m4 verify-m5 verify-m6 accuracy chaos-redis-outage chaos-redis-primary chaos-cp-outage
+.PHONY: tools hooks certs dev test test-go test-web test-e2e fuzz test-integration proto api sqlc web-gen web-build lint lint-go lint-web lint-proto lint-api lint-sql bench bench-gate verify-m0 verify-m0-stack verify-m1 verify-m1-reload verify-m2 verify-m2-shadow verify-m3 verify-m4 verify-m5 verify-m6 accuracy chaos-redis-outage chaos-redis-primary chaos-cp-outage nfr-keys
 
 # Host-run processes and tests reach Redis Cluster nodes through this map
 # (ADR-0004). Set only here, never in compose or .env files.
@@ -332,3 +332,11 @@ chaos-redis-primary: dev
 # (ADR-0042): about 14 minutes with its setup.
 chaos-cp-outage: dev
 	@test/verify/m5.sh outage
+
+# NFR-10 (ADR-0074 §D9): 1,000,000 GCRA, then 1,000,000 sliding-window
+# limiter keys made with the limiter script on the dev stack's Redis
+# Cluster; <= 200 B of Redis memory per key (Σ Δused_memory ÷ Σ Δ DBSIZE of
+# the primaries) for each kind. Under a minute here (budget 8); the keys are
+# removed after.
+nfr-keys: dev
+	@test/load/keys.sh

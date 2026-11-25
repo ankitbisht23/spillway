@@ -29,6 +29,7 @@
 // API key revocation on every replica (NFR-09). "chaos controlplane"
 // (controlplane.go, outage.go) is the sender of make verify-m5 (ADR-0042).
 // "chaos m6" (m6.go) sets up make verify-m6 and is its probe (ADR-0061).
+// "chaos keys" (keys.go) is NFR-10's key-count sweep (ADR-0074 §D9).
 package main
 
 import (
@@ -85,6 +86,8 @@ func main() {
 		code = runControlPlane(ctx, args[1:], os.Getenv, os.Stdin, os.Stdout, os.Stderr)
 	case len(args) > 0 && args[0] == "m6":
 		code = runM6(ctx, args[1:], os.Getenv, os.Stdin, os.Stdout, os.Stderr)
+	case len(args) > 0 && args[0] == "keys":
+		code = runKeys(ctx, args[1:], os.Stdout, os.Stderr)
 	default:
 		code = run(ctx, args, os.Stdin, os.Stdout, os.Stderr)
 	}
