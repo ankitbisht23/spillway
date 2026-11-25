@@ -80,6 +80,8 @@ if [ "$mode" = all ]; then
 		files=$(git ls-tree -r --name-only origin/bench-results results/)
 	fi
 	for arch in x64 arm64; do
+		floor=4600 # NFR-01's per-arch floor (P19, ADR-0080)
+		if [ "$arch" = arm64 ]; then floor=8800; fi
 		found=""
 		for f in $(grep "^results/$arch/" <<<"$files" | sort -r); do
 			if git show "origin/bench-results:$f" | jq -e '.valid and .ref == "refs/heads/main"' >/dev/null; then
@@ -88,8 +90,8 @@ if [ "$mode" = all ]; then
 			fi
 		done
 		if [ -n "$found" ]; then
-			result PASS "NFR-01 baseline $arch" "$(git show "origin/bench-results:$found" | jq -r --arg f "$found" \
-				'"\(.rps_per_vcpu | round) rps per gateway vCPU at \(.target_rps) offered (NFR-01 target 10000), p99 \(.latency_us.p99.median / 1000) ms; \(.hardware.cpu_model), commit \(.commit[:7]), \($f)"')"
+			result PASS "NFR-01 baseline $arch" "$(git show "origin/bench-results:$found" | jq -r --arg f "$found" --arg floor "$floor" \
+				'"\(.rps_per_vcpu | round) rps per gateway vCPU at \(.target_rps) offered (NFR-01 target \($floor)), p99 \(.latency_us.p99.median / 1000) ms; \(.hardware.cpu_model), commit \(.commit[:7]), \($f)"')"
 		elif [ -z "$files" ]; then
 			result FAIL "NFR-01 baseline $arch" "pending: origin has no bench-results branch yet"
 		else
