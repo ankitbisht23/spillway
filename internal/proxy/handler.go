@@ -338,7 +338,8 @@ func (h *Handler) serve(w *responseRecorder, r *http.Request, body *countingBody
 
 	upstreamPath := route.UpstreamPath(path)
 	rp := &httputil.ReverseProxy{
-		Transport: a,
+		Transport:  a,
+		BufferPool: copyBuffers,
 		// Hop-by-hop headers are already removed from pr.Out when Rewrite
 		// runs, and so are X-Forwarded-For, -Host and -Proto, but not the
 		// other X-Forwarded-* the client sent (SEC-07).
