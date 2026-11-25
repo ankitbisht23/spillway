@@ -77,11 +77,11 @@ Each new scenario ran three times on the laptop (Apple M4 Pro, Docker Desktop 14
 | Redis latency +50 ms | 3/3 PASS | fail_open 1,900/1,900 2xx; fail_closed 1,899–1,900/1,900 503 fail_closed; degraded 950 admitted (expected 1,000 ± 10%); medians fell under the toxic (−0.03 to −0.38 ms: calls end at the budget, then the breakers open); Redis decides on every answer from +45 s |
 | Gateway `kill -9` | 3/3 PASS | 0 failed of about 4,992 on each of gateway-1 and gateway-3; gateway-2: 1 failed (transport), sent before its first observed failure 134–154 ms after the kill request |
 | `make chaos` (whole compose suite) | 1/1 PASS | Redis latency, Redis full outage, Redis primary killed, control-plane outage, gateway kill, verify-m4 and NFR-15 (medians 0.350 / 0.349 / 0.347) all PASS |
-| NFR-02 scaling (run 45626436921) | INVALID on both arches | see below |
+| NFR-02 scaling ([run 45626436921](https://github.com/ankitbisht23/spillway/actions/runs/45626436921)) | INVALID on both arches (neither PASS nor FAIL) | see below; finished by task nfr-scaling |
 
 NFR-15's ratios are below 1 because the quiet tenants' p99 is *lower* while the noisy tenant sends: at 300 rps the gateway and the Docker Desktop VM idle between requests and pay wake-up latency, which the noisy tenant's 2,000 rps keeps away. The rule (< 1.10) is met by a wide margin; the effect is reported, not corrected.
 
-### NFR-02 on the runners: not measurable as written (for the user)
+### NFR-02 on the runners: INVALID, finished by task nfr-scaling
 
 | Arch, CPU model | n | P (2xx/s) | R (rps) | probe vCPU: gateway / loadgen / upstream | gateway-bound |
 | --- | --- | --- | --- | --- | --- |
@@ -90,13 +90,16 @@ NFR-15's ratios are below 1 because the quiet tenants' p99 is *lower* while the 
 | arm64, Neoverse N2 | 1 | 11,697 | 10,500 | **0.947–0.949** / 0.62 / 0.33 | no: gateway just under 0.95 |
 | arm64, Neoverse N2 | 2 | 19,254 | 17,300 | **1.69–1.70** / 0.84 / 0.47 | no: gateway under 1.90 |
 
-Both measured run sets were valid on both arches (5 × 3 min at R, every request 2xx). S would be 1.949 on x64 and 1.648 on arm64, but neither result is valid, so neither passes or fails NFR-02. On x64 the 1-vCPU loadgen saturates before the 2-vCPU gateway does (not the SMT layout, so P29 does not apply); on arm64 neither loadgen nor the upstream reaches 0.90 vCPU, yet the gateway does not reach 0.95 × n; why is not established (candidates: work charged to no container's cgroup, such as the bridge network's softirq processing, or loadgen's single dispatch loop at 57,600 rps offered). ADR-0074 says nfr-load stops for the user in this case; the choice is the user's (see the PR description). The jobs took 40 minutes each (budget 60).
+Both measured run sets were valid on both arches (5 × 3 min at R, every request 2xx). S would be 1.949 on x64 and 1.648 on arm64, but neither result is valid, so neither passes or fails NFR-02. On x64 the 1-vCPU loadgen saturates before the 2-vCPU gateway does (not the SMT layout, so P29 does not apply); on arm64 neither loadgen nor the upstream reaches 0.90 vCPU, yet the gateway does not reach 0.95 × n; why is not established (candidates: work charged to no container's cgroup, such as the bridge network's softirq processing, or loadgen's single dispatch loop at 57,600 rps offered). The jobs took 40 minutes each (budget 60).
+
+20. **NFR-02 moves to task nfr-scaling (user decision, 2026-11-25).** ADR-0074 says nfr-load stops for the user when NFR-02 cannot be measured as written. The user decided to ship this task with NFR-02 open: [run 45626436921](https://github.com/ankitbisht23/spillway/actions/runs/45626436921) is recorded as INVALID on both arches (x64: loadgen saturated at n = 2, 0.93–0.94 vCPU; arm64: gateway 0.947–0.949 vCPU at n = 1 and 1.69–1.70 at n = 2, under 0.95 × n), so it neither passes nor fails NFR-02, and the separate next task **nfr-scaling** finishes NFR-02. This task delivers `scaling.sh` and `bench.yml -f mode=scaling` as the harness; no pass rule is changed and the run was not repeated.
 
 ## Consequences
 
 - One make target per scenario; `make chaos` runs the compose suite in about 40 minutes.
 - loadgen and cmd/chaos grow the per-tenant mode, `serve`, `keys`, `latency` and `gwkill`, each unit-tested; `chaos keys` also has an integration test.
 - A scaling result is stored on `bench-results` but never compared.
+- NFR-02 stays open after this task; nfr-scaling completes it.
 
 ## Alternatives considered
 
