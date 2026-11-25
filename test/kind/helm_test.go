@@ -379,4 +379,11 @@ func TestChartRequiredValues(t *testing.T) {
 	if err == nil || !strings.Contains(stderr, "networkPolicy.kubeletCIDRs") {
 		t.Errorf("no kubeletCIDRs: %v %s", err, stderr)
 	}
+	// The pod names (the replica IDs) must be replicas of the fleet.
+	for _, f := range []string{"gateway-fleet", "spillway-gateway-x", ""} {
+		if _, stderr, err := render(t, true, "--set", "gateway.stream.fleetName="+f); err == nil || !strings.Contains(stderr, "gateway.stream.fleetName") {
+			t.Errorf("fleetName %q rendered: %v %s", f, err, stderr)
+		}
+	}
+	mustRender(t, "--set", "gateway.stream.fleetName=spillway")
 }

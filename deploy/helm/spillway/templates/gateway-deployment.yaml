@@ -6,6 +6,11 @@ ID; the snapshot on an emptyDir (CP-07); surge 1, unavailable 0 and a
 preStop sleep, so a rolling restart fails no request (NFR-14).
 */}}
 {{- $g := .Values.gateway }}
+{{- /* Pod names, the replica IDs, start with spillway-gateway-; the control
+plane accepts them only from a fleet whose name they start with. */}}
+{{- if not (hasPrefix (printf "%s-" $g.stream.fleetName) "spillway-gateway-") }}
+{{- fail "gateway.stream.fleetName: the pod names (spillway-gateway-…) must start with it and '-' (ADR-0075 §D11)" }}
+{{- end }}
 {{- $cpHost := printf "spillway-controlplane.%s.svc" .Release.Namespace }}
 apiVersion: apps/v1
 kind: Deployment
