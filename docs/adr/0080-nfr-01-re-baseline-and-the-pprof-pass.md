@@ -66,12 +66,43 @@ Laptop capacity (exploratory, `test/load/bench.sh` layout, `BENCH_RATE=40000 BEN
 | 1 | 21,080 rps per gateway vCPU (21,000–21,240), p99 528 ms | 27,951 (27,781–28,500), p99 402 ms | +32.6% |
 | 2 | 20,450 (20,443–20,580), p99 535 ms | 28,245 (27,580–28,569), p99 389 ms | +38.1% |
 
-The runner numbers after the pass are measured by the branch's `bench.yml` dispatches (ADR-0073 §D1) and reported in the PR.
+The runner numbers after the pass are measured by the branch's `bench.yml` dispatches (ADR-0073 §D1) and reported in the PR; they are below.
+
+### Runner results after the pass
+
+All on 8573118 (this branch), stored on `origin/bench-results` with ref `refs/heads/m7-perf`, so none of them is a baseline (ADR-0003). Each run set is 5 runs of 3 min after a 30 s warm-up, gateway on 1 vCPU (ADR-0015, ADR-0016).
+
+NFR-01 at the floors (`gh workflow run bench.yml --ref m7-perf`, no inputs):
+
+| Run | Arch | CPU model | Valid | Median rps per gateway vCPU (min–max) | p99 median (min–max), spread | Result file |
+| --- | --- | --- | --- | --- | --- | --- |
+| 45593397217 | x64 | AMD EPYC 9V45 | yes | 4,600 in all 5 runs | 2.703 ms (2.433–3.029), 0.22 | `results/x64/20261125T101635Z.json` |
+| 45593397217 | arm64 | Neoverse N2 (`implementer 0x41 part 0xd49`) | **no**: run 3 reached 8,651 rps, below the 8,712 (99% of 8,800) needed | 8,800 (8,651–8,800) | 269.6 ms (80.2–1,230.8), 4.27 | `results/arm64/20261125T101637Z.json` |
+| 45596685407 | x64 | Intel Xeon Platinum 8370C | yes | 4,600 in all 5 runs | 2.437 ms (2.181–2.595), 0.17 | `results/x64/20261125T103707Z.json` |
+| 45596685407 | arm64 | Neoverse N2 (`implementer 0x41 part 0xd49`) | yes | 8,800 in all 5 runs | 13.0 ms (7.7–20.8), 1.01 | `results/arm64/20261125T103709Z.json` |
+
+Run 45596685407 is a re-dispatch of the whole NFR-01 run set after the invalid arm64 result. **It was the user's explicit decision (2026-11-25), authorized as a one-off and not a rule**: it adds no re-run-on-invalid rule to NFR-01, the bench gate or any verify check, and the invalid run set stays stored as invalid. Both run sets are reported here.
+
+Capacity at 20,000 (`-f rate_x64=20000 -f rate_arm64=20000`, information only, invalid by design since the gateway saturates), compared by CPU model only:
+
+| Arch | CPU model | Main c490e68 (run 45573396662) | M1 7e404da (run 41810064213) | This branch 8573118 (run 45593415660) |
+| --- | --- | --- | --- | --- |
+| arm64 | Neoverse N2 | 7,070 (7,049–7,130) | 9,924 | 10,889 (10,797–11,015), spread 2.0% |
+| x64 | AMD EPYC 7763 | 5,208 (4,974–5,291) | 5,369 | none: no after-pass x64 run landed on this model |
+| x64 | AMD EPYC 9V45 | none | none | 14,325 (14,008–14,893), spread 6.2% |
+
+On the same arm64 CPU model the pass raised capacity from 7,070 to 10,889 rps per gateway vCPU (+54%), above both the 8,800 floor and M1's 9,924. The x64 numbers from different CPU models are not comparable with each other (ADR-0016, NFR-05), so the table gives no x64 before/after change.
+
+**The x64 runner pool rotated CPU models today.** `ubuntu-latest`'s x64 baseline (1310f0c, run 41817046132) and main's capacity run this morning were on the AMD EPYC 7763; this branch's x64 runs got an AMD EPYC 9V45 and an Intel Xeon Platinum 8370C (the x64 image also moved from Ubuntu 24.04.5 to 26.04.1 between M1 and this morning's main run, on the 7763). The x64 floor is met on both models seen, but no after-pass x64 result exists on the 7763, which is the model NFR-01's text names for x64 ("each on its baseline's recorded CPU model"). This ADR changes no rule. Flagged for:
+
+- **the bench-gate task**: its same-CPU-model rule (ADR-0073) will see a `first` verdict on each new x64 model, and a nightly run may land on any of the three, so x64 may go several nights with no comparable baseline;
+- **the user**: whether x64 NFR-01 for this pass needs a result on the 7763 (one may come from a later dispatch or the nightly runs, which cannot pick the model), or whether a valid run set at the floor on another model counts. Until the user decides, x64 NFR-01 on the baseline's CPU model is not shown for this commit; arm64 NFR-01 is (run 45596685407).
 
 ## Consequences
 
 - NFR-01 is judged against the per-arch floors from now on: by the perf task's branch dispatch, the bench gate's nightly runs (ADR-0073 §D8) and verify-m7.
-- arm64's capacity on main (7,070) is below its 8,800 floor. NFR-01 on arm64 passes only if the pass's gain carries over to the runner; if it does not, the perf task stops as blocked with the numbers and the user decides (more work, or a lower arm64 floor backed by a saturating run, ADR-0016). Where arm64 lost 29% since M1 while x64 lost 3% is not known: the runner, or code from M2–M7 whose cost differs by arch. A capacity run of an M1 commit on today's runner would tell them apart; it needs a branch or tag at that commit.
+- arm64's capacity on main (7,070) was below its 8,800 floor; after the pass it is 10,889 on the same CPU model, and a valid run set at 8,800 exists for 8573118 (the user's one-off re-dispatch, above). Where arm64 lost 29% between M1 and main while x64 lost 3% is still not known: the runner, or code from M2–M7 whose cost differs by arch. A capacity run of an M1 commit on today's runner would tell them apart; it needs a branch or tag at that commit.
+- x64 runs can land on at least three CPU models (EPYC 7763, EPYC 9V45, Xeon 8370C). NFR-01 and NFR-05 compare by CPU model, so x64 results are fewer per model than runs; the bench-gate task and the user are told (above). No rule is changed here.
 - The copy-buffer pool keeps up to a few 32 KB buffers per P between GCs instead of allocating one per response.
 
 ## Alternatives considered
