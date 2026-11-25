@@ -1,0 +1,72 @@
+{
+  "timestamp": "2026-11-20T03:17:00Z",
+  "commit": "1111111111111111111111111111111111111111",
+  "ref": "refs/heads/main",
+  "run_url": "https://github.com/ankitbisht23/spillway/actions/runs/1",
+  "arch": "x64",
+  "valid": true,
+  "invalid_reasons": [],
+  "target_rps": 4600,
+  "rps_per_vcpu": 4600,
+  "achieved_rps": {
+    "median": 4600,
+    "min": 4590,
+    "max": 4600,
+    "spread": 0.002
+  },
+  "latency_us": {
+    "p50": {
+      "median": 372,
+      "min": 371,
+      "max": 376,
+      "spread": 0.013440860215053764
+    },
+    "p99": {
+      "median": 2500,
+      "min": 2200,
+      "max": 2800,
+      "spread": 0.24
+    },
+    "p99_9": {
+      "median": 5239,
+      "min": 4363,
+      "max": 17791,
+      "spread": 2.563084558121779
+    }
+  },
+  "setup": {
+    "gateway_vcpus": 1,
+    "cpus": {
+      "gateway": "0",
+      "loadgen": "1-2",
+      "upstream": "3"
+    },
+    "url": "http://gateway:8000/bytes/1024",
+    "protocol": "HTTP/1.1",
+    "warmup": "30s",
+    "duration": "3m",
+    "access_log_sample_rate": 0.01,
+    "trace_sample_ratio": 0.01
+  },
+  "hardware": {
+    "cpu_model": "Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz",
+    "cpus": 4,
+    "memory_bytes": 16758390784,
+    "os": "Ubuntu 26.04.1 LTS",
+    "kernel": "7.0.0-1020-azure",
+    "topology": [
+      {
+        "cpu": 0,
+        "core": 0,
+        "socket": 0,
+        "thread_siblings": "0-1"
+      },
+      {
+        "cpu": 1,
+        "core": 0,
+        "socket": 0,
+        "thread_siblings": "0-1"
+      }
+    ]
+  }
+}

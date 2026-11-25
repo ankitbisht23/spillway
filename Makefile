@@ -11,7 +11,7 @@ FUZZTIME ?= 5s
 # Committed dev defaults first, then local overrides if present (ADR-0004).
 COMPOSE := docker compose --env-file .env.example $(if $(wildcard .env.local),--env-file .env.local)
 
-.PHONY: tools hooks certs dev test test-go test-web test-e2e fuzz test-integration proto api sqlc web-gen web-build lint lint-go lint-web lint-proto lint-api lint-sql bench verify-m0 verify-m0-stack verify-m1 verify-m1-reload verify-m2 verify-m2-shadow verify-m3 verify-m4 verify-m5 verify-m6 accuracy chaos-redis-outage chaos-redis-primary chaos-cp-outage
+.PHONY: tools hooks certs dev test test-go test-web test-e2e fuzz test-integration proto api sqlc web-gen web-build lint lint-go lint-web lint-proto lint-api lint-sql bench bench-gate verify-m0 verify-m0-stack verify-m1 verify-m1-reload verify-m2 verify-m2-shadow verify-m3 verify-m4 verify-m5 verify-m6 accuracy chaos-redis-outage chaos-redis-primary chaos-cp-outage
 
 # Host-run processes and tests reach Redis Cluster nodes through this map
 # (ADR-0004). Set only here, never in compose or .env files.
@@ -221,6 +221,19 @@ lint-sql: tool-sqlc
 
 bench:
 	go test -run '^$$' -bench . -benchmem ./...
+
+# The NFR-05 gate (ADR-0073 §D8) on a local bench.sh result, against a copy
+# of origin/bench-results in bin/bench-results and the newest local v* tag:
+# prints the verdict and the summary bench.yml writes, and changes no file.
+#   make bench-gate FILE=result.json
+bench-gate:
+	@test -n "$(FILE)" || { echo "usage: make bench-gate FILE=<result.json>"; exit 2; }
+	@git fetch -q origin bench-results
+	@rm -rf bin/bench-results && mkdir -p bin/bench-results
+	@git archive origin/bench-results results | tar -x -C bin/bench-results
+	@tag=$$(git tag -l 'v*' | sort -V | tail -n 1); \
+		go run ./cmd/benchgate -results bin/bench-results -candidate "$(FILE)" \
+			$$([ -z "$$tag" ] || echo "-release-tag $$tag -release-commit $$(git rev-parse "$$tag^{commit}")")
 
 # Checks that measure latency run the gateways at the benchmarks' fixed 1%
 # trace head ratio (OB-02, D6, ADR-0030): their dev prerequisite recreates
