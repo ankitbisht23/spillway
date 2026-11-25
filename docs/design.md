@@ -527,7 +527,7 @@ Limiter maths is proven with a fake clock and property tests, distributed accura
 | Integration | Gateway + Redis + Postgres + mock upstreams end to end | docker compose (Redis Cluster); testcontainers-go for Postgres and single-node cases |
 | Contract | Proto and OpenAPI changes stay backward compatible | `buf breaking` (from M1), `oasdiff` (from M5) |
 | Accuracy | Admitted vs allowed per key across 1, 3, 5 replicas | Custom Go harness (below) |
-| Load | Throughput, added latency, scaling, regressions | `cmd/loadgen` (open model, HDR; fails a run below 99% of its target rate) for benchmarks, k6 for scenarios; results on the `bench-results` branch |
+| Load | Throughput, added latency, scaling, regressions | `cmd/loadgen` (open model, HDR; fails a run below 99% of its target rate) for benchmarks and load scenarios, `cmd/chaos` for chaos scenarios; results on the `bench-results` branch |
 | Chaos | Failure modes, draining, outage survival | toxiproxy, `docker kill`, `docker pause` |
 | UI | Screens and hooks against a mocked network (MSW) with Vitest and Testing Library; main flows against the compose stack with a real Keycloak login (Playwright) | Vitest, Testing Library, Playwright |
 
@@ -540,7 +540,7 @@ Limiter maths is proven with a fake clock and property tests, distributed accura
 
 ### Benchmark method
 
-1. **Where:** GitHub Actions public-repo runners (4 vCPU, 16 GB) on two architectures, x64 `ubuntu-latest` and arm64 `ubuntu-24.04-arm`, each with its own baseline; manual trigger from M1, nightly from M7. Containers pinned with `--cpuset-cpus`: gateway 1 vCPU, load generator 2, Redis and mock upstream 1; scaling runs (NFR-02) use gateway 1 then 2 vCPUs, loadgen 1, upstream 1 and no Redis. Throughput runs use the plain-HTTP listener; TLS runs are labelled separately. A run is valid only if loadgen hit its target rate. Exploratory runs use the same layout on a laptop; every result records its hardware, including the CPU model.
+1. **Where:** GitHub Actions public-repo runners (4 vCPU, 16 GB) on two architectures, x64 `ubuntu-latest` and arm64 `ubuntu-24.04-arm`, each with its own baseline; manual trigger from M1, nightly from M7. Containers pinned with `--cpuset-cpus`: gateway 1 vCPU, load generator 2, Redis and mock upstream 1; scaling runs (NFR-02) use gateway 1 then 2 vCPUs (CPU 0, then CPUs 0 and 2, so the two never share an SMT core), loadgen 1, a no-op upstream (`loadgen serve`) on 1 and no Redis, and are valid only if the gateway, not loadgen or the upstream, saturates its CPUs. Throughput runs use the plain-HTTP listener; TLS runs are labelled separately. A run is valid only if loadgen hit its target rate. Exploratory runs use the same layout on a laptop; every result records its hardware, including the CPU model.
 2. **Load model:** open model at a constant arrival rate, never closed-loop, so slow responses cannot hide latency (coordinated omission). Latency goes into HDR histograms; report p50, p99 and p99.9.
 3. **Protocol:** 30 s warm-up, 3 min measured, 5 runs; report the median and the spread.
 4. **Regression gate:** results land as JSON on the `bench-results` branch (`results/<arch>/<UTC-timestamp>.json`); the baseline is the newest result for the same arch from a passing run on `main`, and each run is also compared against the last release’s baseline, which catches slow creep that no single night shows. Comparisons are made only between results with the same recorded CPU model, target rate and setup. The nightly run starts at 03:17 UTC. CI flags a run when its median shows a > 10% drop in throughput or rise in p99 and the change exceeds the baseline's run-to-run spread; a flagged run re-runs once and fails only if the re-run confirms it. Failed runs are stored but never become a baseline (ADR-0003). README numbers are updated by PR.
@@ -792,7 +792,7 @@ spillway/
 | Telemetry | Prometheus client (scraped from admin ports); OpenTelemetry SDK with OTLP for traces; `log/slog` with JSON to stdout plus an OTLP handler for logs |
 | UI | React, TypeScript, Vite, TanStack Query and Router, uPlot, pnpm |
 | Identity (dev, demo) | Keycloak (OIDC, PKCE; JWT issuer for tests) |
-| Testing | testcontainers-go, `rapid`, Go fuzzing, `cmd/loadgen`, k6, toxiproxy, Vitest, Playwright |
+| Testing | testcontainers-go, `rapid`, Go fuzzing, `cmd/loadgen`, toxiproxy, Vitest, Playwright |
 | Deploy | Docker, docker compose (every Spillway process as a compose service, ADR-0004), Helm, kind (gateway as the edge, no ingress controller) |
 | Supply chain | Syft SBOM, cosign keyless signing, Dependabot, `govulncheck`, Actions pinned to SHAs, gitleaks |
 | CI | GitHub Actions, one aggregate `ci-ok` required check: lint, unit, integration (compose), fuzz smoke, vuln scan (`govulncheck`, `pnpm audit`), gitleaks, multi-arch image build from M0; `buf lint` / `buf breaking` from M1; `oasdiff` from M5; UI tests from M6; nightly benchmark from M7 |
