@@ -16,7 +16,7 @@
 name: bench
 # Names the mode, rates and gate, so a script can find its run (ADR-0074).
 run-name: >-
-  bench ${{ inputs.mode || 'throughput' }}
+  EXPLORATORY diagnostics, not a result: bench ${{ inputs.mode || 'throughput' }}
   x64=${{ inputs.rate_x64 || 4600 }} arm64=${{ inputs.rate_arm64 || 8800 }}
   gate=${{ (github.event_name == 'schedule' || inputs.gate) && inputs.mode != 'scaling' }}
 
@@ -111,6 +111,10 @@ jobs:
         env:
           BENCH_RATE: ${{ matrix.rate }}
         run: |
+          # EXPLORATORY (task nfr-scaling): diagnostics only; stops before the gate, so nothing is stored.
+          test/load/scaling-diag.sh | tee diag.txt
+          { echo '### EXPLORATORY diagnostics, not an NFR-02 result'; echo '```'; cat diag.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          exit 1
           test/load/scaling.sh > result.json
           jq -r '"### Scaling (NFR-02), \(.arch): \(if .valid then (if .pass then "PASS" else "FAIL" end) else "INVALID" end)\n",
             "- CPU model: **\(.hardware.cpu_model)**; commit \(.commit[:7]) on `\(.ref)`",
