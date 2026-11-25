@@ -18,6 +18,8 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+
+	"github.com/ankitbisht23/spillway/internal/telemetry"
 )
 
 // logBuffer collects JSON log lines written from any goroutine.
@@ -337,5 +339,25 @@ func TestUpgrade(t *testing.T) {
 	_ = conn.Close()
 	if line := g.logs.access(t, "up-1"); line["status"] != 101.0 {
 		t.Errorf("access log status = %v, want 101", line["status"])
+	}
+}
+
+// TestHeaderNamesCanonical: the header names the hot path sets and reads are
+// spelled as http.CanonicalHeaderKey returns them, so that no lookup costs a
+// canonical copy (NFR-01), and they name the fields their documents do.
+func TestHeaderNamesCanonical(t *testing.T) {
+	for spelled, name := range map[string]string{
+		"RateLimit-Policy":       rateLimitPolicyHeader,
+		"RateLimit":              rateLimitHeader,
+		"X-API-Key":              apiKeyHeader,
+		"Spillway-Decision-Time": decisionTimeHeader,
+		"Spillway-Redis-Error":   redisErrorHeader,
+		"Spillway-Attempts":      attemptsHeader,
+		"Spillway-Deadline-Ms":   DeadlineHeader,
+		"X-Request-Id":           telemetry.RequestIDHeader,
+	} {
+		if want := http.CanonicalHeaderKey(spelled); name != want {
+			t.Errorf("%s is spelled %q, want %q", spelled, name, want)
+		}
 	}
 }

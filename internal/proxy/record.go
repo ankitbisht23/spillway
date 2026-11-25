@@ -34,14 +34,22 @@ func (w *responseRecorder) WriteHeader(code int) {
 	w.ResponseWriter.WriteHeader(code)
 }
 
+// The RateLimit-Policy and RateLimit fields (ADR-0018), spelled as
+// http.CanonicalHeaderKey returns them, as Header.Set stores and sends them:
+// a name in another case costs a canonical copy on every set (NFR-01).
+const (
+	rateLimitPolicyHeader = "Ratelimit-Policy"
+	rateLimitHeader       = "Ratelimit"
+)
+
 // setRateLimit sets the request's RateLimit-Policy and RateLimit fields in h,
 // replacing any the upstream sent; with none, the upstream's pass through.
 // Spillway-Decision-Time and Spillway-Redis-Error are the gateway's alone: the
 // upstream's never pass.
 func (w *responseRecorder) setRateLimit(h http.Header) {
 	if w.rateLimit != "" {
-		h.Set("RateLimit-Policy", w.rateLimitPolicy)
-		h.Set("RateLimit", w.rateLimit)
+		h.Set(rateLimitPolicyHeader, w.rateLimitPolicy)
+		h.Set(rateLimitHeader, w.rateLimit)
 	}
 	h.Del(decisionTimeHeader)
 	if w.decisionTime != "" {

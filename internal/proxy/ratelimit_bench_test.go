@@ -21,9 +21,9 @@ import (
 	"github.com/ankitbisht23/spillway/internal/telemetry"
 )
 
-// stubRedis answers every call at once with the same decision: an allow, or
-// a deny by the call's first limit with a 60 s retry-after. It counts the
-// calls it answers.
+// stubRedis answers every call at once with the same decision: an allow,
+// granting a batched limit its lease_k, or a deny by the call's first limit
+// with a 60 s retry-after. It counts the calls it answers.
 type stubRedis struct {
 	deny  bool
 	calls atomic.Int64
@@ -31,9 +31,12 @@ type stubRedis struct {
 
 func (s *stubRedis) Call(_ context.Context, _ int64, limits []rlredis.Limit) (rlredis.Result, error) {
 	s.calls.Add(1)
-	res := rlredis.Result{Allowed: !s.deny, DenyingLimit: -1, NowUS: 1, Limits: make([]ratelimit.Decision, len(limits))}
+	res := rlredis.Result{Allowed: !s.deny, DenyingLimit: -1, NowUS: 1, Limits: make([]ratelimit.Decision, len(limits)), Granted: make([]int64, len(limits))}
 	for i := range res.Limits {
 		res.Limits[i] = ratelimit.Decision{Allowed: !s.deny, Remaining: 5, ResetAfter: time.Second}
+		if !s.deny {
+			res.Granted[i] = max(limits[i].LeaseK, 1)
+		}
 	}
 	if s.deny {
 		res.DenyingLimit, res.RetryAfter = 0, time.Minute

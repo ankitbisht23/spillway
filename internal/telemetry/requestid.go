@@ -38,6 +38,9 @@ func validRequestID(id string) bool {
 // TraceID returns the trace ID of a valid W3C traceparent in h, or "" (GW-22).
 // The gateway forwards traceparent unchanged; its own spans arrive with OB-02.
 func TraceID(h http.Header) string {
+	if len(h["Traceparent"]) == 0 {
+		return "" // what Extract finds; looked up by the canonical name, which costs no copy (NFR-01)
+	}
 	sc := trace.SpanContextFromContext(propagation.TraceContext{}.Extract(context.Background(), propagation.HeaderCarrier(h)))
 	if !sc.IsValid() {
 		return ""

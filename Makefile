@@ -41,6 +41,7 @@ $(eval $(call tool,protoc-gen-go,google.golang.org/protobuf/cmd/protoc-gen-go,v1
 $(eval $(call tool,protoc-gen-go-grpc,google.golang.org/grpc/cmd/protoc-gen-go-grpc,v1.6.2))
 $(eval $(call tool,oapi-codegen,github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen,v2.8.2))
 $(eval $(call tool,mkcert,filippo.io/mkcert,v1.4.4))
+$(eval $(call tool,benchstat,golang.org/x/perf/cmd/benchstat,v0.0.0-20261009192801-be2c69fb417e))
 
 tools: $(TOOL_STAMPS)
 

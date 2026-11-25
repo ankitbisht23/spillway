@@ -88,3 +88,4 @@ Decisions that shape Spillway and are not obvious from the code or from docs/des
 | [0077](0077-quotas-implementation-details.md) | Quotas: implementation details | Accepted | 2026-11-25 |
 | [0078](0078-hardening-carry-over-implementation-details.md) | Hardening carry-over: implementation details and the boundary 503s | Accepted | 2026-11-25 |
 | [0079](0079-keep-redis-connections-after-a-timed-out-limiter-call.md) | Keep Redis connections after a timed-out limiter call (rejected: boundary 503s a known limit) | Rejected | 2026-11-25 |
+| [0080](0080-nfr-01-re-baseline-and-the-pprof-pass.md) | NFR-01 re-baseline (P19) and the pprof pass | Accepted | 2026-11-25 |
