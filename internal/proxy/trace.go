@@ -33,11 +33,33 @@ const TracerName = "github.com/ankitbisht23/spillway/internal/proxy"
 
 var traceContext propagation.TraceContext
 
+// traceCarrier is propagation.HeaderCarrier with the W3C Trace Context
+// fields, which the propagator names in lower case, looked up by their
+// canonical names: HeaderCarrier would make a canonical copy of the name on
+// every request (NFR-01).
+type traceCarrier http.Header
+
+func (c traceCarrier) Get(key string) string { return http.Header(c).Get(traceField(key)) }
+
+func (c traceCarrier) Set(key, value string) { http.Header(c).Set(traceField(key), value) }
+
+func (c traceCarrier) Keys() []string { return propagation.HeaderCarrier(c).Keys() }
+
+func traceField(key string) string {
+	switch key {
+	case "traceparent":
+		return "Traceparent"
+	case "tracestate":
+		return "Tracestate"
+	}
+	return key
+}
+
 // startServerSpan starts r's server span, continuing a valid traceparent
 // the client sent (and its tracestate) or starting a new trace. The span is
 // named once the route is known (endServerSpan).
 func startServerSpan(tracer trace.Tracer, r *http.Request) (*http.Request, trace.Span) {
-	ctx := traceContext.Extract(r.Context(), propagation.HeaderCarrier(r.Header))
+	ctx := traceContext.Extract(r.Context(), traceCarrier(r.Header))
 	ctx, span := tracer.Start(ctx, "HTTP", trace.WithSpanKind(trace.SpanKindServer))
 	return r.WithContext(ctx), span
 }
@@ -158,7 +180,7 @@ func (a *attempts) startAttemptSpan(ctx context.Context, req *http.Request, ep *
 	ctx, span := a.h.tracer.Start(ctx, "upstream attempt", trace.WithSpanKind(trace.SpanKindClient))
 	// The client's tracestate goes on only with its trace (startServerSpan).
 	req.Header.Del("Tracestate")
-	traceContext.Inject(ctx, propagation.HeaderCarrier(req.Header))
+	traceContext.Inject(ctx, traceCarrier(req.Header))
 	if !span.IsRecording() {
 		return span
 	}

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
@@ -656,5 +658,28 @@ func TestUnsampledAllocations(t *testing.T) {
 	b := testing.AllocsPerRun(200, func() { serveBytes(t, unsampled) })
 	if b-a > 24 {
 		t.Errorf("unsampled request: %.0f allocations, tracing off: %.0f; want at most 24 more", b, a)
+	}
+}
+
+// TestTraceCarrier: traceCarrier reads and writes what HeaderCarrier does,
+// the W3C fields included, without a canonical copy of their names.
+func TestTraceCarrier(t *testing.T) {
+	for _, key := range []string{"traceparent", "tracestate", "Traceparent", "X-Other", "x-other"} {
+		a, b := http.Header{}, http.Header{}
+		propagation.HeaderCarrier(a).Set(key, "v")
+		traceCarrier(b).Set(key, "v")
+		if !reflect.DeepEqual(a, b) {
+			t.Errorf("Set(%q): %v, HeaderCarrier: %v", key, b, a)
+		}
+		if got, want := traceCarrier(a).Get(key), propagation.HeaderCarrier(a).Get(key); got != want {
+			t.Errorf("Get(%q) = %q, HeaderCarrier: %q", key, got, want)
+		}
+	}
+	h := http.Header{"Traceparent": {"x"}}
+	if n := testing.AllocsPerRun(100, func() { _ = traceCarrier(h).Get("traceparent") }); n != 0 {
+		t.Errorf("Get(traceparent): %.0f allocations, want 0", n)
+	}
+	if got, want := traceCarrier(h).Keys(), propagation.HeaderCarrier(h).Keys(); !reflect.DeepEqual(got, want) {
+		t.Errorf("Keys() = %q, HeaderCarrier: %q", got, want)
 	}
 }
