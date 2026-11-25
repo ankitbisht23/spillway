@@ -140,14 +140,16 @@ type Auth struct {
 // Redis itself; Warm and calls do (GW-24), and the health checks PING only
 // the nodes those have met.
 //
-// MaxRetries 0 stops the node clients from retrying, and
-// ContextTimeoutEnabled makes a call's deadline reach the socket (RL-16).
-// DisableRoutingPolicies sends each call straight to its slot's node: with
-// routing policies on, go-redis fetches COMMAND on the first call, inside
-// that call's budget, and takes one client-wide lock on every call
-// (ADR-0025).
+// MaxRetries 0 stops the node clients from retrying (RL-16). A call's
+// deadline does not reach the socket: Call and Refund answer at the
+// deadline, and the connection's reads and writes are bounded by
+// hardTimeout, so a reply that comes after the budget is read off and the
+// connection goes back to the pool (ADR-0079). DisableRoutingPolicies sends
+// each call straight to its slot's node: with routing policies on, go-redis
+// fetches COMMAND on the first call, inside that call's budget, and takes
+// one client-wide lock on every call (ADR-0025).
 func NewClient(addrs []string, addrMap map[string]string, auth Auth, clock ratelimit.Clock, log *slog.Logger) *Client {
-	opt := &goredis.ClusterOptions{Addrs: addrs, MaxRetries: 0, ContextTimeoutEnabled: true, DisableRoutingPolicies: true,
+	opt := &goredis.ClusterOptions{Addrs: addrs, MaxRetries: 0, ReadTimeout: hardTimeout, WriteTimeout: hardTimeout, DisableRoutingPolicies: true,
 		Username: auth.Username, Password: auth.Password.Reveal()}
 	if addrMap != nil {
 		opt.Dialer = Dialer(addrMap)
@@ -162,6 +164,13 @@ func NewClient(addrs []string, addrMap map[string]string, auth Auth, clock ratel
 	c.checks.Go(func() { c.health(ctx) })
 	return c
 }
+
+// hardTimeout bounds every read and write on a request connection, the
+// handshake of a new one included: a call's late reply is read off within
+// it, and a connection to a node that stopped answering is closed after it,
+// so a stuck node holds at most the pool's connections, each for at most
+// hardTimeout (ADR-0079).
+const hardTimeout = time.Second
 
 // reload reloads the slot map in the background; go-redis runs at most one
 // reload per 200 ms.
@@ -390,6 +399,42 @@ func (c *Client) run(ctx context.Context, args []any, limits []Limit) (Result, e
 	if epoch != "" {
 		keys = append(keys, epoch)
 	}
+	// The call runs on its own goroutine and the caller has its answer when
+	// ctx ends, a timeout as before; the goroutine finishes the call, so a
+	// late reply is read off and its connection kept (ADR-0079).
+	p := &pending{done: make(chan struct{})}
+	go func() {
+		defer close(p.done)
+		p.res, p.err = c.call(ctx, p, keys, args, len(limits))
+	}()
+	select {
+	case <-p.done:
+		return p.res, p.err
+	case <-ctx.Done():
+	}
+	select {
+	case <-p.done: // finished as ctx ended
+		return p.res, p.err
+	default:
+	}
+	node := ""
+	if addr := p.node.Load(); addr != nil {
+		node = *addr
+	}
+	return Result{}, &Error{Kind: KindTimeout, Node: node, Err: ctx.Err()}
+}
+
+// pending is one call in progress.
+type pending struct {
+	node atomic.Pointer[string] // the primary's address, once known
+	done chan struct{}          // closed when res and err are set
+	res  Result
+	err  error
+}
+
+// call routes one script call to its slot's primary, through the node's
+// breaker, and sends it. It records the primary's address in p.
+func (c *Client) call(ctx context.Context, p *pending, keys []string, args []any, n int) (Result, error) {
 	node, err := c.rdb.MasterForKey(ctx, keys[0])
 	if err != nil {
 		kind := KindConn
@@ -399,10 +444,11 @@ func (c *Client) run(ctx context.Context, args []any, limits []Limit) (Result, e
 		return Result{}, &Error{Kind: kind, Err: err}
 	}
 	addr := node.Options().Addr
+	p.node.Store(&addr)
 	if err := c.breakers.allow(addr); err != nil {
 		return Result{}, &Error{Kind: KindConn, Node: addr, Err: err}
 	}
-	res, err := c.send(ctx, node, addr, keys, args, len(limits))
+	res, err := c.send(ctx, node, addr, keys, args, n)
 	replied, broken := outcome(err)
 	c.breakers.done(addr, replied, broken)
 	return res, err
@@ -429,14 +475,21 @@ func outcome(err error) (replied, broken bool) {
 }
 
 // send runs the script on node, the primary at addr, once its version is
-// checked.
+// checked. A script call is never sent once ctx has ended: the caller has
+// had its answer (ADR-0079).
 func (c *Client) send(ctx context.Context, node *goredis.Client, addr string, keys []string, args []any, n int) (Result, error) {
 	if err := c.checkVersion(ctx, node, addr); err != nil {
 		return Result{}, err
 	}
+	if err := ctx.Err(); err != nil {
+		return Result{}, classify(ctx, addr, err)
+	}
 	cmd := scriptCmd(ctx, "evalsha", scriptSHA, keys, args)
 	err := c.rdb.Process(ctx, cmd)
 	if isNoScript(err) {
+		if ctx.Err() != nil {
+			return Result{}, classify(ctx, addr, ctx.Err())
+		}
 		cmd = scriptCmd(ctx, "eval", script, keys, args)
 		err = c.rdb.Process(ctx, cmd)
 	}

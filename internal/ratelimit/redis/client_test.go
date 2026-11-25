@@ -259,6 +259,7 @@ type fakeNode struct {
 	setup        atomic.Int64 // ns each HELLO and CLUSTER reply is held back: connection and slot-map cost
 	infoFailures atomic.Int32 // INFO replies still to fail with LOADING
 	paused       atomic.Bool  // commands get no reply; the connection drops once it is unpaused
+	closed       atomic.Int32 // connections ended, by either side
 
 	mu     sync.Mutex
 	counts map[string]int
@@ -292,7 +293,7 @@ func (f *fakeNode) count(name string) int {
 }
 
 func (f *fakeNode) serve(c net.Conn) {
-	defer func() { _ = c.Close() }()
+	defer func() { _ = c.Close(); f.closed.Add(1) }()
 	r := bufio.NewReader(c)
 	_, port, _ := net.SplitHostPort(f.addr)
 	for {
@@ -493,8 +494,7 @@ func TestClientBreaker(t *testing.T) {
 	defer func() { _ = c.Close() }()
 	c.stop() // the test runs the health check rounds itself
 	// The budget leaves room for a call to dial and set up a connection
-	// under a loaded -race run, since each timeout discards its connection;
-	// slow answers come well after it.
+	// under a loaded -race run; slow answers come well after it.
 	budget := func() (Result, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 		defer cancel()
@@ -568,6 +568,9 @@ func TestClientBreaker(t *testing.T) {
 	if n := f.count("evalsha") - sent; n < 1 {
 		t.Errorf("slow: script sent %d times, want at least 1", n)
 	}
+	// Their late replies are read off and their connections kept
+	// (ADR-0079); wait for them, so that none resets the count below.
+	waitFreed(t, c, 5*time.Second)
 	mode.Store(drop)
 	sent = f.count("evalsha")
 	for i := range 3 {
@@ -604,6 +607,161 @@ func TestClientBreaker(t *testing.T) {
 	mustOpen("after 3 missed PINGs")
 	f.paused.Store(false)
 	mustClose("after the node is back")
+}
+
+// poolStats returns the number of connections in c's request pools and how
+// many of them are in use.
+func poolStats(c *Client) (total, inUse uint32) {
+	var t, idle atomic.Uint32
+	_ = c.rdb.ForEachShard(context.Background(), func(_ context.Context, node *goredis.Client) error {
+		s := node.PoolStats()
+		t.Add(s.TotalConns)
+		idle.Add(s.IdleConns)
+		return nil
+	})
+	return t.Load(), t.Load() - idle.Load()
+}
+
+// waitFreed waits up to within for every request connection of c to be
+// back in its pool, and returns how long that took.
+func waitFreed(t *testing.T, c *Client, within time.Duration) time.Duration {
+	t.Helper()
+	start := time.Now()
+	for {
+		_, inUse := poolStats(c)
+		if inUse == 0 {
+			return time.Since(start)
+		}
+		if time.Since(start) > within {
+			t.Fatalf("%d request connections still in use after %v", inUse, within)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// within5ms makes a call under a 5 ms budget and returns how long it took.
+func within5ms(c *Client) (Result, time.Duration, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	res, err := c.Call(ctx, 1, oneLimit)
+	return res, time.Since(start), err
+}
+
+// TestTimedOutCallKeepsConnection: a call whose reply comes after its
+// budget is answered as a timeout at the budget, as before; its late reply
+// is read off and discarded, and the connection goes back to the pool, so
+// the next call dials nothing and reads its own reply (ADR-0079).
+func TestTimedOutCallKeepsConnection(t *testing.T) {
+	const late = 300 * time.Millisecond
+	var slow atomic.Bool
+	f := newFakeNode(t, "8.0.0", func(string) string {
+		if slow.Load() {
+			time.Sleep(late)
+			return strings.Replace(allowedReply, ":1700000000000000", ":1", 1)
+		}
+		return allowedReply
+	})
+	c := NewClient([]string{f.addr}, nil, Auth{}, ratelimit.SystemClock, slog.New(slog.DiscardHandler))
+	defer func() { _ = c.Close() }()
+	c.stop()                                  // health checks dial a connection of their own
+	if _, err := callFake(t, c); err != nil { // opens one connection, checks the version
+		t.Fatal(err)
+	}
+
+	slow.Store(true)
+	_, took, err := within5ms(c)
+	slow.Store(false)
+	if !isKind(err, KindTimeout) || !strings.Contains(err.Error(), f.addr) {
+		t.Fatalf("late reply: %v, want a timeout on %s", err, f.addr)
+	}
+	if took > late/2 {
+		t.Errorf("answered after %v, want at the 5 ms budget", took)
+	}
+	freed := waitFreed(t, c, 5*time.Second)
+	t.Logf("measure: answered after %v; connection back in the pool %v later", took, freed)
+	// By now the node has sent the late reply: a client that had closed
+	// the connection at the budget would have it ended.
+	time.Sleep(late + 100*time.Millisecond - took - freed)
+
+	// go-redis's background slot-map reloads may have dialed while the
+	// slow call held the connection; the next call dials nothing.
+	dials, total := f.count("hello"), func() uint32 { n, _ := poolStats(c); return n }
+	conns := total()
+	// A late reply left unread would be taken for this call's: now_us 1.
+	res, err := callFake(t, c)
+	if err != nil || res.NowUS != 1700000000000000 {
+		t.Fatalf("next call: %+v, %v; want its own reply", res, err)
+	}
+	if n := f.count("hello") - dials; n != 0 || total() != conns {
+		t.Errorf("next call dialed %d connections (pool %d, was %d), want 0", n, total(), conns)
+	}
+	if n := f.closed.Load(); n != 0 {
+		t.Errorf("%d connections closed, want 0", n)
+	}
+}
+
+// TestStuckNodeFreesConnections: calls to a node that stopped answering are
+// answered at their budget; the pool never holds more than its size, and
+// every connection the calls took is closed within hardTimeout though the
+// node still does not answer (ADR-0079).
+func TestStuckNodeFreesConnections(t *testing.T) {
+	f := newFakeNode(t, "8.0.0", func(string) string { return allowedReply })
+	c := NewClient([]string{f.addr}, nil, Auth{}, ratelimit.SystemClock, slog.New(slog.DiscardHandler))
+	defer func() { _ = c.Close() }()
+	c.stop() // the test is about the request pool, not the breaker
+	if _, err := callFake(t, c); err != nil {
+		t.Fatal(err)
+	}
+	size := c.rdb.Options().PoolSize
+
+	f.paused.Store(true)
+	defer f.paused.Store(false)
+	var wg sync.WaitGroup
+	for range size + 10 {
+		wg.Go(func() {
+			if _, took, err := within5ms(c); !isKind(err, KindTimeout) || took > 150*time.Millisecond {
+				t.Errorf("stuck node: %v after %v, want a timeout at the 5 ms budget", err, took)
+			}
+		})
+	}
+	wg.Wait()
+	if total, _ := poolStats(c); total > uint32(size) { //nolint:gosec // G115: a pool size
+		t.Errorf("%d request connections, more than the pool size %d", total, size)
+	}
+	freed := waitFreed(t, c, hardTimeout+2*time.Second)
+	t.Logf("measure: every connection freed %v after the calls were answered (hard timeout %v)", freed, hardTimeout)
+
+	f.paused.Store(false)
+	if res, err := callFake(t, c); err != nil || !res.Allowed {
+		t.Fatalf("node back: %+v, %v", res, err)
+	}
+}
+
+// TestNoScriptAfterBudget: a NOSCRIPT reply that comes after the call's
+// budget is not followed by EVAL: the caller has had its answer, and
+// nothing is sent for it after that (ADR-0079).
+func TestNoScriptAfterBudget(t *testing.T) {
+	f := newFakeNode(t, "8.0.0", func(name string) string {
+		if name == "evalsha" {
+			time.Sleep(50 * time.Millisecond)
+			return "-NOSCRIPT No matching script. Please use EVAL.\r\n"
+		}
+		return allowedReply
+	})
+	c := NewClient([]string{f.addr}, nil, Auth{}, ratelimit.SystemClock, slog.New(slog.DiscardHandler))
+	defer func() { _ = c.Close() }()
+	c.stop()
+	if _, err := callFake(t, c); err != nil { // NOSCRIPT, then EVAL
+		t.Fatal(err)
+	}
+	if _, _, err := within5ms(c); !isKind(err, KindTimeout) {
+		t.Fatalf("late NOSCRIPT: %v, want a timeout", err)
+	}
+	waitFreed(t, c, 5*time.Second)
+	if f.count("evalsha") != 2 || f.count("eval") != 1 {
+		t.Errorf("evalsha %d, eval %d; want 2 and 1", f.count("evalsha"), f.count("eval"))
+	}
 }
 
 // idleConns is the number of idle connections in c's request pools.
