@@ -1,0 +1,207 @@
+# promtool unit tests of deploy/prometheus/rules/spillway.yaml (OB-05,
+# ADR-0087): every alert fires when it should and stays quiet when it
+# should not. make lint-obs runs them with the pinned Prometheus image's
+# promtool: promtool test rules test/obs/rules-test.yaml.
+rule_files:
+  - ../../deploy/prometheus/rules/spillway.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # Availability, fast burn: 2% gateway-caused 5xx (reason upstream) for
+  # 70 minutes burns 20 times too fast; it pages once the hour's ratio is
+  # over 1.44%, and the slow alert's windows are over 0.6% too.
+  - interval: 1m
+    input_series:
+      - series: 'gw_requests_total{job="gateway",replica="gateway-1",route="r",method="GET",code_class="5xx",origin="gateway",reason="upstream",tenant="none"}'
+        values: '0+120x70'
+      - series: 'gw_requests_total{job="gateway",replica="gateway-1",route="r",method="GET",code_class="2xx",origin="upstream",reason="none",tenant="none"}'
+        values: '0+5880x70'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: SpillwayAvailabilityBurnFast
+        exp_alerts:
+          - exp_labels: { severity: page, slo: availability }
+            exp_annotations:
+              summary: Gateway-caused 5xx are burning the 99.9% availability SLO's 30-day budget over 14.4 times too fast.
+              description: "2% of requests over the last hour were gateway-caused 5xx (and over 1.44% over the last 5 minutes); at this rate the month's budget is gone in about two days."
+              runbook_url: https://github.com/ankitbisht23/spillway/blob/main/docs/runbooks/availability-burn.md
+      - eval_time: 70m
+        alertname: SpillwayAvailabilityBurnSlow
+        exp_alerts:
+          - exp_labels: { severity: ticket, slo: availability }
+            exp_annotations:
+              summary: Gateway-caused 5xx are burning the 99.9% availability SLO's 30-day budget over 6 times too fast.
+              description: "2% of requests over the last 6 hours were gateway-caused 5xx (and over 0.6% over the last 30 minutes); at this rate the month's budget is gone in five days."
+              runbook_url: https://github.com/ankitbisht23/spillway/blob/main/docs/runbooks/availability-burn.md
+
+  # Deliberate 5xx (shed, circuit_open, fail_closed) are not the SLI's
+  # errors (NFR-11): half the requests shed, none of them burn the budget.
+  - interval: 1m
+    input_series:
+      - series: 'gw_requests_total{job="gateway",replica="gateway-1",route="r",method="GET",code_class="5xx",origin="gateway",reason="shed",tenant="none"}'
+        values: '0+1000x70'
+      - series: 'gw_requests_total{job="gateway",replica="gateway-1",route="r",method="GET",code_class="5xx",origin="gateway",reason="circuit_open",tenant="none"}'
+        values: '0+1000x70'
+      - series: 'gw_requests_total{job="gateway",replica="gateway-1",route="r",method="GET",code_class="5xx",origin="gateway",reason="fail_closed",tenant="none"}'
+        values: '0+1000x70'
+      - series: 'gw_requests_total{job="gateway",replica="gateway-1",route="r",method="GET",code_class="5xx",origin="upstream",reason="none",tenant="none"}'
+        values: '0+1000x70'
+      - series: 'gw_requests_total{job="gateway",replica="gateway-1",route="r",method="GET",code_class="2xx",origin="upstream",reason="none",tenant="none"}'
+        values: '0+4000x70'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: SpillwayAvailabilityBurnFast
+        exp_alerts: []
+      - eval_time: 70m
+        alertname: SpillwayAvailabilityBurnSlow
+        exp_alerts: []
+
+  # A short spike: 10% errors for the last 5 of 65 minutes is over 1.44%
+  # in the 5-minute window but not in the hour's, so nothing pages.
+  - interval: 1m
+    input_series:
+      - series: 'gw_requests_total{job="gateway",replica="gateway-1",route="r",method="GET",code_class="5xx",origin="gateway",reason="upstream",tenant="none"}'
+        values: '0x60 600+600x5'
+      - series: 'gw_requests_total{job="gateway",replica="gateway-1",route="r",method="GET",code_class="2xx",origin="upstream",reason="none",tenant="none"}'
+        values: '0+6000x60 365400+5400x5'
+    alert_rule_test:
+      - eval_time: 65m
+        alertname: SpillwayAvailabilityBurnFast
+        exp_alerts: []
+
+  # Latency, fast burn: 20% of requests slower than 0.5 s pages; the slow
+  # alert's 6% threshold is crossed too.
+  - interval: 1m
+    input_series:
+      - series: 'gw_request_duration_seconds_bucket{job="gateway",replica="gateway-1",route="r",tenant="none",le="0.5"}'
+        values: '0+4800x70'
+      - series: 'gw_request_duration_seconds_count{job="gateway",replica="gateway-1",route="r",tenant="none"}'
+        values: '0+6000x70'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: SpillwayLatencyBurnFast
+        exp_alerts:
+          - exp_labels: { severity: page, slo: latency }
+            exp_annotations:
+              summary: Requests slower than 0.5 s are burning the 99% latency SLO's 30-day budget over 14.4 times too fast.
+              description: "20% of requests over the last hour took longer than 0.5 s (and over 14.4% over the last 5 minutes)."
+              runbook_url: https://github.com/ankitbisht23/spillway/blob/main/docs/runbooks/latency-burn.md
+
+  # Latency, slow burn only: 8% slow for 6 hours is over the slow alert's
+  # 6% and under the fast one's 14.4%.
+  - interval: 1m
+    input_series:
+      - series: 'gw_request_duration_seconds_bucket{job="gateway",replica="gateway-1",route="r",tenant="none",le="0.5"}'
+        values: '0+5520x370'
+      - series: 'gw_request_duration_seconds_count{job="gateway",replica="gateway-1",route="r",tenant="none"}'
+        values: '0+6000x370'
+    alert_rule_test:
+      - eval_time: 370m
+        alertname: SpillwayLatencyBurnFast
+        exp_alerts: []
+      - eval_time: 370m
+        alertname: SpillwayLatencyBurnSlow
+        exp_alerts:
+          - exp_labels: { severity: ticket, slo: latency }
+            exp_annotations:
+              summary: Requests slower than 0.5 s are burning the 99% latency SLO's 30-day budget over 6 times too fast.
+              description: "8% of requests over the last 6 hours took longer than 0.5 s (and over 6% over the last 30 minutes)."
+              runbook_url: https://github.com/ankitbisht23/spillway/blob/main/docs/runbooks/latency-burn.md
+
+  # Redis errors: gateway-1 fails 2% of its Redis checks, which fires
+  # after 5 minutes; gateway-2's 0.5% does not.
+  - interval: 1m
+    input_series:
+      - series: 'gw_redis_errors_total{job="gateway",replica="gateway-1",kind="timeout"}'
+        values: '0+120x15'
+      - series: 'gw_ratelimit_check_duration_seconds_count{job="gateway",replica="gateway-1",backend="redis"}'
+        values: '0+6000x15'
+      - series: 'gw_redis_errors_total{job="gateway",replica="gateway-2",kind="conn"}'
+        values: '0+30x15'
+      - series: 'gw_ratelimit_check_duration_seconds_count{job="gateway",replica="gateway-2",backend="redis"}'
+        values: '0+6000x15'
+      - series: 'gw_ratelimit_check_duration_seconds_count{job="gateway",replica="gateway-2",backend="local"}'
+        values: '0+600000x15'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: SpillwayRedisErrors
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: SpillwayRedisErrors
+        exp_alerts:
+          - exp_labels: { severity: page, job: gateway, replica: gateway-1 }
+            exp_annotations:
+              summary: "Gateway gateway-1: more than 1% of its Redis limiter calls fail."
+              description: "Redis errors are 2% of the Redis rate-limit checks of gateway-1; its policies follow their failure modes meanwhile."
+              runbook_url: https://github.com/ankitbisht23/spillway/blob/main/docs/runbooks/redis-errors.md
+
+  # Redis memory: redis-0 at 82% of 256 MiB for 10 minutes fires; redis-1
+  # at 70% and redis-2 without a maxmemory (0) do not.
+  - interval: 1m
+    input_series:
+      - series: 'redis_memory_used_bytes{job="redis",instance="redis-exporter:9121",node="redis-0"}'
+        values: '220117073x10'
+      - series: 'redis_memory_max_bytes{job="redis",instance="redis-exporter:9121",node="redis-0"}'
+        values: '268435456x10'
+      - series: 'redis_memory_used_bytes{job="redis",instance="redis-exporter:9121",node="redis-1"}'
+        values: '187904819x10'
+      - series: 'redis_memory_max_bytes{job="redis",instance="redis-exporter:9121",node="redis-1"}'
+        values: '268435456x10'
+      - series: 'redis_memory_used_bytes{job="redis",instance="redis-exporter:9121",node="redis-2"}'
+        values: '900000000x10'
+      - series: 'redis_memory_max_bytes{job="redis",instance="redis-exporter:9121",node="redis-2"}'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: SpillwayRedisMemoryHigh
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: SpillwayRedisMemoryHigh
+        exp_alerts:
+          - exp_labels: { severity: ticket, job: redis, instance: "redis-exporter:9121", node: redis-0 }
+            exp_annotations:
+              summary: "Redis node redis-0 uses more than 80% of its maxmemory."
+              description: "redis-0 is at 82% of maxmemory; with noeviction, a full node fails the limiter's writes."
+              runbook_url: https://github.com/ankitbisht23/spillway/blob/main/docs/runbooks/redis-memory.md
+
+  # Config sync stale: the age passes 60 s at 4 minutes and fires at the
+  # first evaluation after, with no for; a static gateway has no series.
+  - interval: 30s
+    input_series:
+      - series: 'gw_config_sync_age_seconds{job="gateway",replica="gateway-1",instance="gateway-1:8001"}'
+        values: '2 3 2 4 2 3 2 5 65 95 125'
+    alert_rule_test:
+      - eval_time: 3m30s
+        alertname: SpillwayConfigSyncStale
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: SpillwayConfigSyncStale
+        exp_alerts:
+          - exp_labels: { severity: page, job: gateway, replica: gateway-1, instance: "gateway-1:8001" }
+            exp_annotations:
+              summary: "Gateway gateway-1 has not synced with the control plane for over 60 s."
+              description: "gateway-1 last heard from the control plane 2m 5s ago; it serves its last good config meanwhile."
+              runbook_url: https://github.com/ankitbisht23/spillway/blob/main/docs/runbooks/config-sync-stale.md
+
+  # Circuit open: an upstream whose circuit flaps between open (1) and
+  # half-open (2) for 6 minutes fires; one open for 3 minutes, then
+  # closed (0), does not.
+  - interval: 30s
+    input_series:
+      - series: 'gw_circuit_state{job="gateway",replica="gateway-1",upstream="orders"}'
+        values: '0 1 2 1 2 1 2 1 2 1 2 1 2 1 2'
+      - series: 'gw_circuit_state{job="gateway",replica="gateway-1",upstream="users"}'
+        values: '0 1 1 1 1 1 1 0 0 0 0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: SpillwayCircuitOpen
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: SpillwayCircuitOpen
+        exp_alerts:
+          - exp_labels: { severity: page, job: gateway, replica: gateway-1, upstream: orders }
+            exp_annotations:
+              summary: "Gateway gateway-1: upstream orders's circuit has not closed for 5 minutes."
+              description: "The circuit breaker of orders on gateway-1 is open or half-open (state 2); its requests get 503 circuit_open."
+              runbook_url: https://github.com/ankitbisht23/spillway/blob/main/docs/runbooks/circuit-open.md

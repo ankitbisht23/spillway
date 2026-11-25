@@ -1,0 +1,108 @@
+# Spillway's alert rules (OB-05, ADR-0075, ADR-0087), loaded by compose's
+# Prometheus (mounted at /etc/prometheus/rules) and kind's (the ConfigMap
+# prometheus-rules). Every alert links to its runbook (OB-08); test/obs
+# checks the links, and make lint-obs runs promtool check rules and the rule
+# unit tests in test/obs/rules-test.yaml. No Alertmanager in v1: Prometheus
+# and Grafana show what fires. Labels and annotations carry no key, consumer
+# or path (OB-01), only the series' own labels.
+#
+# SLOs, over 30 days, of every gateway's traffic together:
+#   availability 99.9%: the NFR-11 SLI, gateway-caused 5xx (reason not shed,
+#     circuit_open or fail_closed, which are deliberate) over all requests;
+#   latency 99%: requests answered within 0.5 s (the le="0.5" bucket).
+# Multi-window burn-rate alerts: fast (burn > 14.4 over 1 h and over 5 m,
+# page) and slow (burn > 6 over 6 h and over 30 m, ticket). The short
+# window makes an alert stop soon after the burn does, so they have no for.
+groups:
+  - name: spillway-slo
+    rules:
+      - record: spillway:gw_availability_errors:ratio_rate5m
+        expr: sum(rate(gw_requests_total{origin="gateway",code_class="5xx",reason!~"shed|circuit_open|fail_closed"}[5m])) / sum(rate(gw_requests_total[5m]))
+      - record: spillway:gw_availability_errors:ratio_rate30m
+        expr: sum(rate(gw_requests_total{origin="gateway",code_class="5xx",reason!~"shed|circuit_open|fail_closed"}[30m])) / sum(rate(gw_requests_total[30m]))
+      - record: spillway:gw_availability_errors:ratio_rate1h
+        expr: sum(rate(gw_requests_total{origin="gateway",code_class="5xx",reason!~"shed|circuit_open|fail_closed"}[1h])) / sum(rate(gw_requests_total[1h]))
+      - record: spillway:gw_availability_errors:ratio_rate6h
+        expr: sum(rate(gw_requests_total{origin="gateway",code_class="5xx",reason!~"shed|circuit_open|fail_closed"}[6h])) / sum(rate(gw_requests_total[6h]))
+      - record: spillway:gw_latency_slow:ratio_rate5m
+        expr: 1 - sum(rate(gw_request_duration_seconds_bucket{le="0.5"}[5m])) / sum(rate(gw_request_duration_seconds_count[5m]))
+      - record: spillway:gw_latency_slow:ratio_rate30m
+        expr: 1 - sum(rate(gw_request_duration_seconds_bucket{le="0.5"}[30m])) / sum(rate(gw_request_duration_seconds_count[30m]))
+      - record: spillway:gw_latency_slow:ratio_rate1h
+        expr: 1 - sum(rate(gw_request_duration_seconds_bucket{le="0.5"}[1h])) / sum(rate(gw_request_duration_seconds_count[1h]))
+      - record: spillway:gw_latency_slow:ratio_rate6h
+        expr: 1 - sum(rate(gw_request_duration_seconds_bucket{le="0.5"}[6h])) / sum(rate(gw_request_duration_seconds_count[6h]))
+
+      - alert: SpillwayAvailabilityBurnFast
+        expr: spillway:gw_availability_errors:ratio_rate1h > 14.4 * 0.001 and spillway:gw_availability_errors:ratio_rate5m > 14.4 * 0.001
+        labels: { severity: page, slo: availability }
+        annotations:
+          summary: Gateway-caused 5xx are burning the 99.9% availability SLO's 30-day budget over 14.4 times too fast.
+          description: "{{ $value | humanizePercentage }} of requests over the last hour were gateway-caused 5xx (and over 1.44% over the last 5 minutes); at this rate the month's budget is gone in about two days."
+          runbook_url: https://github.com/ankitbisht23/spillway/blob/main/docs/runbooks/availability-burn.md
+      - alert: SpillwayAvailabilityBurnSlow
+        expr: spillway:gw_availability_errors:ratio_rate6h > 6 * 0.001 and spillway:gw_availability_errors:ratio_rate30m > 6 * 0.001
+        labels: { severity: ticket, slo: availability }
+        annotations:
+          summary: Gateway-caused 5xx are burning the 99.9% availability SLO's 30-day budget over 6 times too fast.
+          description: "{{ $value | humanizePercentage }} of requests over the last 6 hours were gateway-caused 5xx (and over 0.6% over the last 30 minutes); at this rate the month's budget is gone in five days."
+          runbook_url: https://github.com/ankitbisht23/spillway/blob/main/docs/runbooks/availability-burn.md
+      - alert: SpillwayLatencyBurnFast
+        expr: spillway:gw_latency_slow:ratio_rate1h > 14.4 * 0.01 and spillway:gw_latency_slow:ratio_rate5m > 14.4 * 0.01
+        labels: { severity: page, slo: latency }
+        annotations:
+          summary: Requests slower than 0.5 s are burning the 99% latency SLO's 30-day budget over 14.4 times too fast.
+          description: "{{ $value | humanizePercentage }} of requests over the last hour took longer than 0.5 s (and over 14.4% over the last 5 minutes)."
+          runbook_url: https://github.com/ankitbisht23/spillway/blob/main/docs/runbooks/latency-burn.md
+      - alert: SpillwayLatencyBurnSlow
+        expr: spillway:gw_latency_slow:ratio_rate6h > 6 * 0.01 and spillway:gw_latency_slow:ratio_rate30m > 6 * 0.01
+        labels: { severity: ticket, slo: latency }
+        annotations:
+          summary: Requests slower than 0.5 s are burning the 99% latency SLO's 30-day budget over 6 times too fast.
+          description: "{{ $value | humanizePercentage }} of requests over the last 6 hours took longer than 0.5 s (and over 6% over the last 30 minutes)."
+          runbook_url: https://github.com/ankitbisht23/spillway/blob/main/docs/runbooks/latency-burn.md
+
+  - name: spillway-dependencies
+    rules:
+      # Per gateway: one replica that cannot reach Redis is worth an alert
+      # even when the others can.
+      - alert: SpillwayRedisErrors
+        expr: sum by (job, replica) (rate(gw_redis_errors_total[5m])) / sum by (job, replica) (rate(gw_ratelimit_check_duration_seconds_count{backend="redis"}[5m])) > 0.01
+        for: 5m
+        labels: { severity: page }
+        annotations:
+          summary: "Gateway {{ $labels.replica }}: more than 1% of its Redis limiter calls fail."
+          description: "Redis errors are {{ $value | humanizePercentage }} of the Redis rate-limit checks of {{ $labels.replica }}; its policies follow their failure modes meanwhile."
+          runbook_url: https://github.com/ankitbisht23/spillway/blob/main/docs/runbooks/redis-errors.md
+      - alert: SpillwayRedisMemoryHigh
+        expr: redis_memory_used_bytes / (redis_memory_max_bytes > 0) > 0.8
+        for: 5m
+        labels: { severity: ticket }
+        annotations:
+          summary: "Redis node {{ $labels.node }} uses more than 80% of its maxmemory."
+          description: "{{ $labels.node }} is at {{ $value | humanizePercentage }} of maxmemory; with noeviction, a full node fails the limiter's writes."
+          runbook_url: https://github.com/ankitbisht23/spillway/blob/main/docs/runbooks/redis-memory.md
+
+  - name: spillway-gateway
+    rules:
+      # Managed gateways only (static ones have no sync age); no for: the
+      # threshold already waits 60 s (CP-08).
+      - alert: SpillwayConfigSyncStale
+        expr: gw_config_sync_age_seconds > 60
+        labels: { severity: page }
+        annotations:
+          summary: "Gateway {{ $labels.replica }} has not synced with the control plane for over 60 s."
+          description: "{{ $labels.replica }} last heard from the control plane {{ $value | humanizeDuration }} ago; it serves its last good config meanwhile."
+          runbook_url: https://github.com/ankitbisht23/spillway/blob/main/docs/runbooks/config-sync-stale.md
+      # Open or half-open (not closed) for 5 minutes: a failing upstream
+      # goes open, half-open after open_for (10 s by default), and open
+      # again, so == 1 alone would restart the 5 minutes at every half-open
+      # scrape (ADR-0087).
+      - alert: SpillwayCircuitOpen
+        expr: gw_circuit_state > 0
+        for: 5m
+        labels: { severity: page }
+        annotations:
+          summary: "Gateway {{ $labels.replica }}: upstream {{ $labels.upstream }}'s circuit has not closed for 5 minutes."
+          description: "The circuit breaker of {{ $labels.upstream }} on {{ $labels.replica }} is open or half-open (state {{ $value }}); its requests get 503 circuit_open."
+          runbook_url: https://github.com/ankitbisht23/spillway/blob/main/docs/runbooks/circuit-open.md
