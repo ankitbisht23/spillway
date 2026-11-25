@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# make kind-smoke (ADR-0075 §D10): checks the kind cluster that make kind-up
+# built, one PASS/FAIL line per check, in at most 3 minutes (every wait
+# below has its own timeout). Run from the repository root with BIN and
+# KUBECONFIG from the Makefile; kubectl is a function that always passes
+# --context kind-spillway. The Redis password stays in the pods' own
+# environment and is never printed.
+#
+# Until the Helm chart exists (the helm task), it checks the cluster and the
+# dependencies only; the helm task adds the gateway, control-plane,
+# NetworkPolicy and Prometheus-target lines.
+set -uo pipefail
+
+: "${BIN:?BIN is set by the Makefile}"
+: "${KUBECONFIG:?KUBECONFIG is set by the Makefile}"
+case "$KUBECONFIG" in */.kube/spillway-kind) ;; *) echo "KUBECONFIG must be ~/.kube/spillway-kind, not $KUBECONFIG" >&2; exit 2 ;; esac
+kubectl() { "$BIN/kubectl" --context kind-spillway --request-timeout=20s "$@"; }
+
+start=$(date +%s)
+fails=0
+result() { # result PASS|FAIL check measured
+	printf '%-4s  %-44s %s\n' "$1" "$2" "$3"
+	if [ "$1" != PASS ]; then fails=$((fails + 1)); fi
+}
+check() { # check <0 = pass> check measured
+	if [ "$1" -eq 0 ]; then result PASS "$2" "$3"; else result FAIL "$2" "$3"; fi
+}
+
+# 1. Three nodes, all Ready.
+ready=$(kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}={.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' 2>&1)
+n=$(grep -c '=True$' <<<"$ready")
+[ "$n" -eq 3 ] && [ "$(grep -c . <<<"$ready")" -eq 3 ]
+check $? "three nodes Ready" "$n of $(grep -c . <<<"$ready") Ready"
+
+# 2. Every pod of the three namespaces Ready, finished Jobs' pods excepted;
+# the dependency namespaces must not be empty.
+for ns in spillway-deps spillway-obs spillway; do
+	pods=$(kubectl -n "$ns" get pods -o jsonpath='{range .items[*]}{.metadata.name} {.status.phase} {.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' 2>&1)
+	total=$(awk 'NF && $2 != "Succeeded"' <<<"$pods" | grep -c .)
+	notready=$(awk 'NF && $2 != "Succeeded" && $3 != "True" {printf "%s ", $1}' <<<"$pods")
+	ok=1
+	if [ -n "$notready" ]; then ok=0; fi
+	if [ "$ns" != spillway ] && [ "$total" -eq 0 ]; then ok=0; fi
+	if [ "$ok" -eq 1 ]; then result PASS "pods Ready in $ns" "$total pods"; else result FAIL "pods Ready in $ns" "$total pods; not Ready: ${notready:-none}"; fi
+done
+
+# 3. Redis Cluster: cluster_state:ok on all six nodes, asked inside each pod
+# with its own password (REDISCLI_AUTH from its environment).
+okn=0
+for i in 0 1 2 3 4 5; do
+	if kubectl -n spillway-deps exec "redis-$i" -c redis -- sh -c 'REDISCLI_AUTH="$REDIS_PASSWORD" redis-cli cluster info' 2>/dev/null | grep -q '^cluster_state:ok'; then
+		okn=$((okn + 1))
+	fi
+done
+[ "$okn" -eq 6 ]
+check $? "redis cluster_state:ok" "$okn of 6 nodes"
+
+# 4. The host side of the edge: the control-plane node publishes
+# 127.0.0.1:443 → NodePort 30443 and, besides kind's API server on
+# 127.0.0.1, nothing else; the workers publish nothing; no port 80 anywhere.
+cp_ports=$(docker port spillway-control-plane 2>&1 | sort)
+edge=$(grep -c '^30443/tcp -> 127.0.0.1:443$' <<<"$cp_ports")
+others=$(grep -v -e '^30443/tcp -> 127.0.0.1:443$' -e '^6443/tcp -> 127.0.0.1:[0-9]*$' <<<"$cp_ports" | grep -c .)
+workers=$(for w in spillway-worker spillway-worker2; do docker port "$w" 2>&1; done | grep -c .)
+port80=$(docker ps --filter label=io.x-k8s.kind.cluster=spillway --format '{{.Ports}}' | grep -c ':80->')
+[ "$edge" -eq 1 ] && [ "$others" -eq 0 ] && [ "$workers" -eq 0 ] && [ "$port80" -eq 0 ]
+check $? "edge 127.0.0.1:443 -> 30443 only, no :80" "$(tr '\n' ',' <<<"$cp_ports" | sed 's/,$//'); worker mappings $workers"
+
+# 5. From inside the cluster: Keycloak over HTTPS (chaos kindsmoke).
+kubectl -n spillway delete job kind-smoke --ignore-not-found --wait=true >/dev/null 2>&1
+if kubectl apply -f test/kind/smoke-job.yaml >/dev/null 2>&1; then
+	state=
+	for _ in $(seq 1 100); do
+		state=$(kubectl -n spillway get job kind-smoke -o jsonpath='{.status.conditions[?(@.status=="True")].type}' 2>/dev/null)
+		case "$state" in *Complete* | *Failed*) break ;; esac
+		sleep 1
+	done
+	out=$(kubectl -n spillway logs job/kind-smoke 2>&1)
+	if [ -n "$out" ]; then printf '%s\n' "$out"; fi
+	fails=$((fails + $(grep -c '^FAIL' <<<"$out")))
+	case "$state" in
+	*Complete*) result PASS "in-cluster checks (Job kind-smoke)" "complete" ;;
+	*) result FAIL "in-cluster checks (Job kind-smoke)" "state: ${state:-not finished in 100 s}" ;;
+	esac
+	kubectl -n spillway delete job kind-smoke --ignore-not-found --wait=false >/dev/null 2>&1
+else
+	result FAIL "in-cluster checks (Job kind-smoke)" "could not create the Job"
+fi
+
+echo "kind smoke: $(($(date +%s) - start)) s"
+if [ "$fails" -eq 0 ]; then echo "kind smoke: PASS"; else echo "kind smoke: FAIL ($fails)"; exit 1; fi

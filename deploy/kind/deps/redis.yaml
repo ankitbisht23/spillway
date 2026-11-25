@@ -1,0 +1,147 @@
+# Redis Cluster on kind (ADR-0075 §D10): compose's image and redis.conf
+# (the ConfigMap redis-config, which make kind-up creates from
+# deploy/compose/redis/redis.conf), six nodes of a StatefulSet behind a
+# headless Service, each announcing redis-N.redis.spillway-deps.svc.cluster.local.
+# Unlike compose, the nodes need a password: requirepass and masterauth come
+# from the Secret dev-secrets through a config file written at start into a
+# memory-only volume, so the value is in no command line. /data is an
+# emptyDir, as compose's tmpfs: a node that restarts comes back empty and
+# outside the cluster (make kind-down && make kind-up rebuilds it).
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: spillway-deps
+  labels: { app.kubernetes.io/name: redis }
+spec:
+  clusterIP: None
+  # Nodes resolve one another before they are Ready, while the cluster forms.
+  publishNotReadyAddresses: true
+  selector: { app.kubernetes.io/name: redis }
+  ports:
+    - { name: redis, port: 6379, targetPort: 6379 }
+    - { name: bus, port: 16379, targetPort: 16379 }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis
+  namespace: spillway-deps
+  labels: { app.kubernetes.io/name: redis }
+spec:
+  serviceName: redis
+  replicas: 6
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels: { app.kubernetes.io/name: redis }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: redis }
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: redis
+          image: redis:8.10.3
+          command: ["sh", "-c"]
+          args:
+            - >-
+              printf 'requirepass %s\nmasterauth %s\n' "$REDIS_PASSWORD" "$REDIS_PASSWORD" > /run/redis/auth.conf &&
+              exec redis-server /usr/local/etc/redis/redis.conf --include /run/redis/auth.conf
+              --cluster-announce-hostname "$POD_NAME.redis.spillway-deps.svc.cluster.local"
+          env:
+            - name: POD_NAME
+              valueFrom: { fieldRef: { fieldPath: metadata.name } }
+            - name: REDIS_PASSWORD
+              valueFrom: { secretKeyRef: { name: dev-secrets, key: REDIS_PASSWORD } }
+          ports:
+            - { name: redis, containerPort: 6379 }
+            - { name: bus, containerPort: 16379 }
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "REDISCLI_AUTH=\"$REDIS_PASSWORD\" redis-cli ping | grep -q PONG"]
+            periodSeconds: 2
+            timeoutSeconds: 2
+          resources:
+            requests: { cpu: 50m, memory: 32Mi }
+            limits: { memory: 64Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: config, mountPath: /usr/local/etc/redis, readOnly: true }
+            - { name: data, mountPath: /data }
+            - { name: auth, mountPath: /run/redis }
+      volumes:
+        - name: config
+          configMap: { name: redis-config }
+        - name: data
+          emptyDir: {}
+        - name: auth
+          emptyDir: { medium: Memory, sizeLimit: 1Mi }
+---
+# Forms the cluster once all six nodes answer, as compose's redis-init;
+# exits 0 at once when the cluster already exists, so make kind-up can run
+# again on a running cluster.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: redis-init
+  namespace: spillway-deps
+  labels: { app.kubernetes.io/name: redis-init }
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 300
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: redis-init }
+    spec:
+      restartPolicy: OnFailure
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: init
+          image: redis:8.10.3
+          command: ["sh", "-c"]
+          args:
+            - |
+              set -eu
+              export REDISCLI_AUTH="$REDIS_PASSWORD"
+              nodes=""
+              for i in 0 1 2 3 4 5; do nodes="$nodes redis-$i.redis.spillway-deps.svc.cluster.local"; done
+              state_ok() { redis-cli -h "$1" cluster info 2>/dev/null | grep -q '^cluster_state:ok'; }
+              for n in $nodes; do
+                until redis-cli -h "$n" ping 2>/dev/null | grep -q PONG; do sleep 1; done
+              done
+              if state_ok redis-0.redis.spillway-deps.svc.cluster.local; then echo "cluster already formed"; exit 0; fi
+              addrs=""
+              for n in $nodes; do addrs="$addrs $n:6379"; done
+              redis-cli --cluster create $addrs --cluster-replicas 1 --cluster-yes
+              for _ in $(seq 1 60); do
+                ok=0
+                for n in $nodes; do if state_ok "$n"; then ok=$((ok + 1)); fi; done
+                if [ "$ok" -eq 6 ]; then echo "cluster_state:ok on all 6 nodes"; exit 0; fi
+                sleep 1
+              done
+              echo "cluster did not reach cluster_state:ok on every node" >&2
+              exit 1
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom: { secretKeyRef: { name: dev-secrets, key: REDIS_PASSWORD } }
+          resources:
+            requests: { cpu: 50m, memory: 32Mi }
+            limits: { memory: 64Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }

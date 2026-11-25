@@ -11,7 +11,7 @@ FUZZTIME ?= 5s
 # Committed dev defaults first, then local overrides if present (ADR-0004).
 COMPOSE := docker compose --env-file .env.example $(if $(wildcard .env.local),--env-file .env.local)
 
-.PHONY: tools hooks certs dev test test-go test-web test-e2e fuzz test-integration proto api sqlc web-gen web-build lint lint-go lint-web lint-proto lint-api lint-sql bench bench-gate verify-m0 verify-m0-stack verify-m1 verify-m1-reload verify-m2 verify-m2-shadow verify-m3 verify-m4 verify-m5 verify-m6 accuracy chaos-redis-outage chaos-redis-primary chaos-cp-outage nfr-keys nfr-soak nfr-noisy chaos-redis-latency chaos-gateway-kill chaos
+.PHONY: tools hooks certs dev kind-up kind-down kind-smoke kind-images kind-grafana kind-prometheus test test-go test-web test-e2e fuzz test-integration proto api sqlc web-gen web-build lint lint-go lint-web lint-proto lint-api lint-sql bench bench-gate verify-m0 verify-m0-stack verify-m1 verify-m1-reload verify-m2 verify-m2-shadow verify-m3 verify-m4 verify-m5 verify-m6 accuracy chaos-redis-outage chaos-redis-primary chaos-cp-outage nfr-keys nfr-soak nfr-noisy chaos-redis-latency chaos-gateway-kill chaos
 
 # Host-run processes and tests reach Redis Cluster nodes through this map
 # (ADR-0004). Set only here, never in compose or .env files.
@@ -42,6 +42,45 @@ $(eval $(call tool,protoc-gen-go-grpc,google.golang.org/grpc/cmd/protoc-gen-go-g
 $(eval $(call tool,oapi-codegen,github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen,v2.8.2))
 $(eval $(call tool,mkcert,filippo.io/mkcert,v1.4.4))
 $(eval $(call tool,benchstat,golang.org/x/perf/cmd/benchstat,v0.0.0-20261009192801-be2c69fb417e))
+$(eval $(call tool,kind,sigs.k8s.io/kind,v0.33.0))
+
+# Official release binaries, downloaded into ./bin and checked against the
+# SHA-256 pinned here for each platform (ADR-0075 §D10), with the same stamp
+# files as above. $(call download-tool,name,version,url,sha256,install):
+# install reads the checked download, $(BIN)/.<name>.download, removed after.
+HOST_OS := $(shell uname -s | tr '[:upper:]' '[:lower:]')
+HOST_ARCH := $(patsubst aarch64,arm64,$(patsubst x86_64,amd64,$(shell uname -m)))
+PLATFORM := $(HOST_OS)-$(HOST_ARCH)
+define download-tool
+TOOL_STAMPS += $(BIN)/.$(1)@$(2)
+.PHONY: tool-$(1)
+tool-$(1): $(BIN)/.$(1)@$(2)
+$(BIN)/.$(1)@$(2):
+	@test -n "$(4)" || { echo "$(1) $(2): no pinned checksum for $(PLATFORM)"; exit 1; }
+	@mkdir -p $(BIN) && dl=$(BIN)/.$(1).download && trap 'rm -f "$$$$dl"' EXIT && \
+		curl -fsSL --retry 3 -o "$$$$dl" "$(3)" && \
+		got=$$$$(shasum -a 256 "$$$$dl" | cut -d ' ' -f 1) && \
+		{ [ "$$$$got" = "$(4)" ] || { echo "$(1) $(2): checksum $$$$got, want $(4)"; exit 1; }; } && \
+		$(5) && chmod 0755 $(BIN)/$(1)
+	@rm -f $(BIN)/.$(1)@* && touch $$@
+	@echo "installed $(1) $(2) for $(PLATFORM)"
+endef
+
+# kubectl: the newest patch of the kind node image's minor (1.37) released
+# at least two weeks before the kind task (ADR-0075 §D10).
+KUBECTL_VERSION := v1.37.2
+KUBECTL_SHA256_darwin-arm64 := 55701af0d51815ee335f240e48acf0959c3c23017ed3fa816e880c4a92bae581
+KUBECTL_SHA256_darwin-amd64 := 88379aff5c8111de6be0a394adffba2819e44cde269f3ab23cef76de1a48eaa8
+KUBECTL_SHA256_linux-amd64 := c04487523e7aa7d1493f7808174c899db93d7a9cf57531420cd76b9bd415f8f4
+KUBECTL_SHA256_linux-arm64 := fcc16f63186659d9722014b7e02d5fdd2d4e669cb8c0ab66365d7d3b8ba03509
+$(eval $(call download-tool,kubectl,$(KUBECTL_VERSION),https://dl.k8s.io/release/$(KUBECTL_VERSION)/bin/$(HOST_OS)/$(HOST_ARCH)/kubectl,$(KUBECTL_SHA256_$(PLATFORM)),cp "$$$$dl" $(BIN)/kubectl))
+
+HELM_VERSION := v4.3.1
+HELM_SHA256_darwin-arm64 := 6b4e61c8cd27d99e5a801e63ff25dd5c70b36875c2cd659d3e9ce6b76fc23198
+HELM_SHA256_darwin-amd64 := 34bec4eba761ba5c16d1965ee6b8f5b0abe5993974a802274e2a4f0418893d89
+HELM_SHA256_linux-amd64 := 0403a88ae20913d11b10a2467b50087721fea7581736da6b9d3992f5357fe54b
+HELM_SHA256_linux-arm64 := 8cf8f66ecbc252ac8f7f06cca68aba88508ddfde3a6a34feb1678ad1694b4f88
+$(eval $(call download-tool,helm,$(HELM_VERSION),https://get.helm.sh/helm-$(HELM_VERSION)-$(PLATFORM).tar.gz,$(HELM_SHA256_$(PLATFORM)),tar -xzOf "$$$$dl" $(PLATFORM)/helm > $(BIN)/helm))
 
 tools: $(TOOL_STAMPS)
 
@@ -76,7 +115,13 @@ STREAM := deploy/stream-certs
 STREAM_CA := $(STREAM)/ca/rootCA.pem
 STREAM_GATEWAYS := gateway-1 gateway-2 gateway-3 gateway-4 gateway-5
 
-certs: deploy/certs/gateway.pem $(STREAM_CA) $(STREAM)/controlplane/cert.pem $(STREAM_GATEWAYS:%=$(STREAM)/%/cert.pem)
+# The kind cluster's certificates (ADR-0075 §D10), minted the same way: the
+# gateway's edge and Keycloak's HTTPS from the mkcert CA, the config stream's
+# control-plane server and its one fleet client certificate, spillway-gateway
+# (P10), from the stream CA. make kind-up turns them into Secrets.
+KIND_CERTS := deploy/certs/kind-gateway.pem deploy/certs/kind-keycloak.pem $(STREAM)/kind/controlplane/cert.pem $(STREAM)/kind/gateway/cert.pem
+
+certs: deploy/certs/gateway.pem $(STREAM_CA) $(STREAM)/controlplane/cert.pem $(STREAM_GATEWAYS:%=$(STREAM)/%/cert.pem) $(KIND_CERTS)
 
 deploy/certs/gateway.pem: | tool-mkcert
 	@mkdir -p deploy/certs
@@ -106,10 +151,66 @@ $(STREAM)/controlplane/cert.pem: $(STREAM_CA)
 $(STREAM)/gateway-%/cert.pem: $(STREAM_CA)
 	$(call stream-cert,$(@D),-client gateway-$*)
 
+deploy/certs/kind-gateway.pem: | tool-mkcert
+	@mkdir -p deploy/certs
+	$(BIN)/mkcert -cert-file $@ -key-file deploy/certs/kind-gateway-key.pem \
+		localhost 127.0.0.1 spillway-gateway spillway-gateway.spillway.svc spillway-gateway.spillway.svc.cluster.local
+	chmod 644 deploy/certs/kind-gateway-key.pem
+
+deploy/certs/kind-keycloak.pem: | tool-mkcert
+	@mkdir -p deploy/certs
+	$(BIN)/mkcert -cert-file $@ -key-file deploy/certs/kind-keycloak-key.pem \
+		keycloak keycloak.spillway-deps keycloak.spillway-deps.svc keycloak.spillway-deps.svc.cluster.local
+	chmod 644 deploy/certs/kind-keycloak-key.pem
+
+$(STREAM)/kind/controlplane/cert.pem: $(STREAM_CA)
+	$(call stream-cert,$(@D),spillway-controlplane spillway-controlplane.spillway.svc spillway-controlplane.spillway.svc.cluster.local)
+
+$(STREAM)/kind/gateway/cert.pem: $(STREAM_CA)
+	$(call stream-cert,$(@D),-client spillway-gateway)
+
 # Boots the dev stack and returns once every service is healthy and every
 # one-shot service has exited 0.
 dev: certs
 	$(COMPOSE) up -d --build --wait --wait-timeout 300
+
+# The kind cluster `spillway` (ADR-0075 §D10, docs/setup.md Step 6) lives in
+# its own kubeconfig: `:=`, so a KUBECONFIG inherited from the shell cannot
+# send kind into another file. Every kubectl here and in the scripts passes
+# --context kind-spillway, every helm --kube-context kind-spillway, and kind
+# gets --name spillway --kubeconfig; ~/.kube/config is never touched.
+export KUBECONFIG := $(HOME)/.kube/spillway-kind
+KIND_TOOLS := tool-kind tool-kubectl tool-helm tool-mkcert
+KUBECTL := $(BIN)/kubectl --context kind-spillway
+
+# Creates the cluster if absent, its Secrets and ConfigMaps (from the dev
+# files, by reference), the dependencies and observability, the local
+# images, and waits until all are ready; refuses while the compose stack
+# runs (memory). The Helm chart comes with the helm task.
+kind-up: certs $(KIND_TOOLS)
+	@BIN=$(BIN) deploy/kind/up.sh
+
+# Deletes the cluster and its kubeconfig file; compose stays down (make dev
+# brings it back).
+kind-down: tool-kind
+	$(BIN)/kind delete cluster --name spillway --kubeconfig $(KUBECONFIG)
+	rm -f $(KUBECONFIG)
+
+# The cluster's checks, PASS/FAIL, at most 3 minutes (test/kind/smoke.sh).
+kind-smoke: tool-kubectl
+	@BIN=$(BIN) test/kind/smoke.sh
+
+# Rebuilds the local images and loads them into the running cluster.
+kind-images: tool-kind
+	@BIN=$(BIN) deploy/kind/up.sh images
+
+# Grafana and Prometheus of the running cluster on 127.0.0.1 (docs/ports.md);
+# each runs until Ctrl-C.
+kind-grafana: tool-kubectl
+	$(KUBECTL) -n spillway-obs port-forward --address 127.0.0.1 service/grafana 13000:3000
+
+kind-prometheus: tool-kubectl
+	$(KUBECTL) -n spillway-obs port-forward --address 127.0.0.1 service/prometheus 19091:9090
 
 # Every unit test: Go's and the admin UI's (ADR-0057). No Docker. Both need
 # `pnpm install` once after cloning; CI runs them in separate jobs.

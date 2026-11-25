@@ -1,0 +1,32 @@
+# The kind cluster `spillway` (ADR-0075 §D10), created by make kind-up with
+# the pinned kind v0.33.0 in ./bin, in its own kubeconfig
+# (~/.kube/spillway-kind, context kind-spillway). The node image is the one
+# kind v0.33.0's release notes list for Kubernetes 1.37.0, by digest.
+#
+# The gateway is the edge: the control-plane node maps 127.0.0.1:443 on the
+# host to the gateway's NodePort 30443 (docs/ports.md). Nothing else is
+# published on the host apart from the API server, which kind itself maps to
+# a random port on 127.0.0.1; there is no port 80 (the gateway serves no
+# plain HTTP in Helm, SEC-01).
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: spillway
+networking:
+  # kind's defaults, written out because the upstream allow-list names them
+  # (SEC-06): pods, then Services.
+  podSubnet: 10.244.0.0/16
+  serviceSubnet: 10.96.0.0/16
+  # kindnet, kind's default CNI, enforces NetworkPolicies (kind >= 0.24).
+  disableDefaultCNI: false
+nodes:
+  - role: control-plane
+    image: kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
+    extraPortMappings:
+      - containerPort: 30443
+        hostPort: 443
+        listenAddress: 127.0.0.1
+        protocol: TCP
+  - role: worker
+    image: kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
+  - role: worker
+    image: kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
