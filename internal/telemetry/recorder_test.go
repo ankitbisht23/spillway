@@ -63,6 +63,9 @@ func TestTraceID(t *testing.T) {
 			t.Errorf("TraceID(%q) = %q, want %q", tp, got, want)
 		}
 	}
+	if got := TraceID(http.Header{"Tracestate": {"a=1"}}); got != "" {
+		t.Errorf("TraceID without traceparent = %q, want none", got)
+	}
 }
 
 // newTestRecorder returns a recorder whose access log is JSON in a buffer.
