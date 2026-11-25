@@ -1,0 +1,75 @@
+# Prometheus on kind (ADR-0075 §D10): compose's static jobs for the
+# observability stack, Kubernetes service discovery for Spillway's pods in
+# the spillway namespace only (a Role there lets it list pods), and Redis per
+# node through redis_exporter. make kind-up puts this file in the ConfigMap
+# prometheus-config.
+global:
+  scrape_interval: 5s
+
+# Alert rules (OB-05) come from the ConfigMap prometheus-rules once the
+# observability task adds them; until then the directory is empty.
+rule_files:
+  - /etc/prometheus/rules/*.yaml
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+  - job_name: otel-collector
+    static_configs:
+      - targets: ["otel-collector:8888"]
+  - job_name: tempo
+    static_configs:
+      - targets: ["tempo:3200"]
+  - job_name: loki
+    static_configs:
+      - targets: ["loki:3100"]
+  - job_name: redis-exporter
+    static_configs:
+      - targets: ["redis-exporter:9121"]
+  # One target per Redis node through redis_exporter's /scrape, labelled
+  # with the node's name (redis-0 … redis-5).
+  - job_name: redis
+    metrics_path: /scrape
+    static_configs:
+      - targets:
+          - redis://redis-0.redis.spillway-deps.svc.cluster.local:6379
+          - redis://redis-1.redis.spillway-deps.svc.cluster.local:6379
+          - redis://redis-2.redis.spillway-deps.svc.cluster.local:6379
+          - redis://redis-3.redis.spillway-deps.svc.cluster.local:6379
+          - redis://redis-4.redis.spillway-deps.svc.cluster.local:6379
+          - redis://redis-5.redis.spillway-deps.svc.cluster.local:6379
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__address__]
+        regex: "redis://([^.]+)\\..*"
+        target_label: node
+        replacement: "$1"
+      - target_label: __address__
+        replacement: redis-exporter:9121
+  # The chart's pods (ADR-0075 §D11): the admin port, a container port named
+  # admin on the pod IP (GW-25), of pods labelled
+  # app.kubernetes.io/name: spillway-gateway or spillway-controlplane. The
+  # replica label is the pod name, which is a gateway's replica ID in
+  # Kubernetes, so the admin UI's per-replica queries work (ADR-0059).
+  - job_name: gateway
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces: { names: [spillway] }
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name, __meta_kubernetes_pod_container_port_name, __meta_kubernetes_pod_phase]
+        regex: spillway-gateway;admin;Running
+        action: keep
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: replica
+  - job_name: controlplane
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces: { names: [spillway] }
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name, __meta_kubernetes_pod_container_port_name, __meta_kubernetes_pod_phase]
+        regex: spillway-controlplane;admin;Running
+        action: keep
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: replica

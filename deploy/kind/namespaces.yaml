@@ -1,0 +1,17 @@
+# The kind cluster's namespaces (ADR-0075 §D10): the Helm chart's, the
+# dependencies' (Redis, Postgres, Keycloak, the demo upstream) and
+# observability's.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: spillway
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: spillway-deps
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: spillway-obs

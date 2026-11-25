@@ -1,0 +1,44 @@
+# The in-cluster half of make kind-smoke (ADR-0075 §D10): chaos kindsmoke in
+# the spillway namespace, trusting only the mkcert CA (the ConfigMap
+# mkcert-ca). test/kind/smoke.sh applies it, waits for it and prints its
+# PASS/FAIL lines.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kind-smoke
+  namespace: spillway
+  labels: { app.kubernetes.io/name: kind-smoke }
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 90
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: kind-smoke }
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: smoke
+          image: spillway-chaos:kind
+          imagePullPolicy: Never
+          args:
+            - kindsmoke
+            - -keycloak-issuer=https://keycloak.spillway-deps.svc.cluster.local:8443/auth/realms/spillway
+            - -ca=/etc/spillway-ca/ca.pem
+          resources:
+            requests: { cpu: 50m, memory: 32Mi }
+            limits: { memory: 64Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: ca, mountPath: /etc/spillway-ca, readOnly: true }
+      volumes:
+        - name: ca
+          configMap: { name: mkcert-ca }
