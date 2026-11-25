@@ -5,9 +5,10 @@
 # prometheus-config.
 global:
   scrape_interval: 5s
+  evaluation_interval: 15s # as compose's (ADR-0087)
 
-# Alert rules (OB-05) come from the ConfigMap prometheus-rules once the
-# observability task adds them; until then the directory is empty.
+# Alert rules (OB-05): deploy/prometheus/rules, from the ConfigMap
+# prometheus-rules that make kind-up makes.
 rule_files:
   - /etc/prometheus/rules/*.yaml
 
