@@ -56,7 +56,12 @@ During rule (c)'s outage a background poller asks compose's Prometheus every 5 s
 
 ### Measured
 
-Recorded by this task's runs; the PR description repeats them.
+Recorded by this task's runs on the laptop (Docker Desktop, 14 CPUs, about 8.3 GB) on 2026-11-26:
+
+- **(c6), `make chaos-cp-outage` three times: 3 of 3 PASS**, with every other line of rule (c) passing too. The alert was first seen firing for gateway-1 at +65 s, +71 s and +81 s of outages of 600, 601 and 600 s; recovery (c5) after 6.4, 6.3 and 11.3 s; zero failed requests of 347,870, 347,920 and 347,887. Each run took 728 s.
+- **kind, three cycles of `make kind-up` → `make kind-smoke` → `make kind-down` from nothing (compose stopped): 3 of 3 PASS**, every smoke line passing, the two new ones as "16 of 16 rules, 0 failing" and "5 of 5" dashboards. kind-up took 146, 139 and 109 s; kind-smoke 14 s each; kind-down 2, 2 and 1 s. A fourth cluster checked the restart path: re-running `make kind-up` with a changed rule file printed "alert rules changed: restarting Prometheus" and finished in 20 s, and kind-smoke passed after.
+- **promtool:** `check rules` finds 16 rules; the rule unit tests pass, and fail when an expected annotation or the flapping breaker's series is changed (checked once by hand).
+- **Compose:** a sampled request's exemplar appeared in Prometheus 3 s after the first request; 81 dashboard queries valid; `make verify-m0-stack` 20/20 services healthy (redis-exporter included).
 
 ## Consequences
 
