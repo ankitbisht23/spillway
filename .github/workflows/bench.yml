@@ -115,7 +115,7 @@ jobs:
           jq -r '"### Scaling (NFR-02), \(.arch): \(if .valid then (if .pass then "PASS" else "FAIL" end) else "INVALID" end)\n",
             "- CPU model: **\(.hardware.cpu_model)**; commit \(.commit[:7]) on `\(.ref)`",
             "- R(1) = \(.n1.r) rps (P \(.n1.p | round)), R(2) = \(.n2.r) rps (P \(.n2.p | round)); S = R(2) ÷ R(1) = \(.scaling // "n/a"), pass at >= 1.70",
-            (.n1, .n2 | .gateway_vcpus as $n | .probes | to_entries[] | "- n=\($n) probe \(.key + 1): \(.value.rps_2xx | round) 2xx/s; vCPU gateway \(.value.vcpu.gateway * 100 | round / 100), loadgen \(.value.vcpu.loadgen * 100 | round / 100), upstream \(.value.vcpu.upstream * 100 | round / 100); gateway-bound \(.value.gateway_bound)"),
+            (.n1, .n2 | .gateway_vcpus as $n | .probes | to_entries[] | "- n=\($n) probe \(.key + 1): \(.value.rps_2xx | round) 2xx/s; vCPU gateway \(.value.vcpu.gateway * 100 | round / 100), loadgen \(.value.vcpu.loadgen * 100 | round / 100), upstream \(.value.vcpu.upstream * 100 | round / 100) (together \((.value.vcpu.loadgen + .value.vcpu.upstream) * 100 | round / 100)); gateway-bound \(.value.gateway_bound)"),
             (.invalid_reasons[] | "- invalid: \(.)")' result.json >> "$GITHUB_STEP_SUMMARY"
       - name: Gate the run set
         id: gate
