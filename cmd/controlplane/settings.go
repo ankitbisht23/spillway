@@ -32,11 +32,18 @@ type settings struct {
 	// The config stream's mTLS (SEC-02, ADR-0040): PEM files, reloaded
 	// when they change; there is no plaintext gRPC listener.
 	grpcTLS mtls.Files // SPILLWAY_CP_GRPC_TLS_CERT, SPILLWAY_CP_GRPC_TLS_KEY: the server certificate and key; SPILLWAY_CP_GRPC_CLIENT_CA: the stream CA that gateway certificates must chain to
+	// fleet are the client certificate names that stand for a fleet of
+	// gateways (ADR-0075 §D11): each replica of a fleet F names itself in
+	// replica_id as F-<suffix>, a DNS label; in Kubernetes F is the
+	// Deployment's name and the replica a pod's. Empty by default, so
+	// every certificate names one replica (D7).
+	fleet []string // SPILLWAY_CP_GRPC_FLEET_IDENTITIES: comma-separated names
 
 	// Bearer tokens (CP-11, ADR-0040)
 	oidcIssuer   string // SPILLWAY_CP_OIDC_ISSUER: the browser-facing issuer every token's iss must equal
 	oidcJWKSURL  string // SPILLWAY_CP_OIDC_JWKS_URL: where the issuer's keys are fetched (in-network in dev, ADR-0004)
 	oidcAudience string // SPILLWAY_CP_OIDC_AUDIENCE: a value every token's aud must contain, default spillway-controlplane
+	oidcCA       string // SPILLWAY_CP_OIDC_CA: PEM certificates trusted for the JWKS URL besides the system roots, optional (SEC-04)
 	devMode      bool   // SPILLWAY_CP_DEV_MODE: accept http:// issuer and JWKS URLs (SEC-04), default false
 
 	// SPILLWAY_CP_PROMETHEUS_URL: the Prometheus the live-data stream's
@@ -85,6 +92,15 @@ func loadSettings(getenv func(string) string) (settings, error) {
 	if s.grpcTLS.Cert == "" || s.grpcTLS.Key == "" || s.grpcTLS.CA == "" {
 		return s, errors.New("SPILLWAY_CP_GRPC_TLS_CERT, SPILLWAY_CP_GRPC_TLS_KEY and SPILLWAY_CP_GRPC_CLIENT_CA are required: the config stream is mTLS only (SEC-02)")
 	}
+	for f := range strings.SplitSeq(getenv("SPILLWAY_CP_GRPC_FLEET_IDENTITIES"), ",") {
+		if f = strings.TrimSpace(f); f == "" {
+			continue
+		}
+		if !mtls.ValidReplicaName(f) {
+			return s, fmt.Errorf("SPILLWAY_CP_GRPC_FLEET_IDENTITIES: %q is not a DNS label (lower-case letters, digits and '-', at most 63)", f)
+		}
+		s.fleet = append(s.fleet, f)
+	}
 	nets := getenv("SPILLWAY_CP_ALLOWED_NETWORKS")
 	if nets == "" {
 		return s, errors.New("SPILLWAY_CP_ALLOWED_NETWORKS is required: the gateways' upstream allow-list (SEC-06)")
@@ -99,6 +115,7 @@ func loadSettings(getenv func(string) string) (settings, error) {
 	}
 	s.oidcIssuer, s.oidcJWKSURL = getenv("SPILLWAY_CP_OIDC_ISSUER"), getenv("SPILLWAY_CP_OIDC_JWKS_URL")
 	s.oidcAudience = cmp.Or(getenv("SPILLWAY_CP_OIDC_AUDIENCE"), "spillway-controlplane")
+	s.oidcCA = getenv("SPILLWAY_CP_OIDC_CA")
 	for name, u := range map[string]string{"SPILLWAY_CP_OIDC_ISSUER": s.oidcIssuer, "SPILLWAY_CP_OIDC_JWKS_URL": s.oidcJWKSURL} {
 		if err := auth.CheckURL(u, s.devMode); err != nil {
 			return s, fmt.Errorf("%s: %w", name, err)

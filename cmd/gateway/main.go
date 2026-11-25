@@ -1,11 +1,12 @@
 // Command gateway is Spillway's data plane: it routes requests on the current
 // config snapshot and proxies them to upstreams. `gateway version` prints the
-// version; `gateway healthcheck` exits 0 only if the running gateway is ready.
+// version; `gateway healthcheck` exits 0 only if the running gateway is ready;
+// `gateway snapshot-seed` and `gateway snapshot-export` copy the on-disk
+// snapshot in and out of a pod (CP-07).
 package main
 
 import (
 	"context"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -53,6 +54,10 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "snapshot-seed":
+			os.Exit(snapshotSeed(os.Args[2:], os.Stderr))
+		case "snapshot-export":
+			os.Exit(snapshotExport(os.Args[2:], os.Getenv, os.Stdout, os.Stderr))
 		}
 	}
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
@@ -214,9 +219,13 @@ func serve(ctx context.Context, s settings, log *slog.Logger, tracer trace.Trace
 	} else {
 		// mTLS only; the replica name is the client certificate's (SEC-02,
 		// D7, ADR-0040).
-		streamCerts, replica, err := mtls.LoadGateway(s.streamTLS, log)
+		streamCerts, certName, err := mtls.LoadGateway(s.streamTLS, log)
 		if err != nil {
 			return fmt.Errorf("config stream mTLS: %w", err)
+		}
+		replica, err := replicaName(certName, s.replicaID)
+		if err != nil {
+			return err
 		}
 		go streamCerts.Run(bg, time.Second)
 		conn, err := grpc.NewClient(managed.Target(s.controlPlane), managed.DialOptions(streamCerts.ClientConfig(s.cpServerName))...)
@@ -374,6 +383,19 @@ func serve(ctx context.Context, s settings, log *slog.Logger, tracer trace.Trace
 	return nil
 }
 
+// replicaName is the gateway's replica name: the client certificate's name,
+// or, when SPILLWAY_GATEWAY_REPLICA_ID is set, that ID, which must be a
+// replica of the fleet the certificate names (ADR-0075 §D11).
+func replicaName(certName, replicaID string) (string, error) {
+	if replicaID == "" {
+		return certName, nil
+	}
+	if err := mtls.FleetReplica(certName, replicaID); err != nil {
+		return "", fmt.Errorf("SPILLWAY_GATEWAY_REPLICA_ID: %w; the client certificate names the fleet %q", err, certName)
+	}
+	return replicaID, nil
+}
+
 // checkRedis rejects a snapshot with a Redis policy, or a plan with quotas,
 // when the gateway has no Redis (ADR-0021, ADR-0070).
 func checkRedis(snap *config.Snapshot, haveRedis bool) error {
@@ -412,19 +434,5 @@ func checkAuth(snap *config.Snapshot, haveJWT, managed bool) error {
 // jwksClient is the client the token keys are fetched with: the system
 // roots, plus the certificates in caFile when set (SEC-04, ADR-0039).
 func jwksClient(caFile string) (*http.Client, error) {
-	if caFile == "" {
-		return auth.NewClient(nil), nil
-	}
-	pem, err := os.ReadFile(caFile) //nolint:gosec // G304: a path from the gateway's own settings
-	if err != nil {
-		return nil, fmt.Errorf("SPILLWAY_GATEWAY_JWT_CA: %w", err)
-	}
-	roots, err := x509.SystemCertPool()
-	if err != nil {
-		roots = x509.NewCertPool()
-	}
-	if !roots.AppendCertsFromPEM(pem) {
-		return nil, fmt.Errorf("SPILLWAY_GATEWAY_JWT_CA: no PEM certificate in %s", caFile)
-	}
-	return auth.NewClient(roots), nil
+	return auth.NewClientWithCA(caFile, "SPILLWAY_GATEWAY_JWT_CA")
 }

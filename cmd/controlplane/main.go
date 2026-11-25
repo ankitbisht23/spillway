@@ -123,8 +123,12 @@ func serve(log *slog.Logger, getenv func(string) string) error {
 	}
 	defer st.Close()
 
+	jwks, err := auth.NewClientWithCA(s.oidcCA, "SPILLWAY_CP_OIDC_CA")
+	if err != nil {
+		return err
+	}
 	verifier, err := auth.New(auth.Config{
-		Issuer: s.oidcIssuer, JWKSURL: s.oidcJWKSURL, Audience: s.oidcAudience, AllowHTTP: s.devMode, Log: log,
+		Issuer: s.oidcIssuer, JWKSURL: s.oidcJWKSURL, Audience: s.oidcAudience, AllowHTTP: s.devMode, Client: jwks, Log: log,
 	})
 	if err != nil {
 		return err
@@ -196,6 +200,9 @@ func serve(log *slog.Logger, getenv func(string) string) error {
 	} else {
 		log.Warn("SPILLWAY_CP_REDIS_ADDRS is not set: the quota flusher is off, so quota usage is not flushed and lost Redis data is not re-seeded")
 	}
+	if len(s.fleet) > 0 {
+		log.Info("config stream: fleet certificates", "fleet", s.fleet) // names only, no key material
+	}
 	ectx, stopElection := context.WithCancel(context.Background())
 	elected := make(chan struct{})
 	go func() {
@@ -209,7 +216,7 @@ func serve(log *slog.Logger, getenv func(string) string) error {
 					defer func() { stopFlusher(); flushing.Wait() }()
 					flushing.Go(func() { flusher.Run(fctx) })
 				}
-				if err := stream.Serve(ctx, s.grpcAddr, streamCerts.ServerConfig(), st, st, log, func(d int) { streams.Add(float64(d)) }); err != nil {
+				if err := stream.Serve(ctx, s.grpcAddr, streamCerts.ServerConfig(), st, st, log, func(d int) { streams.Add(float64(d)) }, s.fleet); err != nil {
 					log.Error("config stream failed", "err", err)
 				}
 			},

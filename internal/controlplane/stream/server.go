@@ -51,17 +51,23 @@ func acceptSchema(v *configpb.SchemaVersion) bool {
 // Service is ConfigService on the active replica (CP-06, CP-08).
 type Service struct {
 	configpb.UnimplementedConfigServiceServer
-	b   *Broadcaster
-	rec Recorder
-	log *slog.Logger
+	b     *Broadcaster
+	rec   Recorder
+	log   *slog.Logger
+	fleet map[string]bool // certificate names that stand for a fleet (ADR-0075 §D11)
 
 	lastHeartbeatErr atomic.Int64 // unix nanos of the last failed heartbeat logged
 }
 
 // NewService serves the broadcaster's updates and records heartbeats in
-// rec.
-func NewService(b *Broadcaster, rec Recorder, log *slog.Logger) *Service {
-	return &Service{b: b, rec: rec, log: log}
+// rec. A client certificate whose name is one of fleet stands for a fleet
+// of replicas, each naming itself in replica_id (ADR-0075 §D11).
+func NewService(b *Broadcaster, rec Recorder, log *slog.Logger, fleet []string) *Service {
+	s := &Service{b: b, rec: rec, log: log, fleet: map[string]bool{}}
+	for _, f := range fleet {
+		s.fleet[f] = true
+	}
+	return s
 }
 
 // Watch registers the stream under its replica name, sends the current
@@ -161,8 +167,8 @@ func serverOptions(tlsConfig *tls.Config, log *slog.Logger) []grpc.ServerOption 
 // ConfigService on a listener at addr, mTLS with tlsConfig (ADR-0040). When
 // ctx ends it closes every stream with UNAVAILABLE, stops the broadcaster
 // and the prune, and closes the listener. It returns early only if it
-// cannot listen.
-func Serve(ctx context.Context, addr string, tlsConfig *tls.Config, src Source, rec Recorder, log *slog.Logger, streams func(int)) error {
+// cannot listen. fleet lists the fleet certificates' names (ADR-0075 §D11).
+func Serve(ctx context.Context, addr string, tlsConfig *tls.Config, src Source, rec Recorder, log *slog.Logger, streams func(int), fleet []string) error {
 	bctx, stopB := context.WithCancel(context.Background())
 	b := NewBroadcaster(src, log, streams)
 	bDone, pruned := make(chan struct{}), make(chan struct{})
@@ -189,7 +195,7 @@ func Serve(ctx context.Context, addr string, tlsConfig *tls.Config, src Source, 
 		return fmt.Errorf("gRPC listener: %w", err)
 	}
 	gs := grpc.NewServer(serverOptions(tlsConfig, log)...)
-	configpb.RegisterConfigServiceServer(gs, NewService(b, rec, log))
+	configpb.RegisterConfigServiceServer(gs, NewService(b, rec, log, fleet))
 	served := make(chan error, 1)
 	go func() { served <- gs.Serve(ln) }()
 	log.Info("listening", "server", "grpc", "addr", ln.Addr().String())

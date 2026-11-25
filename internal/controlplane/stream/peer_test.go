@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -133,5 +134,87 @@ func TestStreamMTLS(t *testing.T) {
 	}
 	if out := logs.String(); strings.Contains(out, "PRIVATE KEY") || strings.Contains(out, "BEGIN") {
 		t.Errorf("PEM data in the logs:\n%s", out)
+	}
+}
+
+// TestStreamFleet checks the fleet identity end to end over gRPC with mTLS
+// (ADR-0075 §D11): two replicas share one certificate named "fleet", which
+// configServer lists as a fleet; each names itself in replica_id, both
+// watch at once and their heartbeats are recorded under their own names; a
+// fleet call without replica_id, or with one outside the fleet, is
+// PERMISSION_DENIED and logged; a certificate that is not listed cannot
+// claim a fleet name.
+func TestStreamFleet(t *testing.T) {
+	var logs syncBuffer
+	rec := &fakeRecorder{live: 1}
+	c, _ := configServer(t, newFakeSource(1, 1), rec, slog.New(slog.NewJSONHandler(&logs, nil)))
+	ctx := t.Context()
+	dir := t.TempDir()
+	c.ca.Issue(t, dir, testcert.Leaf{DNSNames: []string{"fleet"}, Client: true})
+	a, b := c.dial(loadFiles(t, dir).ClientConfig("controlplane")), c.dial(loadFiles(t, dir).ClientConfig("controlplane"))
+
+	for name, cl := range map[string]configpb.ConfigServiceClient{"fleet-7d9f8-a1": a, "fleet-7d9f8-b2": b} {
+		if _, err := cl.Heartbeat(ctx, &configpb.HeartbeatRequest{ReplicaId: name}); err != nil {
+			t.Fatalf("Heartbeat as %s: %v", name, err)
+		}
+	}
+	sa, err := a.Watch(ctx, watchReq("fleet-7d9f8-a1", "", 0, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := recv(t, sa); got != "config 1" {
+		t.Fatalf("Watch as fleet-7d9f8-a1: %q, %v", got, err)
+	}
+	sb, err := b.Watch(ctx, watchReq("fleet-7d9f8-b2", "", 0, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := recv(t, sb); got != "config 1" {
+		t.Fatalf("Watch as fleet-7d9f8-b2: %q, %v", got, err)
+	}
+	// The first stream is still open: its next message is the identity, not
+	// the ABORTED a stream gets when another with its name replaces it.
+	if got, err := recv(t, sa); got != "identity 1" {
+		t.Fatalf("fleet-7d9f8-a1 after the second Watch: %q, %v", got, err)
+	}
+	rec.mu.Lock()
+	names := slices.Clone(rec.names)
+	rec.mu.Unlock()
+	slices.Sort(names)
+	if !slices.Equal(names, []string{"fleet-7d9f8-a1", "fleet-7d9f8-b2"}) {
+		t.Errorf("recorded as %v, want each replica under its own name", names)
+	}
+
+	for _, tc := range []struct {
+		client configpb.ConfigServiceClient
+		id     string
+		logged string
+	}{
+		{a, "", `"msg":"config stream: a fleet certificate's call without replica_id"`},
+		{a, "fleet", `"msg":"config stream: replica_id is not a replica of the fleet"`},
+		{a, "fleet-", `"msg":"config stream: replica_id is not a replica of the fleet"`},
+		{a, "other-a1", `"replica_id":"other-a1"`},
+		{a, "fleet-A1", `"replica_id":"fleet-A1"`},
+		{a, "fleet-" + strings.Repeat("a", 58), `"fleet":"fleet"`},
+		// gateway-3's certificate is not a fleet's: its own rule applies.
+		{c.as("gateway-3"), "gateway-3-a1", `"replica":"gateway-3","replica_id":"gateway-3-a1"`},
+	} {
+		before := logs.String()
+		_, hbErr := tc.client.Heartbeat(ctx, &configpb.HeartbeatRequest{ReplicaId: tc.id})
+		s, err := tc.client.Watch(ctx, watchReq(tc.id, "", 0, 0))
+		if err == nil {
+			_, err = recv(t, s)
+		}
+		if status.Code(hbErr) != codes.PermissionDenied || status.Code(err) != codes.PermissionDenied {
+			t.Errorf("replica_id %q: Heartbeat %v, Watch %v; want PermissionDenied", tc.id, hbErr, err)
+		}
+		if added := strings.TrimPrefix(logs.String(), before); !strings.Contains(added, tc.logged) {
+			t.Errorf("replica_id %q: logged %q, want a line with %q", tc.id, added, tc.logged)
+		}
+	}
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	if len(rec.names) != 2 {
+		t.Errorf("refused calls recorded heartbeats: %v", rec.names)
 	}
 }

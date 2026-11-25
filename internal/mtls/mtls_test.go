@@ -187,6 +187,39 @@ func TestReplicaName(t *testing.T) {
 	}
 }
 
+// TestFleetReplica checks the fleet rule (ADR-0075 §D11): the fleet's
+// name, '-', at least one more character, a DNS label of at most 63.
+func TestFleetReplica(t *testing.T) {
+	for _, tt := range []struct {
+		id   string
+		want string
+	}{
+		{"spillway-gateway-7d9f8c6b5-x2k4p", ""},
+		{"spillway-gateway-a", ""},
+		{"spillway-gateway", "does not start with"},
+		{"spillway-gateway-", "does not start with"},
+		{"", "does not start with"},
+		{"other-gateway-abc", "does not start with"},
+		{"spillway-gatewayx-abc", "does not start with"},
+		{"spillway-gateway-ABC", "not a DNS label"},
+		{"spillway-gateway-a.b", "not a DNS label"},
+		{"spillway-gateway-abc-", "not a DNS label"},
+		{"spillway-gateway-" + strings.Repeat("a", 47), "not a DNS label"}, // 64 characters
+		{"spillway-gateway-" + strings.Repeat("a", 46), ""},                // 63
+	} {
+		err := mtls.FleetReplica("spillway-gateway", tt.id)
+		switch {
+		case tt.want == "" && err != nil:
+			t.Errorf("%q: %v", tt.id, err)
+		case tt.want != "" && (err == nil || !strings.Contains(err.Error(), tt.want)):
+			t.Errorf("%q: %v, want %q", tt.id, err, tt.want)
+		}
+	}
+	if !mtls.ValidReplicaName("spillway-gateway") || mtls.ValidReplicaName("Spillway") || mtls.ValidReplicaName("") {
+		t.Error("ValidReplicaName does not follow the DNS label rule")
+	}
+}
+
 // TestReload checks the reload (ADR-0040): a new certificate and CA serve
 // the next handshake; a set that fails to load, or that names another
 // replica, keeps the current one and is logged once; the key's content is

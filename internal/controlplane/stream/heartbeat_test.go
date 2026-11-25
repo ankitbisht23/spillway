@@ -105,7 +105,7 @@ func TestHeartbeat(t *testing.T) {
 func TestHeartbeatErrorsLoggedOncePerMinute(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		var buf bytes.Buffer
-		s := NewService(nil, &fakeRecorder{fail: errors.New("connection refused")}, slog.New(slog.NewTextHandler(&buf, nil)))
+		s := NewService(nil, &fakeRecorder{fail: errors.New("connection refused")}, slog.New(slog.NewTextHandler(&buf, nil)), nil)
 		hb := &configpb.HeartbeatRequest{ReplicaId: "gateway-1"}
 		ctx := context.WithValue(t.Context(), replicaKey{}, "gateway-1") // as the interceptor sets it
 		for range 13 {                                                   // 60 s of heartbeats every 5 s

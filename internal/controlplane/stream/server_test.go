@@ -89,7 +89,7 @@ func configServer(t *testing.T, src *fakeSource, rec Recorder, log *slog.Logger)
 	ca.Issue(t, dir, testcert.Leaf{DNSNames: []string{"controlplane"}})
 	ln := bufconn.Listen(1 << 20)
 	gs := grpc.NewServer(serverOptions(loadFiles(t, dir).ServerConfig(), log)...)
-	configpb.RegisterConfigServiceServer(gs, NewService(b, rec, log))
+	configpb.RegisterConfigServiceServer(gs, NewService(b, rec, log, []string{"fleet"}))
 	go func() { _ = gs.Serve(ln) }()
 	t.Cleanup(gs.Stop)
 	return &clients{t: t, ln: ln, ca: ca, conns: map[string]configpb.ConfigServiceClient{}}, b
