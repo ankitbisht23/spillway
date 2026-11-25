@@ -23,7 +23,8 @@ ADR-0075's "Observability as code" section sets the dashboards (OB-04), the aler
 2. **Burn-rate alerts have no `for`**: the short window (5 m or 30 m) already makes one end soon after the burn does, as in the SRE workbook's multi-window alerts. `SpillwayRedisErrors` and `SpillwayRedisMemoryHigh` have ADR-0075's `for: 5m`; `SpillwayConfigSyncStale` has none (its 60 s is the wait).
 3. **SLO ratios are over every gateway together** (`sum(rate(…))`, no labels kept): an SLO is the service's. Without traffic the ratio is NaN and nothing fires. **`SpillwayRedisErrors` is per gateway** (`sum by (job, replica)`), so one replica that cannot reach Redis alerts even when the others can.
 4. **Rules every 15 s** (`evaluation_interval: 15s` in compose's and kind's `prometheus.yml`; Prometheus's default is 1 m), so `SpillwayConfigSyncStale` fires within 15 s of its 60 s threshold.
-5. **Annotations** show only the series' own labels (`replica`, `upstream`, `node`, `job`, `instance`), never a key, consumer or path (OB-01); `runbook_url` is `https://github.com/ankitbisht23/spillway/blob/main/docs/runbooks/<file>.md`.
+5. **`SpillwayRedisMemoryHigh` reads the `redis` job only** (`{job="redis"}`): the `redis-exporter` job's own `/metrics` (its `REDIS_ADDR`, redis-0) repeats redis-0's series without a `node` label, which would fire a second, unlabelled alert for the same node. The promtool test feeds both and expects one alert.
+6. **Annotations** show only the series' own labels (`replica`, `upstream`, `node`, `job`, `instance`), never a key, consumer or path (OB-01); `runbook_url` is `https://github.com/ankitbisht23/spillway/blob/main/docs/runbooks/<file>.md`.
 
 ### Exemplars (OB-06)
 

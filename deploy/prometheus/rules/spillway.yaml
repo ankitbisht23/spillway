@@ -74,8 +74,10 @@ groups:
           summary: "Gateway {{ $labels.replica }}: more than 1% of its Redis limiter calls fail."
           description: "Redis errors are {{ $value | humanizePercentage }} of the Redis rate-limit checks of {{ $labels.replica }}; its policies follow their failure modes meanwhile."
           runbook_url: https://github.com/ankitbisht23/spillway/blob/main/docs/runbooks/redis-errors.md
+      # The redis job's per-node series only: the redis-exporter job's own
+      # /metrics repeats redis-0's without a node label (ADR-0087).
       - alert: SpillwayRedisMemoryHigh
-        expr: redis_memory_used_bytes / (redis_memory_max_bytes > 0) > 0.8
+        expr: redis_memory_used_bytes{job="redis"} / (redis_memory_max_bytes{job="redis"} > 0) > 0.8
         for: 5m
         labels: { severity: ticket }
         annotations:

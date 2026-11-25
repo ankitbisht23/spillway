@@ -136,10 +136,16 @@ tests:
               description: "Redis errors are 2% of the Redis rate-limit checks of gateway-1; its policies follow their failure modes meanwhile."
               runbook_url: https://github.com/ankitbisht23/spillway/blob/main/docs/runbooks/redis-errors.md
 
-  # Redis memory: redis-0 at 82% of 256 MiB for 10 minutes fires; redis-1
-  # at 70% and redis-2 without a maxmemory (0) do not.
+  # Redis memory: redis-0 at 82% of 256 MiB for 10 minutes fires once,
+  # from the redis job (the redis-exporter job's copy of redis-0, without a
+  # node label, does not fire a second alert); redis-1 at 70% and redis-2
+  # without a maxmemory (0) do not.
   - interval: 1m
     input_series:
+      - series: 'redis_memory_used_bytes{job="redis-exporter",instance="redis-exporter:9121"}'
+        values: '220117073x10'
+      - series: 'redis_memory_max_bytes{job="redis-exporter",instance="redis-exporter:9121"}'
+        values: '268435456x10'
       - series: 'redis_memory_used_bytes{job="redis",instance="redis-exporter:9121",node="redis-0"}'
         values: '220117073x10'
       - series: 'redis_memory_max_bytes{job="redis",instance="redis-exporter:9121",node="redis-0"}'
