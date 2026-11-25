@@ -160,7 +160,7 @@ func TestAPIKeysReload(t *testing.T) {
 
 // managedIdentity compiles a managed identity (ADR-0039) with consumer 3 of
 // tenant acme and the given key entries.
-func managedIdentity(t *testing.T, keys ...*configpb.ApiKey) *config.Identity {
+func managedIdentity(t testing.TB, keys ...*configpb.ApiKey) *config.Identity {
 	t.Helper()
 	id, err := config.CompileIdentity(&configpb.Identity{
 		Version: 1, KeyFormat: config.KeyFormatManaged,
@@ -177,7 +177,7 @@ func managedIdentity(t *testing.T, keys ...*configpb.ApiKey) *config.Identity {
 // newManagedKey makes a managed key at run time (a literal one would trip
 // the gitleaks rule) and its identity entry, expiring at expires unless
 // zero.
-func newManagedKey(t *testing.T, id int64, expires time.Time) (apikey.Key, *configpb.ApiKey) {
+func newManagedKey(t testing.TB, id int64, expires time.Time) (apikey.Key, *configpb.ApiKey) {
 	t.Helper()
 	k, err := apikey.Generate()
 	if err != nil {

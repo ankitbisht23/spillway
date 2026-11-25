@@ -15,6 +15,7 @@ deploy/stream-certs/
 /dist/
 *.test
 *.out
+*.pprof
 coverage.html
 
 # Web
