@@ -1,0 +1,704 @@
+{
+  "arch": "arm64",
+  "commit": "a3a0c87111a3d2a9afc8cdd28458566ca12b597b",
+  "gate": {
+    "verdict": "ungated",
+    "baseline": null,
+    "release_baseline": null,
+    "release_tag": null,
+    "comparisons": [],
+    "rerun_of": null
+  },
+  "hardware": {
+    "cpu_model": "implementer 0x41 part 0xd49",
+    "cpus": 4,
+    "memory_bytes": 16715923456,
+    "os": "Ubuntu 24.04.5 LTS",
+    "kernel": "7.0.0-1017-azure",
+    "topology": [
+      {
+        "cpu": 0,
+        "core": 1,
+        "socket": 36,
+        "thread_siblings": "0"
+      },
+      {
+        "cpu": 1,
+        "core": 2,
+        "socket": 36,
+        "thread_siblings": "1"
+      },
+      {
+        "cpu": 2,
+        "core": 3,
+        "socket": 36,
+        "thread_siblings": "2"
+      },
+      {
+        "cpu": 3,
+        "core": 4,
+        "socket": 36,
+        "thread_siblings": "3"
+      }
+    ]
+  },
+  "invalid_reasons": [
+    "n=1 probe 1: not gateway-bound (vCPU gateway 0.95 \u003c 0.95 or loadgen 0.62 / upstream 0.33 \u003e 0.90)",
+    "n=1 probe 2: not gateway-bound (vCPU gateway 0.95 \u003c 0.95 or loadgen 0.62 / upstream 0.33 \u003e 0.90)",
+    "n=1 probe 3: not gateway-bound (vCPU gateway 0.95 \u003c 0.95 or loadgen 0.62 / upstream 0.33 \u003e 0.90)",
+    "n=2 probe 1: not gateway-bound (vCPU gateway 1.69 \u003c 1.9 or loadgen 0.85 / upstream 0.47 \u003e 0.90)",
+    "n=2 probe 2: not gateway-bound (vCPU gateway 1.7 \u003c 1.9 or loadgen 0.84 / upstream 0.47 \u003e 0.90)",
+    "n=2 probe 3: not gateway-bound (vCPU gateway 1.7 \u003c 1.9 or loadgen 0.84 / upstream 0.47 \u003e 0.90)"
+  ],
+  "n1": {
+    "gateway_vcpus": 1,
+    "gateway_cpus": "0",
+    "p": 11697.2,
+    "r": 10500,
+    "probes_gateway_bound": false,
+    "run_set_valid": true,
+    "invalid_reasons": [
+      "n=1 probe 1: not gateway-bound (vCPU gateway 0.95 \u003c 0.95 or loadgen 0.62 / upstream 0.33 \u003e 0.90)",
+      "n=1 probe 2: not gateway-bound (vCPU gateway 0.95 \u003c 0.95 or loadgen 0.62 / upstream 0.33 \u003e 0.90)",
+      "n=1 probe 3: not gateway-bound (vCPU gateway 0.95 \u003c 0.95 or loadgen 0.62 / upstream 0.33 \u003e 0.90)"
+    ],
+    "achieved_rps": {
+      "median": 10500,
+      "min": 10499.994444444445,
+      "max": 10500,
+      "spread": 5.291005290928297E-7
+    },
+    "latency_us": {
+      "p50": {
+        "median": 351,
+        "min": 349,
+        "max": 358,
+        "spread": 0.02564102564102564
+      },
+      "p99": {
+        "median": 5715,
+        "min": 5191,
+        "max": 7031,
+        "spread": 0.3219597550306212
+      },
+      "p99_9": {
+        "median": 8155,
+        "min": 7299,
+        "max": 30271,
+        "spread": 2.816922133660331
+      }
+    },
+    "probes": [
+      {
+        "url": "http://gateway:8000/bytes/1024",
+        "protocol": "HTTP/1.1",
+        "target_rps": 26400,
+        "achieved_rps": 11756.6,
+        "valid": false,
+        "warmup_s": 10,
+        "duration_s": 30,
+        "requests": {
+          "scheduled": 792000,
+          "sent": 352698,
+          "dropped": 439302
+        },
+        "status": {
+          "2xx": 352698
+        },
+        "errors": {},
+        "latency_us": {
+          "p50": 849407,
+          "p99": 892415,
+          "p99_9": 915967,
+          "max": 933375
+        },
+        "hardware": {
+          "cpu_model": "implementer 0x41 part 0xd49",
+          "goarch": "arm64",
+          "num_cpu": 1,
+          "gomaxprocs": 1
+        },
+        "vcpu": {
+          "window_s": 28.0486869812012,
+          "gateway": 0.9471936428898117,
+          "loadgen": 0.6201394386716881,
+          "upstream": 0.32839744000043486
+        },
+        "rps_2xx": 11756.6,
+        "gateway_bound": false
+      },
+      {
+        "url": "http://gateway:8000/bytes/1024",
+        "protocol": "HTTP/1.1",
+        "target_rps": 26400,
+        "achieved_rps": 11697.2,
+        "valid": false,
+        "warmup_s": 10,
+        "duration_s": 30,
+        "requests": {
+          "scheduled": 792000,
+          "sent": 350916,
+          "dropped": 441084
+        },
+        "status": {
+          "2xx": 350916
+        },
+        "errors": {},
+        "latency_us": {
+          "p50": 855039,
+          "p99": 889855,
+          "p99_9": 896511,
+          "max": 915967
+        },
+        "hardware": {
+          "cpu_model": "implementer 0x41 part 0xd49",
+          "goarch": "arm64",
+          "num_cpu": 1,
+          "gomaxprocs": 1
+        },
+        "vcpu": {
+          "window_s": 28.0432870388031,
+          "gateway": 0.9493883139719245,
+          "loadgen": 0.6180746563702317,
+          "upstream": 0.3283381148315268
+        },
+        "rps_2xx": 11697.2,
+        "gateway_bound": false
+      },
+      {
+        "url": "http://gateway:8000/bytes/1024",
+        "protocol": "HTTP/1.1",
+        "target_rps": 26400,
+        "achieved_rps": 11661.6,
+        "valid": false,
+        "warmup_s": 10,
+        "duration_s": 30,
+        "requests": {
+          "scheduled": 792000,
+          "sent": 349848,
+          "dropped": 442152
+        },
+        "status": {
+          "2xx": 349848
+        },
+        "errors": {},
+        "latency_us": {
+          "p50": 857599,
+          "p99": 888831,
+          "p99_9": 912383,
+          "max": 934911
+        },
+        "hardware": {
+          "cpu_model": "implementer 0x41 part 0xd49",
+          "goarch": "arm64",
+          "num_cpu": 1,
+          "gomaxprocs": 1
+        },
+        "vcpu": {
+          "window_s": 28.0509798526764,
+          "gateway": 0.948634526842066,
+          "loadgen": 0.6185586061923071,
+          "upstream": 0.3274689885431422
+        },
+        "rps_2xx": 11661.6,
+        "gateway_bound": false
+      }
+    ],
+    "runs": [
+      {
+        "url": "http://gateway:8000/bytes/1024",
+        "protocol": "HTTP/1.1",
+        "target_rps": 10500,
+        "achieved_rps": 10500,
+        "valid": true,
+        "warmup_s": 30,
+        "duration_s": 180,
+        "requests": {
+          "scheduled": 1890000,
+          "sent": 1890000,
+          "dropped": 0
+        },
+        "status": {
+          "2xx": 1890000
+        },
+        "errors": {},
+        "latency_us": {
+          "p50": 352,
+          "p99": 6263,
+          "p99_9": 9095,
+          "max": 38751
+        },
+        "hardware": {
+          "cpu_model": "implementer 0x41 part 0xd49",
+          "goarch": "arm64",
+          "num_cpu": 1,
+          "gomaxprocs": 1
+        }
+      },
+      {
+        "url": "http://gateway:8000/bytes/1024",
+        "protocol": "HTTP/1.1",
+        "target_rps": 10500,
+        "achieved_rps": 10500,
+        "valid": true,
+        "warmup_s": 30,
+        "duration_s": 180,
+        "requests": {
+          "scheduled": 1890000,
+          "sent": 1890000,
+          "dropped": 0
+        },
+        "status": {
+          "2xx": 1890000
+        },
+        "errors": {},
+        "latency_us": {
+          "p50": 349,
+          "p99": 5191,
+          "p99_9": 7299,
+          "max": 11655
+        },
+        "hardware": {
+          "cpu_model": "implementer 0x41 part 0xd49",
+          "goarch": "arm64",
+          "num_cpu": 1,
+          "gomaxprocs": 1
+        }
+      },
+      {
+        "url": "http://gateway:8000/bytes/1024",
+        "protocol": "HTTP/1.1",
+        "target_rps": 10500,
+        "achieved_rps": 10500,
+        "valid": true,
+        "warmup_s": 30,
+        "duration_s": 180,
+        "requests": {
+          "scheduled": 1890000,
+          "sent": 1890000,
+          "dropped": 0
+        },
+        "status": {
+          "2xx": 1890000
+        },
+        "errors": {},
+        "latency_us": {
+          "p50": 350,
+          "p99": 5595,
+          "p99_9": 7967,
+          "max": 11567
+        },
+        "hardware": {
+          "cpu_model": "implementer 0x41 part 0xd49",
+          "goarch": "arm64",
+          "num_cpu": 1,
+          "gomaxprocs": 1
+        }
+      },
+      {
+        "url": "http://gateway:8000/bytes/1024",
+        "protocol": "HTTP/1.1",
+        "target_rps": 10500,
+        "achieved_rps": 10500,
+        "valid": true,
+        "warmup_s": 30,
+        "duration_s": 180,
+        "requests": {
+          "scheduled": 1890000,
+          "sent": 1890000,
+          "dropped": 0
+        },
+        "status": {
+          "2xx": 1890000
+        },
+        "errors": {},
+        "latency_us": {
+          "p50": 358,
+          "p99": 7031,
+          "p99_9": 30271,
+          "max": 63103
+        },
+        "hardware": {
+          "cpu_model": "implementer 0x41 part 0xd49",
+          "goarch": "arm64",
+          "num_cpu": 1,
+          "gomaxprocs": 1
+        }
+      },
+      {
+        "url": "http://gateway:8000/bytes/1024",
+        "protocol": "HTTP/1.1",
+        "target_rps": 10500,
+        "achieved_rps": 10499.994444444445,
+        "valid": true,
+        "warmup_s": 30,
+        "duration_s": 180,
+        "requests": {
+          "scheduled": 1890000,
+          "sent": 1889999,
+          "dropped": 1
+        },
+        "status": {
+          "2xx": 1889999
+        },
+        "errors": {},
+        "latency_us": {
+          "p50": 351,
+          "p99": 5715,
+          "p99_9": 8155,
+          "max": 13503
+        },
+        "hardware": {
+          "cpu_model": "implementer 0x41 part 0xd49",
+          "goarch": "arm64",
+          "num_cpu": 1,
+          "gomaxprocs": 1
+        }
+      }
+    ]
+  },
+  "n2": {
+    "gateway_vcpus": 2,
+    "gateway_cpus": "0,2",
+    "p": 19254.033333333333,
+    "r": 17300,
+    "probes_gateway_bound": false,
+    "run_set_valid": true,
+    "invalid_reasons": [
+      "n=2 probe 1: not gateway-bound (vCPU gateway 1.69 \u003c 1.9 or loadgen 0.85 / upstream 0.47 \u003e 0.90)",
+      "n=2 probe 2: not gateway-bound (vCPU gateway 1.7 \u003c 1.9 or loadgen 0.84 / upstream 0.47 \u003e 0.90)",
+      "n=2 probe 3: not gateway-bound (vCPU gateway 1.7 \u003c 1.9 or loadgen 0.84 / upstream 0.47 \u003e 0.90)"
+    ],
+    "achieved_rps": {
+      "median": 17300,
+      "min": 17299.994444444445,
+      "max": 17300,
+      "spread": 3.211303789291741E-7
+    },
+    "latency_us": {
+      "p50": {
+        "median": 955,
+        "min": 916,
+        "max": 976,
+        "spread": 0.06282722513089005
+      },
+      "p99": {
+        "median": 7315,
+        "min": 7199,
+        "max": 131199,
+        "spread": 16.95146958304853
+      },
+      "p99_9": {
+        "median": 10855,
+        "min": 10615,
+        "max": 206719,
+        "spread": 18.065776140027637
+      }
+    },
+    "probes": [
+      {
+        "url": "http://gateway:8000/bytes/1024",
+        "protocol": "HTTP/1.1",
+        "target_rps": 52800,
+        "achieved_rps": 19295.666666666668,
+        "valid": false,
+        "warmup_s": 10,
+        "duration_s": 30,
+        "requests": {
+          "scheduled": 1584000,
+          "sent": 578870,
+          "dropped": 1005130
+        },
+        "status": {
+          "2xx": 578870
+        },
+        "errors": {},
+        "latency_us": {
+          "p50": 516351,
+          "p99": 582143,
+          "p99_9": 593919,
+          "max": 611839
+        },
+        "hardware": {
+          "cpu_model": "implementer 0x41 part 0xd49",
+          "goarch": "arm64",
+          "num_cpu": 1,
+          "gomaxprocs": 1
+        },
+        "vcpu": {
+          "window_s": 28.0535850524902,
+          "gateway": 1.6909185371938507,
+          "loadgen": 0.8474213885861177,
+          "upstream": 0.47096718566553397
+        },
+        "rps_2xx": 19295.666666666668,
+        "gateway_bound": false
+      },
+      {
+        "url": "http://gateway:8000/bytes/1024",
+        "protocol": "HTTP/1.1",
+        "target_rps": 52800,
+        "achieved_rps": 19254.033333333333,
+        "valid": false,
+        "warmup_s": 10,
+        "duration_s": 30,
+        "requests": {
+          "scheduled": 1584000,
+          "sent": 577621,
+          "dropped": 1006379
+        },
+        "status": {
+          "2xx": 577621
+        },
+        "errors": {},
+        "latency_us": {
+          "p50": 517887,
+          "p99": 581119,
+          "p99_9": 594943,
+          "max": 608767
+        },
+        "hardware": {
+          "cpu_model": "implementer 0x41 part 0xd49",
+          "goarch": "arm64",
+          "num_cpu": 1,
+          "gomaxprocs": 1
+        },
+        "vcpu": {
+          "window_s": 28.0577487945557,
+          "gateway": 1.700467644405522,
+          "loadgen": 0.8426980429943796,
+          "upstream": 0.47049391227572435
+        },
+        "rps_2xx": 19254.033333333333,
+        "gateway_bound": false
+      },
+      {
+        "url": "http://gateway:8000/bytes/1024",
+        "protocol": "HTTP/1.1",
+        "target_rps": 52800,
+        "achieved_rps": 19075.333333333332,
+        "valid": false,
+        "warmup_s": 10,
+        "duration_s": 30,
+        "requests": {
+          "scheduled": 1584000,
+          "sent": 572260,
+          "dropped": 1011740
+        },
+        "status": {
+          "2xx": 572260
+        },
+        "errors": {},
+        "latency_us": {
+          "p50": 520959,
+          "p99": 588799,
+          "p99_9": 603647,
+          "max": 615423
+        },
+        "hardware": {
+          "cpu_model": "implementer 0x41 part 0xd49",
+          "goarch": "arm64",
+          "num_cpu": 1,
+          "gomaxprocs": 1
+        },
+        "vcpu": {
+          "window_s": 28.0486640930176,
+          "gateway": 1.6952313251823208,
+          "loadgen": 0.8391712675492246,
+          "upstream": 0.46775878368004264
+        },
+        "rps_2xx": 19075.333333333332,
+        "gateway_bound": false
+      }
+    ],
+    "runs": [
+      {
+        "url": "http://gateway:8000/bytes/1024",
+        "protocol": "HTTP/1.1",
+        "target_rps": 17300,
+        "achieved_rps": 17300,
+        "valid": true,
+        "warmup_s": 30,
+        "duration_s": 180,
+        "requests": {
+          "scheduled": 3114000,
+          "sent": 3114000,
+          "dropped": 0
+        },
+        "status": {
+          "2xx": 3114000
+        },
+        "errors": {},
+        "latency_us": {
+          "p50": 953,
+          "p99": 7315,
+          "p99_9": 11191,
+          "max": 31103
+        },
+        "hardware": {
+          "cpu_model": "implementer 0x41 part 0xd49",
+          "goarch": "arm64",
+          "num_cpu": 1,
+          "gomaxprocs": 1
+        }
+      },
+      {
+        "url": "http://gateway:8000/bytes/1024",
+        "protocol": "HTTP/1.1",
+        "target_rps": 17300,
+        "achieved_rps": 17300,
+        "valid": true,
+        "warmup_s": 30,
+        "duration_s": 180,
+        "requests": {
+          "scheduled": 3114000,
+          "sent": 3114000,
+          "dropped": 0
+        },
+        "status": {
+          "2xx": 3114000
+        },
+        "errors": {},
+        "latency_us": {
+          "p50": 916,
+          "p99": 7199,
+          "p99_9": 10855,
+          "max": 29583
+        },
+        "hardware": {
+          "cpu_model": "implementer 0x41 part 0xd49",
+          "goarch": "arm64",
+          "num_cpu": 1,
+          "gomaxprocs": 1
+        }
+      },
+      {
+        "url": "http://gateway:8000/bytes/1024",
+        "protocol": "HTTP/1.1",
+        "target_rps": 17300,
+        "achieved_rps": 17299.994444444445,
+        "valid": true,
+        "warmup_s": 30,
+        "duration_s": 180,
+        "requests": {
+          "scheduled": 3114000,
+          "sent": 3113999,
+          "dropped": 1
+        },
+        "status": {
+          "2xx": 3113999
+        },
+        "errors": {},
+        "latency_us": {
+          "p50": 976,
+          "p99": 131199,
+          "p99_9": 206719,
+          "max": 233215
+        },
+        "hardware": {
+          "cpu_model": "implementer 0x41 part 0xd49",
+          "goarch": "arm64",
+          "num_cpu": 1,
+          "gomaxprocs": 1
+        }
+      },
+      {
+        "url": "http://gateway:8000/bytes/1024",
+        "protocol": "HTTP/1.1",
+        "target_rps": 17300,
+        "achieved_rps": 17300,
+        "valid": true,
+        "warmup_s": 30,
+        "duration_s": 180,
+        "requests": {
+          "scheduled": 3114000,
+          "sent": 3114000,
+          "dropped": 0
+        },
+        "status": {
+          "2xx": 3114000
+        },
+        "errors": {},
+        "latency_us": {
+          "p50": 955,
+          "p99": 7267,
+          "p99_9": 10615,
+          "max": 29055
+        },
+        "hardware": {
+          "cpu_model": "implementer 0x41 part 0xd49",
+          "goarch": "arm64",
+          "num_cpu": 1,
+          "gomaxprocs": 1
+        }
+      },
+      {
+        "url": "http://gateway:8000/bytes/1024",
+        "protocol": "HTTP/1.1",
+        "target_rps": 17300,
+        "achieved_rps": 17300,
+        "valid": true,
+        "warmup_s": 30,
+        "duration_s": 180,
+        "requests": {
+          "scheduled": 3114000,
+          "sent": 3114000,
+          "dropped": 0
+        },
+        "status": {
+          "2xx": 3114000
+        },
+        "errors": {},
+        "latency_us": {
+          "p50": 969,
+          "p99": 7323,
+          "p99_9": 10807,
+          "max": 28319
+        },
+        "hardware": {
+          "cpu_model": "implementer 0x41 part 0xd49",
+          "goarch": "arm64",
+          "num_cpu": 1,
+          "gomaxprocs": 1
+        }
+      }
+    ]
+  },
+  "pass": false,
+  "ref": "refs/heads/m7-nfr-load",
+  "rule": {
+    "min_scaling": 1.70,
+    "gateway_bound": {
+      "gateway_min_vcpu_per_n": 0.95,
+      "loadgen_max_vcpu": 0.90,
+      "upstream_max_vcpu": 0.90
+    }
+  },
+  "run_url": "https://github.com/ankitbisht23/spillway/actions/runs/45626436921",
+  "scaling": 1.6476190476190475,
+  "setup": {
+    "mode": "scaling",
+    "cpus": {
+      "gateway_1": "0",
+      "gateway_2": "0,2",
+      "loadgen": "1",
+      "upstream": "3"
+    },
+    "upstream": "loadgen serve -bytes 1024",
+    "url": "http://gateway:8000/bytes/1024",
+    "rate_per_vcpu": 8800,
+    "conns": 200,
+    "probe": {
+      "runs": 3,
+      "offered": "3 x rate_per_vcpu x n",
+      "warmup": "10s",
+      "duration": "30s"
+    },
+    "warmup": "30s",
+    "duration": "3m",
+    "access_log_sample_rate": 0.01,
+    "otlp": "none"
+  },
+  "timestamp": "2026-11-25T13:43:22Z",
+  "valid": false
+}
