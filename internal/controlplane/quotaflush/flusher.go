@@ -90,7 +90,7 @@ type Flusher struct {
 	mu            sync.Mutex
 	tenants       []tenant            // the quota tenants of the last flush
 	versions      [2]int64            // the config and identity versions the last flush saw
-	lastPrune     time.Time           // on Now's clock
+	lastPrune     time.Time           // on Now's clock; under mu, as Flush may run concurrently
 	loggedAt      map[int64]time.Time // tenant -> when its last Redis error was logged
 }
 
@@ -409,15 +409,22 @@ func (f *Flusher) refresh(ctx context.Context, tenants []int64, now time.Time) {
 }
 
 // prune deletes daily rows older than keep, once every pruneEvery.
+// lastPrune is under f.mu: the advisory lock orders concurrent Flush calls
+// in Postgres but not in Go's memory model.
 func (f *Flusher) prune(ctx context.Context, tx *store.QuotaTx, now time.Time) error {
-	if !f.lastPrune.IsZero() && now.Sub(f.lastPrune) < pruneEvery {
+	f.mu.Lock()
+	last := f.lastPrune
+	f.mu.Unlock()
+	if !last.IsZero() && now.Sub(last) < pruneEvery {
 		return nil
 	}
 	n, err := tx.Prune(ctx, quota.Day(now.Add(-keep)).ID)
 	if err != nil {
 		return err
 	}
+	f.mu.Lock()
 	f.lastPrune = now
+	f.mu.Unlock()
 	if n > 0 {
 		f.log.Info("pruned daily quota usage", "rows", n, "older_than", keep)
 	}
