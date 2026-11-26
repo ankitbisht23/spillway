@@ -181,6 +181,12 @@ acc() {
 
 # added <measured>: verify-m2/m3's added-latency line, shortened.
 added() { sed -E 's/^median p99 [0-9.]+ \(of ([^)]*)\) - [0-9.]+ \(of ([^)]*)\) = ([-0-9.]+) ms added.*/added p99 \3 ms (median of gateway runs \1 ms minus median of direct runs \2 ms)/'; }
+# failed_runs <step> <section regex>: the section's failed lines other than
+# its summary, as "; FAIL <check>: <measured>" (why an added-latency check
+# had no three valid pairs).
+failed_runs() {
+	checks "$1" "$2" | awk '/^FAIL / && !/ added p99 <= / { s = substr($0, 7); sub(/  +/, ": ", s); printf "; FAIL %s", s }'
+}
 
 # report <dir>: the rows of the run in <dir> (from its state.env, logs and
 # bench files): prints them, writes <dir>.json and returns 1 if a counted
@@ -288,13 +294,13 @@ report() {
 	# NFR-03
 	local t03="added p99 ≤ 2 ms over direct-to-upstream, local limits"
 	if ran m2; then
-		row NFR-03 "$(verdict_of m2 'NFR-03')" true "$t03" "$where, make verify-m2" "$(meas m2 'NFR-03 added p99 <= 2 ms' | added)"
+		row NFR-03 "$(verdict_of m2 'NFR-03')" true "$t03" "$where, make verify-m2" "$(meas m2 'NFR-03 added p99 <= 2 ms' | added)$(failed_runs m2 'NFR-03')"
 	else not_run NFR-03 "$t03" "$where"; fi
 
 	# NFR-04
 	local t04="0 ≤ added p99 ≤ 5 ms with a Redis policy (ADR-0021, ADR-0027, ADR-0034)"
 	if ran m3; then
-		row NFR-04 "$(verdict_of m3 'NFR-04')" true "$t04" "$where, make verify-m3" "$(meas m3 'NFR-04 added p99 <= 5 ms' | added)"
+		row NFR-04 "$(verdict_of m3 'NFR-04')" true "$t04" "$where, make verify-m3" "$(meas m3 'NFR-04 added p99 <= 5 ms' | added)$(failed_runs m3 'NFR-04')"
 	else not_run NFR-04 "$t04" "$where"; fi
 
 	# NFR-06

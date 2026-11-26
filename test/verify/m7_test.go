@@ -286,10 +286,11 @@ func TestReportPassing(t *testing.T) {
 
 func TestReportFailures(t *testing.T) {
 	for _, c := range []struct {
-		name  string
-		edit  func(*run)
-		want  map[string]string
-		fails int
+		name    string
+		edit    func(*run)
+		want    map[string]string
+		measure map[string]string
+		fails   int
 	}{
 		{
 			// A FAIL in one of verify-m3's sections fails only its row.
@@ -301,6 +302,21 @@ func TestReportFailures(t *testing.T) {
 			},
 			want:  map[string]string{"NFR-13": "FAIL", "NFR-04": "PASS", "NFR-06": "PASS"},
 			fails: 1,
+		},
+		{
+			// A gateway run whose Redis errors are not one stall burst voids
+			// NFR-04; its line says which run and why.
+			name: "NFR-04 without three valid pairs",
+			edit: func(r *run) {
+				r.logs["m3"] = strings.Replace(r.logs["m3"],
+					line("PASS", "NFR-04 added p99 <= 5 ms", "median p99 2.000 (of 2.000, 2.100, 1.900) - 1.700 (of 1.700, 1.800, 1.600) = 0.300 ms added; median p50 1 - 1 = 0 ms added"),
+					line("FAIL", "gateway-1, Redis policy, run 2", "59994/60000 answered 2xx, 6 failed (not excused: failures span 63156.0 ms > 1000 ms)")+"\n"+
+						line("FAIL", "NFR-04 added p99 <= 5 ms", "no three valid pairs of runs to compare"), 1)
+				r.codes["m3"] = 1
+			},
+			want:    map[string]string{"NFR-04": "FAIL", "NFR-13": "PASS", "NFR-06": "PASS"},
+			measure: map[string]string{"NFR-04": "no three valid pairs of runs to compare; FAIL gateway-1, Redis policy, run 2: 59994/60000 answered 2xx, 6 failed (not excused"},
+			fails:   1,
 		},
 		{
 			// NFR-05 counts first as a FAIL (ADR-0074); NFR-01 still passes.
@@ -405,7 +421,13 @@ func TestReportFailures(t *testing.T) {
 			r := passing()
 			c.edit(r)
 			j, code := r.report(t)
-			wantVerdicts(t, rowsOf(t, j), c.want)
+			rows := rowsOf(t, j)
+			wantVerdicts(t, rows, c.want)
+			for id, m := range c.measure {
+				if !strings.Contains(rows[id]["measured"].(string), m) {
+					t.Errorf("%s measured %q lacks %q", id, rows[id]["measured"], m)
+				}
+			}
 			wantExit, wantCode := "PASS", 0
 			if c.fails > 0 {
 				wantExit, wantCode = fmt.Sprintf("FAIL (%d rows)", c.fails), 1
