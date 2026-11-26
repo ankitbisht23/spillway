@@ -2,6 +2,13 @@
 # owner role's password from the Secret dev-secrets, one replica with a 1 Gi
 # volume on kind's default storage class (standard). The chart's migrate Job
 # creates the app role (CP-19, ADR-0040).
+#
+# Hardening (ADR-0091): the image's entrypoint starts as root, takes the
+# data directory and socket directory for postgres (chown, chmod) and then
+# drops to it with gosu, so the container keeps only the capabilities that
+# needs (CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID) and has no privilege
+# escalation, with the runtime's default seccomp profile. Its root
+# filesystem stays writable (ADR-0085 item 6).
 apiVersion: v1
 kind: Service
 metadata:
@@ -29,6 +36,8 @@ spec:
       labels: { app.kubernetes.io/name: postgres }
     spec:
       automountServiceAccountToken: false
+      securityContext:
+        seccompProfile: { type: RuntimeDefault }
       containers:
         - name: postgres
           image: postgres:18.6
@@ -47,6 +56,11 @@ spec:
           resources:
             requests: { cpu: 100m, memory: 128Mi }
             limits: { memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+              add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
           volumeMounts:
             - { name: data, mountPath: /var/lib/postgresql }
   volumeClaimTemplates:

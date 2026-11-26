@@ -619,3 +619,40 @@ func TestCheckRedisQuotas(t *testing.T) {
 		t.Errorf("no quotas, no Redis: %v", err)
 	}
 }
+
+// TestWarnUnenforcedQuotas: a managed gateway without Redis warns, once per
+// identity version, of the consumers whose quota overrides it cannot count;
+// with Redis, or without such overrides, it says nothing (ADR-0091).
+func TestWarnUnenforcedQuotas(t *testing.T) {
+	compile := func(overrides ...*configpb.Override) *config.Identity {
+		t.Helper()
+		id, err := config.CompileIdentity(&configpb.Identity{
+			Version: 7, KeyFormat: config.KeyFormatManaged, Tenants: []*configpb.Tenant{{Id: 1, Name: "acme"}},
+			Consumers: []*configpb.Consumer{{Id: 3, TenantId: 1, Name: "bot"}, {Id: 4, TenantId: 1, Name: "app"}}, Overrides: overrides,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	withQuotas := compile(
+		&configpb.Override{Id: 1, ConsumerId: 3, Quotas: &configpb.Quotas{Daily: 10}},
+		&configpb.Override{Id: 2, ConsumerId: 3, Quotas: &configpb.Quotas{Monthly: 50}},
+		&configpb.Override{Id: 3, ConsumerId: 4, Quotas: &configpb.Quotas{}}, // zeros: no quotas
+		&configpb.Override{Id: 4, ConsumerId: 4, PolicyId: 12, Limits: []*configpb.Limit{{Rate: 1, Period: "1s"}}},
+	)
+	if warnUnenforcedQuotas(slog.New(slog.DiscardHandler), true) != nil {
+		t.Error("a hook with Redis")
+	}
+	var logs strings.Builder
+	warn := warnUnenforcedQuotas(slog.New(slog.NewTextHandler(&logs, nil)), false)
+	warn(compile(&configpb.Override{Id: 3, ConsumerId: 4, Quotas: &configpb.Quotas{}}))
+	if logs.Len() != 0 {
+		t.Errorf("no quota override with a quota: %s", logs.String())
+	}
+	warn(withQuotas)
+	if got := logs.String(); strings.Count(got, "\n") != 1 || !strings.Contains(got, "level=WARN") ||
+		!strings.Contains(got, "quota overrides are not enforced") || !strings.Contains(got, "identity_version=7 consumers=1") {
+		t.Errorf("log %q, want one warning naming identity 7 and 1 consumer", got)
+	}
+}

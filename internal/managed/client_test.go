@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -571,5 +572,20 @@ func TestTargetResolvesOnDial(t *testing.T) {
 		case <-time.After(5 * time.Second):
 			t.Fatal("the dialer was not called: the name went to a resolver first")
 		}
+	}
+}
+
+// TestIdentityApplied: the IdentityApplied hook gets each identity once it
+// is in use, and never one that is rejected (ADR-0091).
+func TestIdentityApplied(t *testing.T) {
+	var got []int64
+	c := New(newFakeCP(false), Options{
+		ReplicaID: "gateway-1", SnapshotPath: filepath.Join(t.TempDir(), "snapshot.pb"), Log: discard(),
+		IdentityApplied: func(id *config.Identity) { got = append(got, id.Version) },
+	})
+	c.applyIdentity(schema(config.SchemaMajor), &configpb.Identity{Version: 4, KeyFormat: config.KeyFormatManaged}, "", sourceStream)
+	c.applyIdentity(schema(config.SchemaMajor), &configpb.Identity{Version: 5, KeyFormat: "nope"}, "", sourceStream)
+	if !slices.Equal(got, []int64{4}) || c.Identity().Version != 4 {
+		t.Errorf("hook saw %v, identity in use %d; want [4] and 4", got, c.Identity().Version)
 	}
 }

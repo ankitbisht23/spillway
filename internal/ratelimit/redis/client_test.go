@@ -654,13 +654,18 @@ func TestHealthChecks(t *testing.T) {
 	f := newFakeNode(t, "8.0.0", func(string) string { return allowedReply })
 	c := NewClient([]string{f.addr}, nil, Auth{}, ratelimit.SystemClock, slog.New(slog.DiscardHandler))
 	defer func() { _ = c.Close() }()
-	budget := func() error {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
+	call := func(timeout time.Duration) error {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 		_, err := c.Call(ctx, 1, oneLimit)
 		return err
 	}
-	if err := budget(); err != nil { // the client meets the node
+	budget := func() error { return call(5 * time.Millisecond) }
+	// The client meets the node (a dial, the slot map, the version check
+	// and the script) outside the 5 ms budget, which a loaded CI runner
+	// can miss (main CI run 45487522090); the polling below tolerates
+	// individual timeouts.
+	if err := call(5 * time.Second); err != nil {
 		t.Fatal(err)
 	}
 	wait := func(step string, done func(error) bool) time.Duration {

@@ -220,6 +220,47 @@ func TestQuotaFailureModes(t *testing.T) {
 	}
 }
 
+// TestQuotaFailureModesLease: a fail_closed batched policy served from a
+// lease still decides its call's quotas: once its lease holds tokens, a
+// request whose quota-only call fails or answers quota_unseeded is a 503,
+// as it is when the policy is in the call, and not admitted fail_open
+// (ADR-0070, ADR-0091).
+func TestQuotaFailureModesLease(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		unseeded bool // else the call fails
+	}{{"failed quota call", false}, {"unseeded quota call", true}} {
+		t.Run(tt.name, func(t *testing.T) {
+			w := newPlanWorld(t, "127.0.0.1/32")
+			yaml := strings.Replace(quotaPolicies, "FAILURE", "fail_closed", 1)
+			yaml = strings.Replace(yaml, "failure_mode: fail_closed}", "failure_mode: fail_closed, lease_k: 5}", 1)
+			w.g.swap(t, managedSnapshot(t, w.routes+yaml))
+			w.redis.clock = w.g.clock.Now
+			if resp, body := w.sendQuota(t, "app"); resp.StatusCode != http.StatusOK { // reserves the lease
+				t.Fatalf("first request: %d %s", resp.StatusCode, body)
+			}
+			if calls := w.redis.take(); len(calls) != 1 || !strings.Contains(calls[0], "lease 5") {
+				t.Fatalf("first request's calls %q, want one reserving the lease", calls)
+			}
+			if tt.unseeded {
+				w.redis.unseeded["{t:2}"] = true
+			} else {
+				w.redis.setFail("{t:2}", true)
+			}
+			resp, body := w.sendQuota(t, "app")
+			if resp.StatusCode != http.StatusServiceUnavailable {
+				t.Errorf("lease-served request: %d %s, want 503 (fail_closed)", resp.StatusCode, body)
+			}
+			if calls := w.redis.take(); len(calls) != 1 || strings.Contains(calls[0], "rl:v1:") {
+				t.Errorf("lease-served request's calls %q, want one quota-only call", calls)
+			}
+			if !strings.Contains(w.g.logs.String(), `"policy":"quota/daily","decision":"fail_closed"`) {
+				t.Errorf("access log has no fail_closed quota decision:\n%s", w.g.logs.String())
+			}
+		})
+	}
+}
+
 // redisPlanKey is the key of app's redis-plan limit in the fake Redis.
 func (w *planWorld) redisPlanKey(t *testing.T) string {
 	t.Helper()

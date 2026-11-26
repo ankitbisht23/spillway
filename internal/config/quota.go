@@ -64,6 +64,28 @@ func (s *Snapshot) Quotas(c *Consumer, id *Identity, t time.Time) Quotas {
 	return s.PlanQuotas[c.Plan]
 }
 
+// QuotaOverrideConsumers is the number of consumers with a quota override
+// that has a quota, active now or later (RL-10). A gateway without Redis
+// cannot count them (ADR-0091).
+func (id *Identity) QuotaOverrideConsumers() int {
+	if id == nil {
+		return 0
+	}
+	n := 0
+	for k, os := range id.overrides {
+		if k[1] != 0 {
+			continue
+		}
+		for _, o := range os {
+			if o.quotas.Any() {
+				n++
+				break
+			}
+		}
+	}
+	return n
+}
+
 // QuotaOverride returns the quotas of consumer's quota override that
 // applies at t, if any (RL-10, ADR-0070), chosen as Override chooses: a
 // burst grant beats a standing override, then the latest start, then the
