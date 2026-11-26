@@ -1,0 +1,244 @@
+{
+  "achieved_rps": {
+    "median": 4599.988888888889,
+    "min": 4599.977777777778,
+    "max": 4600,
+    "spread": 4.8309295432377764e-06
+  },
+  "arch": "x64",
+  "commit": "067dbd2f484606e91893db7e2675b691992afbab",
+  "gate": {
+    "verdict": "first",
+    "baseline": null,
+    "release_baseline": null,
+    "release_tag": null,
+    "comparisons": [],
+    "rerun_of": null
+  },
+  "hardware": {
+    "cpu_model": "AMD EPYC 9V45 96-Core Processor",
+    "cpus": 4,
+    "memory_bytes": 16759431168,
+    "os": "Ubuntu 26.04.1 LTS",
+    "kernel": "7.0.0-1020-azure",
+    "topology": [
+      {
+        "cpu": 0,
+        "core": 0,
+        "socket": 0,
+        "thread_siblings": "0-1"
+      },
+      {
+        "cpu": 1,
+        "core": 0,
+        "socket": 0,
+        "thread_siblings": "0-1"
+      },
+      {
+        "cpu": 2,
+        "core": 1,
+        "socket": 0,
+        "thread_siblings": "2-3"
+      },
+      {
+        "cpu": 3,
+        "core": 1,
+        "socket": 0,
+        "thread_siblings": "2-3"
+      }
+    ]
+  },
+  "invalid_reasons": [],
+  "latency_us": {
+    "p50": {
+      "median": 590,
+      "min": 565,
+      "max": 594,
+      "spread": 0.04915254237288136
+    },
+    "p99": {
+      "median": 2129,
+      "min": 2006,
+      "max": 2511,
+      "spread": 0.23720056364490372
+    },
+    "p99_9": {
+      "median": 12647,
+      "min": 11647,
+      "max": 18143,
+      "spread": 0.5136395983237131
+    }
+  },
+  "ref": "refs/heads/m7-verify",
+  "rps_per_vcpu": 4599.988888888889,
+  "run_url": "https://github.com/ankitbisht23/spillway/actions/runs/45755559828",
+  "runs": [
+    {
+      "url": "http://gateway:8000/bytes/1024",
+      "protocol": "HTTP/1.1",
+      "target_rps": 4600,
+      "achieved_rps": 4599.988888888889,
+      "valid": true,
+      "warmup_s": 30,
+      "duration_s": 180,
+      "requests": {
+        "scheduled": 828000,
+        "sent": 827998,
+        "dropped": 2
+      },
+      "status": {
+        "2xx": 827998
+      },
+      "errors": {},
+      "latency_us": {
+        "p50": 591,
+        "p99": 2006,
+        "p99_9": 11647,
+        "max": 45055
+      },
+      "hardware": {
+        "cpu_model": "AMD EPYC 9V45 96-Core Processor",
+        "goarch": "amd64",
+        "num_cpu": 2,
+        "gomaxprocs": 2
+      }
+    },
+    {
+      "url": "http://gateway:8000/bytes/1024",
+      "protocol": "HTTP/1.1",
+      "target_rps": 4600,
+      "achieved_rps": 4600,
+      "valid": true,
+      "warmup_s": 30,
+      "duration_s": 180,
+      "requests": {
+        "scheduled": 828000,
+        "sent": 828000,
+        "dropped": 0
+      },
+      "status": {
+        "2xx": 828000
+      },
+      "errors": {},
+      "latency_us": {
+        "p50": 590,
+        "p99": 2129,
+        "p99_9": 12647,
+        "max": 42303
+      },
+      "hardware": {
+        "cpu_model": "AMD EPYC 9V45 96-Core Processor",
+        "goarch": "amd64",
+        "num_cpu": 2,
+        "gomaxprocs": 2
+      }
+    },
+    {
+      "url": "http://gateway:8000/bytes/1024",
+      "protocol": "HTTP/1.1",
+      "target_rps": 4600,
+      "achieved_rps": 4599.977777777778,
+      "valid": true,
+      "warmup_s": 30,
+      "duration_s": 180,
+      "requests": {
+        "scheduled": 828000,
+        "sent": 827996,
+        "dropped": 4
+      },
+      "status": {
+        "2xx": 827996
+      },
+      "errors": {},
+      "latency_us": {
+        "p50": 594,
+        "p99": 2099,
+        "p99_9": 12119,
+        "max": 40447
+      },
+      "hardware": {
+        "cpu_model": "AMD EPYC 9V45 96-Core Processor",
+        "goarch": "amd64",
+        "num_cpu": 2,
+        "gomaxprocs": 2
+      }
+    },
+    {
+      "url": "http://gateway:8000/bytes/1024",
+      "protocol": "HTTP/1.1",
+      "target_rps": 4600,
+      "achieved_rps": 4600,
+      "valid": true,
+      "warmup_s": 30,
+      "duration_s": 180,
+      "requests": {
+        "scheduled": 828000,
+        "sent": 828000,
+        "dropped": 0
+      },
+      "status": {
+        "2xx": 828000
+      },
+      "errors": {},
+      "latency_us": {
+        "p50": 572,
+        "p99": 2365,
+        "p99_9": 16943,
+        "max": 43519
+      },
+      "hardware": {
+        "cpu_model": "AMD EPYC 9V45 96-Core Processor",
+        "goarch": "amd64",
+        "num_cpu": 2,
+        "gomaxprocs": 2
+      }
+    },
+    {
+      "url": "http://gateway:8000/bytes/1024",
+      "protocol": "HTTP/1.1",
+      "target_rps": 4600,
+      "achieved_rps": 4599.977777777778,
+      "valid": true,
+      "warmup_s": 30,
+      "duration_s": 180,
+      "requests": {
+        "scheduled": 828000,
+        "sent": 827996,
+        "dropped": 4
+      },
+      "status": {
+        "2xx": 827996
+      },
+      "errors": {},
+      "latency_us": {
+        "p50": 565,
+        "p99": 2511,
+        "p99_9": 18143,
+        "max": 50463
+      },
+      "hardware": {
+        "cpu_model": "AMD EPYC 9V45 96-Core Processor",
+        "goarch": "amd64",
+        "num_cpu": 2,
+        "gomaxprocs": 2
+      }
+    }
+  ],
+  "setup": {
+    "gateway_vcpus": 1,
+    "cpus": {
+      "gateway": "0",
+      "loadgen": "1-2",
+      "upstream": "3"
+    },
+    "url": "http://gateway:8000/bytes/1024",
+    "protocol": "HTTP/1.1",
+    "warmup": "30s",
+    "duration": "3m",
+    "access_log_sample_rate": 0.01,
+    "trace_sample_ratio": 0.01
+  },
+  "target_rps": 4600,
+  "timestamp": "2026-11-26T04:29:58Z",
+  "valid": true
+}
