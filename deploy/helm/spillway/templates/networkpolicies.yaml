@@ -1,7 +1,9 @@
 {{- /*
 GW-25 (ADR-0075 §D11): the admin ports admit only Prometheus and the
 kubelet (the node network). The gateway's traffic port is open; the control
-plane's gRPC admits the gateways and its REST the pods of this namespace.
+plane's gRPC admits the gateways and its REST the pods of this namespace
+other than the gateways (SEC-02, ADR-0091): a published route to it would
+otherwise put the admin API and UI on the public edge.
 Egress is not restricted in v1.
 */}}
 apiVersion: networking.k8s.io/v1
@@ -48,7 +50,9 @@ spec:
       ports:
         - { protocol: TCP, port: 9090 }
     - from:
-        - podSelector: {}
+        - podSelector:
+            matchExpressions:
+              - { key: app.kubernetes.io/name, operator: NotIn, values: [spillway-gateway] }
       ports:
         - { protocol: TCP, port: 8080 }
     - from:

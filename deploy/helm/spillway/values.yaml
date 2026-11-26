@@ -32,7 +32,10 @@ gateway:
     nodePort: 30443
     # Cluster: every node forwards to every ready gateway. Client addresses
     # reaching the gateway are then node addresses (SNAT), so IP-keyed
-    # limits and maxConnectionsPerIP count per node, not per client.
+    # limits, IP access lists and maxConnectionsPerIP count per node, not
+    # per client. For real client addresses use Local (with a gateway on
+    # every node that receives traffic) or an L7 proxy in front that sets
+    # X-Forwarded-For, listed in trustedProxies (ADR-0091).
     externalTrafficPolicy: Cluster
   # A kubernetes.io/tls Secret (tls.crt, tls.key) with the edge certificate.
   tls:
@@ -46,11 +49,14 @@ gateway:
     fleetName: spillway-gateway
   # Upstream allow-list (SEC-06), comma-separated CIDRs. Required.
   allowedNetworks: ""
-  trustedProxies: "" # SPILLWAY_GATEWAY_TRUSTED_PROXIES
+  # SPILLWAY_GATEWAY_TRUSTED_PROXIES (SEC-05): list only proxies that set
+  # or append X-Forwarded-For, never the node network: kube-proxy adds no
+  # X-Forwarded-For, so trusting the nodes would let any client choose its
+  # IP with that field (ADR-0091).
+  trustedProxies: ""
   # Load shedding (GW-26). maxConnectionsPerIP counts per client address;
   # behind the NodePort with externalTrafficPolicy Cluster that is per node
-  # (see service), so raise it, or list the node network in trustedProxies,
-  # when many clients share a node.
+  # (see service), so raise it when many clients share a node.
   maxConnections: 8192
   maxConnectionsPerIP: 1024
   maxInFlight: 4096

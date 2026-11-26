@@ -212,9 +212,12 @@ func TestChartGateway(t *testing.T) {
 			t.Errorf("%s = %q, want %q", k, env[k], v)
 		}
 	}
-	for _, k := range []string{"SPILLWAY_GATEWAY_HTTP_ADDR", "SPILLWAY_GATEWAY_DEV_MODE", "SPILLWAY_GATEWAY_CONFIG", "SPILLWAY_REDIS_ADDR_MAP"} {
+	// No trusted proxies: behind the NodePort the TCP peers are nodes,
+	// which add no X-Forwarded-For, so trusting them would let clients
+	// choose their IP (SEC-05, ADR-0091).
+	for _, k := range []string{"SPILLWAY_GATEWAY_HTTP_ADDR", "SPILLWAY_GATEWAY_DEV_MODE", "SPILLWAY_GATEWAY_CONFIG", "SPILLWAY_REDIS_ADDR_MAP", "SPILLWAY_GATEWAY_TRUSTED_PROXIES"} {
 		if _, ok := env[k]; ok {
-			t.Errorf("%s is set: no plain HTTP, dev mode, static config or address map in Helm", k)
+			t.Errorf("%s is set: no plain HTTP, dev mode, static config, address map or trusted proxies in Helm on kind", k)
 		}
 	}
 	state := false
@@ -363,7 +366,12 @@ func TestChartNetworkPolicies(t *testing.T) {
 	}
 	cp := rules("spillway-controlplane")
 	gwPods := map[string]any{"podSelector": map[string]any{"matchLabels": map[string]any{"app.kubernetes.io/name": "spillway-gateway", "app.kubernetes.io/instance": "spillway"}}}
-	if len(cp) != 3 || !eq(cp[9090], []any{gwPods}) || !eq(cp[8080], []any{map[string]any{"podSelector": map[string]any{}}}) || !eq(cp[8081], []any{prom, node}) {
+	// REST: every pod of the namespace but the internet-facing gateways, so
+	// a published route cannot reach the admin API (SEC-02, ADR-0091).
+	notGateways := map[string]any{"podSelector": map[string]any{"matchExpressions": []any{
+		map[string]any{"key": "app.kubernetes.io/name", "operator": "NotIn", "values": []any{"spillway-gateway"}},
+	}}}
+	if len(cp) != 3 || !eq(cp[9090], []any{gwPods}) || !eq(cp[8080], []any{notGateways}) || !eq(cp[8081], []any{prom, node}) {
 		t.Errorf("control-plane rules %v", cp)
 	}
 }
