@@ -86,6 +86,7 @@ var checkBuckets = []float64{.00001, .000025, .00005, .0001, .00025, .0005, .001
 type Request struct {
 	ID       string // X-Request-Id (GW-22)
 	TraceID  string // from a valid traceparent, else ""
+	Sampled  bool   // the request's span is sampled: its duration carries TraceID as an exemplar (OB-06)
 	Route    string // the matched route's name, or NoRoute
 	Method   string
 	Status   int
@@ -266,7 +267,7 @@ func (rec *Recorder) observe(q *Request) {
 		tenant = rec.tenants.label(tenant)
 	}
 	rec.requests.WithLabelValues(q.Route, methodLabel(q.Method), codeClass(q.Status), q.Origin, q.Reason, tenant).Inc()
-	rec.duration.WithLabelValues(q.Route, tenant).Observe(q.Latency.Seconds())
+	observe(rec.duration.WithLabelValues(q.Route, tenant), q.Latency, exemplarTrace(q.Sampled, q.TraceID))
 	for _, d := range q.Decisions {
 		rec.decisions.WithLabelValues(d.Policy, d.Decision, d.Mode).Inc()
 	}
@@ -331,9 +332,32 @@ func (rec *Recorder) KeyCapSkip(policy string) {
 	rec.keyCap.WithLabelValues(policy).Inc()
 }
 
-// UpstreamAttempt records how long one attempt at an upstream took.
-func (rec *Recorder) UpstreamAttempt(upstream string, attempt int, d time.Duration) {
-	rec.upstream.WithLabelValues(upstream, strconv.Itoa(attempt)).Observe(d.Seconds())
+// UpstreamAttempt records how long one attempt at an upstream took. traceID
+// is the attempt's trace ID if its span is sampled, else "": a sampled
+// attempt's observation carries it as an exemplar (OB-06).
+func (rec *Recorder) UpstreamAttempt(upstream string, attempt int, d time.Duration, traceID string) {
+	observe(rec.upstream.WithLabelValues(upstream, strconv.Itoa(attempt)), d, traceID)
+}
+
+// exemplarTrace is the trace ID a request's observations carry as an
+// exemplar: only a sampled trace's, whose spans reach Tempo (OB-06).
+func exemplarTrace(sampled bool, traceID string) string {
+	if !sampled {
+		return ""
+	}
+	return traceID
+}
+
+// observe records d in o, with the exemplar {trace_id="<traceID>"} unless
+// traceID is "" (OB-06). Every histogram here is a classic one, whose
+// observers take exemplars; the exemplars are served in the OpenMetrics
+// format only (NewAdminServer).
+func observe(o prometheus.Observer, d time.Duration, traceID string) {
+	if traceID == "" {
+		o.Observe(d.Seconds())
+		return
+	}
+	o.(prometheus.ExemplarObserver).ObserveWithExemplar(d.Seconds(), prometheus.Labels{"trace_id": traceID})
 }
 
 // Retry records a retry the upstream's budget granted (sent) or refused

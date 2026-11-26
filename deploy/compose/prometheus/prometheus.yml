@@ -2,6 +2,13 @@
 # (ADR-0040).
 global:
   scrape_interval: 5s
+  # Alert rules every 15 s, so the config-sync staleness alert fires within
+  # 15 s of its 60 s threshold (OB-05, ADR-0087).
+  evaluation_interval: 15s
+
+# Alert rules (OB-05): deploy/prometheus/rules, mounted by compose.
+rule_files:
+  - /etc/prometheus/rules/*.yaml
 
 scrape_configs:
   - job_name: prometheus
@@ -16,6 +23,24 @@ scrape_configs:
   - job_name: loki
     static_configs:
       - targets: ["loki:3100"]
+  - job_name: redis-exporter
+    static_configs:
+      - targets: ["redis-exporter:9121"]
+  # One target per Redis node through redis_exporter's /scrape, labelled
+  # with the node's name (redis-0 … redis-5), as on kind (ADR-0085).
+  - job_name: redis
+    metrics_path: /scrape
+    static_configs:
+      - targets: ["redis://redis-0:6379", "redis://redis-1:6379", "redis://redis-2:6379", "redis://redis-3:6379", "redis://redis-4:6379", "redis://redis-5:6379"]
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__address__]
+        regex: "redis://([^:]+):.*"
+        target_label: node
+        replacement: "$1"
+      - target_label: __address__
+        replacement: redis-exporter:9121
   # All five gateways (gateway-2 … gateway-5 run only under --profile
   # replicas; a target that is down costs nothing), each labelled with its
   # replica name, which is its host name (ADR-0040), so the admin UI can

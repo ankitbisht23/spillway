@@ -1,0 +1,10 @@
+# The dashboards in deploy/grafana/dashboards (OB-04, ADR-0075), which
+# compose mounts at /var/lib/grafana-dashboards; kind's provider
+# (deploy/kind/obs/grafana.yaml) reads the same files from a ConfigMap.
+apiVersion: 1
+providers:
+  - name: spillway
+    type: file
+    disableDeletion: true
+    options:
+      path: /var/lib/grafana-dashboards

@@ -8,6 +8,11 @@ datasources:
     access: proxy
     url: http://prometheus:9090
     isDefault: true
+    # An exemplar's trace_id opens its trace in Tempo (OB-06).
+    jsonData:
+      exemplarTraceIdDestinations:
+        - name: trace_id
+          datasourceUid: tempo
   - name: Tempo
     uid: tempo
     type: tempo

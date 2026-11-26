@@ -28,10 +28,9 @@ var repo = os.DirFS("../..")
 const nodeImage = "kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5"
 
 // newImages are the images deploy/kind may use that compose does not (yet)
-// use, each with the ADR that adds it.
-var newImages = map[string]string{
-	"oliver006/redis_exporter:v1.97.0": "ADR-0075 §D10",
-}
+// use, each with the ADR that adds it. None now: redis_exporter joined
+// compose with the observability task (ADR-0087).
+var newImages = map[string]string{}
 
 // docs decodes every YAML document of the named file.
 func docs(t *testing.T, name string) []map[string]any {

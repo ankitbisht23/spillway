@@ -113,10 +113,11 @@ jobs:
           docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges spillway-accuracy:ci -h
           docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges spillway-chaos:ci -h
 
-  # Boots the dev stack from a clean checkout, runs the integration tests, the
-  # stack part of the M0 exit check, the reload part of the M1 exit check and
-  # the shadow part of the M2 exit check (ADR-0004, ADR-0015, ADR-0019), and
-  # one short run of the benchmark script.
+  # Checks the alert rules with promtool (Docker, ADR-0087), boots the dev
+  # stack from a clean checkout, runs the integration tests, the stack part of
+  # the M0 exit check, the reload part of the M1 exit check and the shadow part
+  # of the M2 exit check (ADR-0004, ADR-0015, ADR-0019), and one short run of
+  # the benchmark script.
   integration:
     runs-on: ubuntu-latest
     steps:
@@ -127,6 +128,8 @@ jobs:
         with:
           go-version-file: go.mod
       - run: docker compose version
+      - name: "Observability as code: promtool check and test rules, dashboard and runbook tests (ADR-0087)"
+        run: make lint-obs
       - name: make dev
         run: make dev
       - name: Integration tests

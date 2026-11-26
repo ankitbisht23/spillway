@@ -11,7 +11,9 @@
 #   (c) NFR-12: the control plane and Postgres stopped for 600 s under
 #       500 rps, gateway-3 restarted from its on-disk snapshot at +300 s:
 #       zero failed requests, config frozen at last good, sync age growing,
-#       the restarted replica ready from its snapshot, recovery within 60 s.
+#       the restarted replica ready from its snapshot, recovery within 60 s;
+#       (c6) compose Prometheus's SpillwayConfigSyncStale alert fires for
+#       gateway-1 before the outage ends (OB-05, ADR-0074, ADR-0087).
 # Every measured number is printed with PASS or FAIL. Exits 1 if any check
 # fails; no check is ever run again. On every exit the control plane and
 # Postgres are started again if they are stopped, the run's keys are
@@ -26,8 +28,8 @@ cd "$(dirname "$0")/../.."
 
 mode=${1:-all}
 case $mode in
-all) checks=("(a)" "(b)" "(c1)" "(c2)" "(c3)" "(c4)" "(c5)") ;;
-outage) checks=("(c1)" "(c2)" "(c3)" "(c4)" "(c5)") ;;
+all) checks=("(a)" "(b)" "(c1)" "(c2)" "(c3)" "(c4)" "(c5)" "(c6)") ;;
+outage) checks=("(c1)" "(c2)" "(c3)" "(c4)" "(c5)" "(c6)") ;;
 *)
 	echo "usage: $0 [all|outage]" >&2
 	exit 2
@@ -77,8 +79,10 @@ not_run() {
 
 managed= # the gateways run in managed mode
 pid=     # the outage sender, while it runs
+poller=  # (c6)'s alert poller, while the outage lasts
 cleanup() {
 	if [ -n "$pid" ]; then kill "$pid" 2>/dev/null; fi
+	if [ -n "$poller" ]; then kill "$poller" 2>/dev/null; fi
 	if [ "$("${compose[@]}" ps -q --status running controlplane postgres | wc -l)" -lt 2 ]; then
 		echo "      restoring: starting the control plane and Postgres"
 		"${compose[@]}" up -d --wait --wait-timeout 180 controlplane >/dev/null 2>&1 ||
@@ -161,6 +165,27 @@ echo "== (c) NFR-12: gateways serve unchanged through a 10-minute control-plane 
 # restart gateway-3", "action start"), polled here; the answers go to its
 # stdin through this FIFO: "stopping" just before docker compose stop,
 # then "stopped <code>", "restarted <code>", "healthy <code>".
+#
+# (c6): from the stop until the start, a background poller asks compose's
+# Prometheus every 5 s whether SpillwayConfigSyncStale fires for gateway-1
+# and notes the first time it does, in seconds after the stop. It runs
+# beside this loop so it never delays an answer to the sender. The alert
+# needs 60 s of staleness and rules run every 15 s, so it fires about
+# 65-80 s into the 600 s outage: a stall of up to a second cannot keep it
+# from firing in time (ADR-0074, stall tolerance).
+stale_poll() {
+	local t0=$SECONDS
+	while :; do
+		if curl -sS --max-time 3 -G http://127.0.0.1:9091/api/v1/query \
+			--data-urlencode 'query=ALERTS{alertname="SpillwayConfigSyncStale",alertstate="firing",replica="gateway-1"}' 2>/dev/null |
+			jq -e '.data.result | length > 0' >/dev/null 2>&1; then
+			echo "$((SECONDS - t0))" >"$tmp/c6"
+			return
+		fi
+		sleep 5
+	done
+}
+outage_s= # the outage's length as this loop saw it
 mkfifo "$tmp/stdin"
 chaos outage <"$tmp/stdin" >"$tmp/c.json" 2>"$tmp/c.err" &
 pid=$!
@@ -173,6 +198,9 @@ while kill -0 "$pid" 2>/dev/null; do
 		action=$(grep '^action ' "$tmp/c.err" | sed -n "${handled}p")
 		case $action in
 		"action stop")
+			stale_poll &
+			poller=$!
+			outage_s=$SECONDS
 			echo stopping >&3
 			"${compose[@]}" stop controlplane postgres >"$tmp/stop.log" 2>&1
 			echo "stopped $?" >&3
@@ -182,6 +210,9 @@ while kill -0 "$pid" 2>/dev/null; do
 			echo "restarted $?" >&3
 			;;
 		"action start")
+			if [ -n "$poller" ]; then kill "$poller" 2>/dev/null; fi
+			poller=
+			outage_s=$((SECONDS - outage_s))
 			"${compose[@]}" up -d --wait --wait-timeout 180 controlplane >"$tmp/start.log" 2>&1
 			echo "healthy $?" >&3
 			;;
@@ -193,11 +224,21 @@ while kill -0 "$pid" 2>/dev/null; do
 	sleep 0.2
 done
 exec 3>&-
+if [ -n "$poller" ]; then # the sender ended without asking for the start
+	kill "$poller" 2>/dev/null
+	poller=
+	outage_s=$((SECONDS - outage_s))
+fi
 wait "$pid"
 code=$?
 pid=
 show "$tmp/c.err"
 sender_failed "$code" "$tmp/c.err" "(c)"
+if [ -s "$tmp/c6" ]; then
+	result PASS "(c6) staleness alert fires in the outage" "SpillwayConfigSyncStale firing for gateway-1 at +$(cat "$tmp/c6") s of the ${outage_s:-?} s outage (threshold 60 s)"
+else
+	result FAIL "(c6) staleness alert fires in the outage" "SpillwayConfigSyncStale not seen firing for gateway-1 in the ${outage_s:-?} s outage (polled every 5 s)"
+fi
 
 echo
 name="M5 exit"

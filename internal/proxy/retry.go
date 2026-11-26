@@ -222,7 +222,7 @@ func (a *attempts) RoundTrip(out *http.Request) (*http.Response, error) {
 		if err != nil && errors.Is(context.Cause(actx), errPendingLimit) {
 			err = errPendingLimit
 		}
-		a.h.rec.UpstreamAttempt(a.p.name, n, time.Since(start))
+		a.h.rec.UpstreamAttempt(a.p.name, n, time.Since(start), sampledTrace(span))
 		now := a.h.pools.clock.Now()
 		if n == 1 {
 			a.p.budget.Request(now) // with the attempt="1" observation, so the metrics show what the budget saw

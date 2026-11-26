@@ -64,6 +64,16 @@ func startServerSpan(tracer trace.Tracer, r *http.Request) (*http.Request, trace
 	return r.WithContext(ctx), span
 }
 
+// sampledTrace is span's trace ID if span is sampled, else "": what an
+// upstream attempt's duration carries as an exemplar (OB-06). span may be
+// nil (tracing off).
+func sampledTrace(span trace.Span) string {
+	if span == nil || !span.SpanContext().IsSampled() {
+		return ""
+	}
+	return span.SpanContext().TraceID().String()
+}
+
 // endServerSpan names and ends a request's server span once it has been
 // answered: a 5xx is an error, with the status as its error.type.
 func endServerSpan(span trace.Span, r *http.Request, q *telemetry.Request) {

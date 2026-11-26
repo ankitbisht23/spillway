@@ -11,7 +11,7 @@ FUZZTIME ?= 5s
 # Committed dev defaults first, then local overrides if present (ADR-0004).
 COMPOSE := docker compose --env-file .env.example $(if $(wildcard .env.local),--env-file .env.local)
 
-.PHONY: tools hooks certs dev kind-up kind-down kind-smoke kind-rollout kind-images kind-grafana kind-prometheus test test-go test-web test-e2e fuzz test-integration proto api sqlc web-gen web-build lint lint-go lint-web lint-proto lint-api lint-sql lint-helm bench bench-gate verify-m0 verify-m0-stack verify-m1 verify-m1-reload verify-m2 verify-m2-shadow verify-m3 verify-m4 verify-m5 verify-m6 accuracy chaos-redis-outage chaos-redis-primary chaos-cp-outage nfr-keys nfr-soak nfr-noisy chaos-redis-latency chaos-gateway-kill chaos
+.PHONY: tools hooks certs dev kind-up kind-down kind-smoke kind-rollout kind-images kind-grafana kind-prometheus test test-go test-web test-e2e fuzz test-integration proto api sqlc web-gen web-build lint lint-go lint-web lint-proto lint-api lint-sql lint-helm lint-obs bench bench-gate verify-m0 verify-m0-stack verify-m1 verify-m1-reload verify-m2 verify-m2-shadow verify-m3 verify-m4 verify-m5 verify-m6 accuracy chaos-redis-outage chaos-redis-primary chaos-cp-outage nfr-keys nfr-soak nfr-noisy chaos-redis-latency chaos-gateway-kill chaos
 
 # Host-run processes and tests reach Redis Cluster nodes through this map
 # (ADR-0004). Set only here, never in compose or .env files.
@@ -279,7 +279,7 @@ web-build:
 sqlc: tool-sqlc
 	cd internal/controlplane/store && $(BIN)/sqlc generate
 
-lint: lint-go lint-web lint-proto lint-api lint-sql lint-helm
+lint: lint-go lint-web lint-proto lint-api lint-sql lint-helm lint-obs
 
 # The Helm chart (ADR-0075 §D11, ADR-0086): helm lint --strict and helm
 # template with the chart's values.yaml under deploy/kind/values.yaml, then
@@ -289,6 +289,18 @@ lint-helm: tool-helm
 	$(BIN)/helm --kube-context kind-spillway lint --strict deploy/helm/spillway -f deploy/kind/values.yaml --set 'networkPolicy.kubeletCIDRs={172.18.0.0/16}'
 	$(BIN)/helm --kube-context kind-spillway template spillway deploy/helm/spillway -n spillway -f deploy/kind/values.yaml --set 'networkPolicy.kubeletCIDRs={172.18.0.0/16}' >/dev/null
 	SPILLWAY_HELM=$(BIN)/helm go test -count=1 -run '^TestChart' ./test/kind/
+
+# Observability as code (OB-04, OB-05, OB-08; ADR-0075, ADR-0087): promtool
+# check rules and the rules' unit tests (test/obs/rules-test.yaml) with the
+# promtool of compose's pinned Prometheus image, then the dashboards',
+# rules' and runbooks' Go tests (test/obs). Needs Docker, no stack; CI's
+# integration job runs it.
+PROMETHEUS_IMAGE := prom/prometheus:v3.15.1
+PROMTOOL := docker run --rm --entrypoint promtool -v "$(CURDIR):/src:ro" -w /src $(PROMETHEUS_IMAGE)
+lint-obs:
+	$(PROMTOOL) check rules deploy/prometheus/rules/*.yaml
+	$(PROMTOOL) test rules test/obs/rules-test.yaml
+	go test -count=1 ./test/obs/
 
 # Then the webui build tag's files (ADR-0057) against the real build, or an
 # empty stand-in when there is none, removed after.

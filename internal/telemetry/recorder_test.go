@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/json"
+	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -204,8 +206,8 @@ func TestMetricLabels(t *testing.T) {
 		q.ID, q.Tenant, q.Latency = "x", NoTenant, 3*time.Millisecond
 		rec.Request(t.Context(), &q)
 	}
-	rec.UpstreamAttempt("orders", 1, 2*time.Millisecond)
-	rec.UpstreamAttempt("orders", 2, 2*time.Millisecond)
+	rec.UpstreamAttempt("orders", 1, 2*time.Millisecond, "")
+	rec.UpstreamAttempt("orders", 2, 2*time.Millisecond, "")
 	rec.Retry("orders", true)
 	rec.Retry("orders", false)
 	rec.Retry("orders", false)
@@ -250,6 +252,49 @@ func TestMetricLabels(t *testing.T) {
 		if !strings.Contains(m, "\n"+s+"\n") {
 			t.Errorf("/metrics has no %s", s)
 		}
+	}
+}
+
+// TestExemplars: a sampled request's duration and its sampled upstream
+// attempts carry the trace ID as an exemplar on the bucket they fall in;
+// an unsampled request's, or an attempt without a sampled trace, carry
+// none, even with a trace ID (OB-06).
+func TestExemplars(t *testing.T) {
+	rec, reg, _ := newTestRecorder(1)
+	const sampled, unsampled = "4bf92f3577b34da6a3ce929d0e0e4736", "0af7651916cd43dd8448eb211c80319c"
+	rec.Request(t.Context(), &Request{ID: "a", TraceID: sampled, Sampled: true, Route: "sampled", Method: "GET", Status: 200, Origin: OriginUpstream, Reason: ReasonNone, Tenant: NoTenant, Latency: 3 * time.Millisecond})
+	rec.Request(t.Context(), &Request{ID: "b", TraceID: unsampled, Route: "unsampled", Method: "GET", Status: 200, Origin: OriginUpstream, Reason: ReasonNone, Tenant: NoTenant, Latency: 3 * time.Millisecond})
+	rec.UpstreamAttempt("sampled", 1, 30*time.Millisecond, sampled)
+	rec.UpstreamAttempt("unsampled", 1, 30*time.Millisecond, "")
+
+	mfs, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{} // "<metric> <label values>" → "<bucket>:<labels>:<value>" of its exemplars
+	for _, mf := range mfs {
+		for _, m := range mf.GetMetric() {
+			for _, b := range m.GetHistogram().GetBucket() {
+				if e := b.GetExemplar(); e != nil {
+					var labels []string
+					for _, l := range e.GetLabel() {
+						labels = append(labels, l.GetName()+"="+l.GetValue())
+					}
+					key := mf.GetName()
+					for _, l := range m.GetLabel() {
+						key += " " + l.GetValue()
+					}
+					got[key] += fmt.Sprintf("%g:%s:%g", b.GetUpperBound(), strings.Join(labels, ","), e.GetValue())
+				}
+			}
+		}
+	}
+	want := map[string]string{
+		"gw_request_duration_seconds sampled none": "0.005:trace_id=" + sampled + ":0.003",
+		"gw_upstream_duration_seconds 1 sampled":   "0.05:trace_id=" + sampled + ":0.03",
+	}
+	if !maps.Equal(got, want) {
+		t.Errorf("exemplars %v, want %v", got, want)
 	}
 }
 

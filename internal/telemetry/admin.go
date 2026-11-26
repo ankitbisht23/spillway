@@ -23,7 +23,8 @@ func NewRegistry() *prometheus.Registry {
 }
 
 // NewAdminServer returns the admin server: /healthz answers 200 while the
-// process runs, /readyz 200 only while ready returns true, /metrics serves g,
+// process runs, /readyz 200 only while ready returns true, /metrics serves g
+// (in the OpenMetrics format, with exemplars, when asked for it),
 // and pprof is under /debug/pprof/. It has no write timeout, so CPU profiles
 // and traces can run as long as asked.
 func NewAdminServer(g prometheus.Gatherer, ready func() bool, log *slog.Logger) *http.Server {
@@ -38,7 +39,9 @@ func NewAdminServer(g prometheus.Gatherer, ready func() bool, log *slog.Logger) 
 		}
 		_, _ = w.Write([]byte("ok\n"))
 	})
-	mux.Handle("GET /metrics", promhttp.HandlerFor(g, promhttp.HandlerOpts{}))
+	// OpenMetrics when the scraper asks for it, as Prometheus does, so the
+	// latency histograms' exemplars reach it (OB-06).
+	mux.Handle("GET /metrics", promhttp.HandlerFor(g, promhttp.HandlerOpts{EnableOpenMetrics: true}))
 	mux.HandleFunc("/debug/pprof/", pprof.Index) // also the named profiles: heap, goroutine, ...
 	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
 	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)

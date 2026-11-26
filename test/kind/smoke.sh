@@ -10,6 +10,8 @@
 # rollouts, the gateway through its Service, the admin ports closed to an
 # ordinary pod (GW-25's NetworkPolicies), Prometheus's targets, and the edge
 # from the host: https://127.0.0.1:443 with the mkcert CA, nothing on :80.
+# With observability as code (ADR-0087), Prometheus's alert rules and
+# Grafana's dashboards loaded.
 set -uo pipefail
 
 : "${BIN:?BIN is set by the Makefile}"
@@ -120,6 +122,25 @@ curl -sS --max-time 3 -o /dev/null http://127.0.0.1:80/ >/dev/null 2>&1
 rc=$?
 [ "$rc" -eq 7 ] || [ "$rc" -eq 28 ]
 check $? "nothing listening on host 127.0.0.1:80" "curl exit $rc"
+
+# 8. Observability as code (OB-04, OB-05, ADR-0087): Prometheus loaded
+# every rule of deploy/prometheus/rules and none fails to evaluate, and
+# Grafana provisioned every dashboard of deploy/grafana/dashboards. Asked
+# inside the pods; Grafana's admin password stays in its own environment.
+want_rules=$(cat deploy/prometheus/rules/*.yaml | grep -cE '^ *- (alert|record): ')
+rules=$(kubectl -n spillway-obs exec deploy/prometheus -c prometheus -- wget -qO- -T 10 http://127.0.0.1:9090/api/v1/rules 2>/dev/null |
+	jq -r '[.data.groups[].rules[]] | "\(length) \([.[] | select(.health == "err")] | length)"' 2>/dev/null)
+read -r got_rules err_rules <<<"$rules"
+[ "${got_rules:-0}" -eq "$want_rules" ] && [ "${err_rules:-1}" -eq 0 ]
+check $? "prometheus rules loaded (OB-05)" "${got_rules:-none} of $want_rules rules, ${err_rules:-?} failing"
+want_dash=$(find deploy/grafana/dashboards -name '*.json' | grep -c .)
+# shellcheck disable=SC2016 # expanded in the Grafana container
+dash=$(kubectl -n spillway-obs exec deploy/grafana -c grafana -- sh -c \
+	'wget -qO- -T 10 --header "Authorization: Basic $(printf "admin:%s" "$GF_SECURITY_ADMIN_PASSWORD" | base64)" "http://127.0.0.1:3000/api/search?tag=spillway&type=dash-db"' 2>/dev/null |
+	jq -r '[.[].uid] | sort | join(",")' 2>/dev/null)
+n=$(tr ',' '\n' <<<"$dash" | grep -c .)
+[ "$n" -eq "$want_dash" ]
+check $? "grafana dashboards provisioned (OB-04)" "$n of $want_dash${dash:+: $dash}"
 
 echo "kind smoke: $(($(date +%s) - start)) s"
 if [ "$fails" -eq 0 ]; then echo "kind smoke: PASS"; else echo "kind smoke: FAIL ($fails)"; exit 1; fi

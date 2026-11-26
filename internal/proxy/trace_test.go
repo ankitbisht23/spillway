@@ -486,6 +486,63 @@ func TestTraceUnsampled(t *testing.T) {
 	}
 }
 
+// exemplarTraces returns the trace IDs of every exemplar on the gateway's
+// histograms, by metric name.
+func exemplarTraces(t *testing.T, g prometheus.Gatherer) map[string][]string {
+	t.Helper()
+	mfs, err := g.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string][]string{}
+	for _, mf := range mfs {
+		for _, m := range mf.GetMetric() {
+			for _, b := range m.GetHistogram().GetBucket() {
+				for _, l := range b.GetExemplar().GetLabel() {
+					out[mf.GetName()] = append(out[mf.GetName()], l.GetName()+"="+l.GetValue())
+				}
+			}
+		}
+	}
+	return out
+}
+
+// TestTraceExemplars: a sampled request's duration, and each of its
+// upstream attempts', carries its trace ID as an exemplar; an unsampled
+// request's carry none, nor do a gateway's without tracing, whatever the
+// client's traceparent says (OB-06).
+func TestTraceExemplars(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		sampler sdktrace.Sampler // nil: tracing off
+		flags   string           // the client's traceparent flags
+		want    map[string][]string
+	}{
+		{"sampled", sdktrace.ParentBased(sdktrace.NeverSample()), "01", map[string][]string{
+			"gw_request_duration_seconds":  {"trace_id=" + clientTrace},
+			"gw_upstream_duration_seconds": {"trace_id=" + clientTrace, "trace_id=" + clientTrace}, // attempts 1 and 2
+		}},
+		{"unsampled", sdktrace.ParentBased(sdktrace.AlwaysSample()), "00", map[string][]string{}},
+		{"tracing off", nil, "01", map[string][]string{}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var tracer trace.Tracer
+			if tt.sampler != nil {
+				_, tracer = newTracer(t, tt.sampler)
+			}
+			u := newTraceUpstream(t)
+			g, _ := traceGateway(t, tracer, u, traceConfig("", "tu:"+u.port()))
+			h := http.Header{"X-Request-Id": {"ex-" + tt.flags}, "Traceparent": {"00-" + clientTrace + "-" + clientSpan + "-" + tt.flags}}
+			if resp := g.do(t, http.MethodGet, "/fail/1", nil, h); resp.status != http.StatusOK {
+				t.Fatalf("status %d", resp.status)
+			}
+			if got := exemplarTraces(t, g.metrics); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("exemplars %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 // TestTraceShed: a shed request gets no span, and its access log line has a
 // trace ID with tracing on: the client's, or a new one (ADR-0030).
 func TestTraceShed(t *testing.T) {

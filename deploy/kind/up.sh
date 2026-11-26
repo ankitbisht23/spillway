@@ -103,10 +103,20 @@ apply_configmap spillway-obs grafana-datasources --from-file=datasources.yaml=de
 apply_configmap spillway-obs loki-config --from-file=loki.yaml=deploy/compose/loki/loki.yaml
 apply_configmap spillway-obs tempo-config --from-file=tempo.yaml=deploy/compose/tempo/tempo.yaml
 apply_configmap spillway-obs otel-collector-config --from-file=config.yaml=deploy/compose/otel-collector/config.yaml
+# Observability as code (OB-04, OB-05, ADR-0087): the alert rules and the
+# dashboards compose mounts. Grafana's file provider picks up a changed
+# dashboard by itself; Prometheus reads its rule files at start, so a
+# changed rules ConfigMap restarts it once it is applied.
+rules=$(kubectl -n spillway-obs create configmap prometheus-rules --from-file=deploy/prometheus/rules/ --dry-run=client -o yaml | kubectl apply -f -)
+apply_configmap spillway-obs grafana-dashboards --from-file=deploy/grafana/dashboards/
 apply_configmap spillway kind-config --from-file=config.yaml=deploy/kind/config.yaml
 
 step "dependencies and observability"
 kubectl apply -f deploy/kind/deps/ -f deploy/kind/obs/ >/dev/null
+if [ "$rules" = "configmap/prometheus-rules configured" ]; then
+	step "alert rules changed: restarting Prometheus"
+	kubectl -n spillway-obs rollout restart deployment/prometheus >/dev/null
+fi
 
 # Built while the nodes pull the third-party images.
 images
