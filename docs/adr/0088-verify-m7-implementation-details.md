@@ -28,7 +28,7 @@ This ADR records the choices that ADR-0074 left to the verify task. No pass rule
 
 1. **NFR-01 and NFR-05 come from one gated dispatch**, `gh workflow run bench.yml --ref <branch> -f gate=true`, sent at the start. The run is found by its `run-name` (`bench throughput x64=4600 arm64=6300 gate=true`), head SHA and creation time. `VERIFY_M7_BENCH_RUNS=<id>` reuses a run already dispatched for HEAD; the script checks its head SHA and name first. Results are matched by `run_url`.
    - **NFR-01** per arch reads the first run set, not the re-run. PASS when it is valid, its target is the floor, and its median per gateway vCPU, rounded, is at least the floor (x64 4,600, arm64 6,300 since ADR-0090; 8,800 before), on any CPU model. The line prints each model.
-   - **NFR-05** per arch reads the final verdict: the re-run's if the first set was flagged, else the first set's. PASS when that verdict is `pass` and a nightly baseline was compared. The line prints the comparisons, and P34's cross-model figures when present.
+   - **NFR-05** per arch reads the final verdict: the re-run's if the first set was flagged, else the first set's. PASS when that verdict is `pass` and a nightly baseline was compared (ADR-0089 adds one exception for x64). The line prints the comparisons, and P34's cross-model figures when present.
    - If the run stores no result for an arch, or does not finish within 120 minutes of its dispatch, that arch fails both rows.
 2. **NFR-02** dispatches nothing. Per arch it reads the newest stored result with `setup.mode == "scaling"`, and judges it as `scaling.jq` and `scaling.sh` did when they stored it.
    - The row is PASS (and counted) only when both arches are valid and pass.
@@ -76,7 +76,63 @@ This ADR records the choices that ADR-0074 left to the verify task. No pass rule
 
 ## Measured on the branch (2026-11-26)
 
-Three full runs of `make verify-m7` on 067dbd2, one after another. None was re-run. Every step was within its budget, and each run took 87–89 minutes of its 150.
+Nine full runs of `make verify-m7` on m7-verify, in three sets of three, one after another. None was re-run, and no rule was changed between runs. Every step was within its budget, and each run took 87–89 minutes of its 150. Only the last set is the M7 exit evidence; the first two are listed because each one led to a user decision.
+
+| Set | Commit | Rule change before the set | Runs (UTC start) | Rows that failed | Exit |
+| --- | --- | --- | --- | --- | --- |
+| A | 067dbd2 | none | 04:29, 05:58, 07:26 | NFR-05 `first` on both arches (all 3); NFR-04 in run 3 | 0 of 3 |
+| B | 58e8641 | ADR-0089 (x64 NOT DEMONSTRATED), gated `main` baselines | 10:09, 11:37, 13:06 | run 1 NFR-04 + chaos Redis +50 ms; run 2 NFR-05 arm64; run 3 NFR-01 + NFR-05 arm64 invalid, NFR-13 | 0 of 3 |
+| C | 390f3f4 | ADR-0090 (arm64 rate and floor 6,300), gated `main` arm64 baseline at 6,300 | 15:33, 17:01, 18:29 | run 1 NFR-05 arm64 | **2 of 3** |
+
+### Set C: the exit evidence (390f3f4, arm64 at 6,300)
+
+The `main` baseline for arm64 at 6,300 is [run 45846586871](https://github.com/ankitbisht23/spillway/actions/runs/45846586871) (9a2d3ed, `refs/heads/main`, valid, verdict `first`, p99 median 4.207 ms, spread 0.111; x64 on AMD EPYC 9V74 `pass` against main's earlier 9V74 result).
+
+| Run | Bench run | NFR-01 x64 (CPU, p99) | NFR-01 arm64 p99 | NFR-05 arm64 | NFR-05 x64 | Every other counted row | Exit |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1, 15:33 | [45850229009](https://github.com/ankitbisht23/spillway/actions/runs/45850229009) | PASS (AMD EPYC 9V45, 2.261 ms) | PASS, 4.679 ms | **FAIL**: flagged p99 +11.2% (4.679 vs 4.207 ms, above 10% and the baseline spread 0.111), confirming re-run 5.219 ms, +24.1% | NOT DEMONSTRATED (9V45) | PASS | FAIL (1 row) |
+| 2, 17:01 | [45864041725](https://github.com/ankitbisht23/spillway/actions/runs/45864041725) | PASS (Intel Xeon 6975P-C, 1.875 ms) | PASS, 4.279 ms | PASS, p99 +1.7% | NOT DEMONSTRATED (6975P-C) | PASS | PASS |
+| 3, 18:29 | [45876358123](https://github.com/ankitbisht23/spillway/actions/runs/45876358123) | PASS (Intel Xeon 6975P-C, 1.666 ms) | PASS, 4.395 ms | PASS, p99 +4.5% | NOT DEMONSTRATED (6975P-C) | PASS | PASS |
+
+**Full-run pass rate over the exit runs: 2 of 3.** In runs 2 and 3, NFR-05 was printed NOT DEMONSTRATED and not counted (ADR-0089); NFR-02 was KNOWN LIMIT and not counted in all three (ADR-0084 §4). Main's x64 baselines were on AMD EPYC 9V74, Intel Xeon Platinum 8573C and 8370C; no set C dispatch landed on one of them.
+
+| Row | Run 1 / Run 2 / Run 3 |
+| --- | --- |
+| NFR-02 (KNOWN LIMIT) | newest scaling results, run 45661905238 (d488f06): INVALID on both arches, would-be S x64 2.013, arm64 1.517 |
+| NFR-03 added p99 | 0.042 / 0.134 / 0.209 ms |
+| NFR-04 added p99 | 0.305 / 0.338 / 0.344 ms |
+| NFR-06 max over-admission | 0 at 1, 3 and 5 replicas |
+| NFR-07 max over-admission | 3 / 3 / 4 of 10 at 1 replica; 17 / 13 / 14 of 30 at 3; 3 / 3 / 2 of 50 at 5 |
+| NFR-08 p99 | 8 / 9 / 7 ms |
+| NFR-09 max | 53 / 55 / 57 ms |
+| NFR-10 GCRA | 117.0 / 117.7 / 117.3 B per key at 1M keys |
+| NFR-10 sliding window | 156.2 / 156.1 / 156.2 B per key at 1M keys |
+| NFR-11 | 0 gateway-caused 5xx of 1,260,000 requests |
+| NFR-12 | (c1) 0 failed of 347,909 / 347,903 / 347,930; (c6) alert at +76 / +76 / +90 s |
+| NFR-13 | 12 of 12 checks |
+| NFR-14 | reload 59,999 of 59,999 (1 not sent) / 60,000 / 60,000 with 29 swaps; kind smoke 21 of 21; rolling restart 0 failed of 72,000, complete in 3 / 3 / 7 s |
+| NFR-15 median ratio | 0.413–0.414 / 0.411–0.418 / 0.455–0.457 |
+| Chaos | Redis +50 ms 10 of 10, gateway kill 3 of 3, upstream 5xx 8 of 8 |
+
+The boundary pattern's 503 share was 48–61% strict and 39–55% batched (known limit, ADR-0079). One more gated arm64 set at 6,300 exists on 390f3f4: [run 45849990777](https://github.com/ankitbisht23/spillway/actions/runs/45849990777), dispatched by a verify attempt that was stopped before its compose part, `pass` at p99 4.247 ms. It is data, not a verify run.
+
+### Known limit: arm64 p99 varies between runners (NFR-05)
+
+All six gated arm64 sets at 6,300 so far ran on the same recorded CPU model (Neoverse N2) and the same code apart from verify-only files: p99 medians 4.207 (main baseline), 4.247, 4.679, 5.219 (run 1's re-run), 4.279 and 4.395 ms. Throughput was 6,300 in every run. Inside one set, the baseline's run-to-run spread was 0.111; between sets, the p99 median ranged over 24%. The gate's tolerance is the baseline's spread **inside its own run set** (one runner), while each comparison is **across runners**. The confirming re-run runs in the same job, on the same runner, so it confirms the runner as much as the code. A slower runner can therefore flag and confirm a p99 rise that is not a code change, as in run 1: its first set and its re-run were both slower than the baseline's runner (the re-run more so).
+
+On 2026-11-26 the user decided: no rule change; run 1 stays a FAIL in the pass rate; the between-runner variance is recorded as an NFR-05 known limit (here and in the README's Known limits). The gate's design (where its spread comes from) is carried to the M7 review as a proposal for the user, not changed here.
+
+### Set B (58e8641, arm64 at the old 8,800 rate)
+
+| Run | Bench run | Failed rows |
+| --- | --- | --- |
+| 1, 10:09 | [45798620152](https://github.com/ankitbisht23/spillway/actions/runs/45798620152) | NFR-04: no three valid pairs, 276 Redis errors in one burst of 2,040 ms (over ADR-0034's 1,000 ms); chaos Redis +50 ms: 8 of 10, Redis did not decide again within 5 s after the latency was removed. NFR-05 passed on both arches that run (x64 against main's AMD EPYC 9V74 baseline). |
+| 2, 11:37 | [45812246931](https://github.com/ankitbisht23/spillway/actions/runs/45812246931) | NFR-05 arm64: confirmed fail, p99 105 ms then 315 ms on the re-run (baseline 7.9 ms) |
+| 3, 13:06 | [45825996442](https://github.com/ankitbisht23/spillway/actions/runs/45825996442) | NFR-01 and NFR-05 arm64: invalid run set (runs reached 8,604 and 8,702 of 8,800); NFR-13: 11 of 12, one decision over the 10 ms full-outage line |
+
+The arm64 failures on the same commit (pass, confirmed fail, invalid) led to ADR-0090. The chaos Redis +50 ms failure did not recur in the six runs after it. NFR-04 and NFR-13 are verify-m3's lines failing on laptop stalls (ADR-0027, ADR-0034); they count as FAIL.
+
+### Set A (067dbd2, before ADR-0089)
 
 | Run | Bench run | NFR-01 (x64 CPU) | NFR-05 | NFR-04 | Every other counted row | Exit |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -84,37 +140,15 @@ Three full runs of `make verify-m7` on 067dbd2, one after another. None was re-r
 | 2, 05:58 UTC | [45765073716](https://github.com/ankitbisht23/spillway/actions/runs/45765073716) | PASS (Intel Xeon 6975P-C) | FAIL: `first` on both arches | PASS, 0.273 ms | PASS | FAIL (1 row) |
 | 3, 07:26 UTC | [45775387596](https://github.com/ankitbisht23/spillway/actions/runs/45775387596) | PASS (AMD EPYC 7763) | FAIL: `first` on both arches | FAIL: no three valid pairs | PASS | FAIL (2 rows) |
 
-**Full-run pass rate: 0 of 3.**
-
-- **NFR-05.** `bench-results` holds no gated result from `main`. The first scheduled nightly was due at 03:17 UTC on 2026-11-26, but GitHub started no scheduled run that night (the repository has none at all). So each run's gate had no baseline on any CPU model, and P34's cross-model information was empty too. This is not a regression and not a laptop effect, and profiling cannot change it. NFR-05 can pass only once a gated `main` result exists on the CPU model the verify dispatch lands on. Which way to get one is the user's decision: wait for a nightly, or dispatch `bench.yml --ref main -f gate=true`.
-- **NFR-04 in run 3** is verify-m3's own line, failing on a laptop stall. In gateway run 2, eight Redis calls timed out at the 5 ms budget, giving 6 failed answers. They fell in separate bursts 63 s apart, which ADR-0034's one-burst excuse does not cover, so the run was void and no three valid pairs remained. The other two gateway runs passed: added p99 was 0.100 ms for NFR-03 that run. This is the accepted verify-m3 laptop flakiness (ADR-0027, ADR-0034). No rule was changed.
-- **NFR-02** was printed as KNOWN LIMIT in every run, from the newest scaling results (run 45661905238, d488f06): INVALID on both arches, would-be S x64 2.013 and arm64 1.517. It was not counted.
-- Every other row passed in all three runs:
-
-  | Row | Run 1 / Run 2 / Run 3 |
-  | --- | --- |
-  | NFR-01 x64 | 4,600 rps per vCPU, p99 2.1 / 1.7 / 5.5 ms |
-  | NFR-01 arm64 | 8,800 rps per vCPU, p99 7.0 / 8.0 / 18.2 ms |
-  | NFR-03 added p99 | 0.190 / 0.210 / 0.100 ms |
-  | NFR-06 max over-admission | 0 at 1, 3 and 5 replicas |
-  | NFR-07 max over-admission | 4 / 5 / 4 of 10 at 1 replica; 17 / 17 / 18 of 30 at 3; 7 / 3 / 4 of 50 at 5 |
-  | NFR-08 p99 | 8 / 7 / 9 ms |
-  | NFR-09 max | 56 / 54 / 54 ms |
-  | NFR-10 GCRA | 117.9 / 117.1 / 117.3 B per key at 1M keys |
-  | NFR-10 sliding window | 156.6 / 156.6 / 156.5 B per key at 1M keys |
-  | NFR-11 | 0 gateway-caused 5xx of 1,260,000 requests |
-  | NFR-12 (c1) | 0 failed of 347,877 / 347,983 / 348,137; (c6) alert at +86 / +60 / +71 s |
-  | NFR-13 | 12 of 12 checks |
-  | NFR-14 | reload 60,000/60,000 with 29 swaps; kind smoke 21 of 21; rolling restart 0 failed of 72,000, complete in 3 / 4 / 4 s |
-  | NFR-15 median ratio | 0.378–0.381 / 0.379–0.392 / 0.443–0.447 |
-  | Chaos | Redis +50 ms 10 of 10, gateway kill 3 of 3, upstream 5xx 8 of 8 |
-
-  The boundary pattern's 503 share was 56–63% strict and 37–61% batched (known limit, ADR-0079).
+- **NFR-05.** `bench-results` held no gated result from `main`: GitHub started no scheduled nightly at 03:17 UTC on 2026-11-26. Each run's gate had no baseline on any CPU model. This led to the gated `main` dispatches and ADR-0089.
+- **NFR-04 in run 3** is verify-m3's own line failing on a laptop stall: eight Redis calls timed out at the 5 ms budget in separate bursts 63 s apart, which ADR-0034's one-burst excuse does not cover.
+- Every other row passed in all three runs, with figures in the same ranges as set C (NFR-01 arm64 was then 8,800 rps per vCPU, p99 7.0 / 8.0 / 18.2 ms).
 
 ## Consequences
 
 - One command gives every row on one commit. Each full run uses about 20–40 minutes of each runner for NFR-01 and NFR-05.
-- An x64 dispatch that lands on a CPU model with no gated `main` night gets `first`, and NFR-05 fails on that run (ADR-0081). The line prints the model so the reason is visible.
+- An x64 dispatch that lands on a CPU model with no gated `main` night gets `first` (ADR-0081). ADR-0089 prints that as NOT DEMONSTRATED and leaves it out of the exit status; the line prints the model so the reason is visible.
+- NFR-05 on arm64 can fail on runner variance alone (see the known limit above), so a full run's exit depends partly on which runners the dispatch gets.
 - The README block is generated, never edited by hand, and keeps FAIL and KNOWN LIMIT rows visible.
 
 ## Alternatives considered
