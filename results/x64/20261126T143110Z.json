@@ -1,0 +1,250 @@
+{
+  "achieved_rps": {
+    "median": 6080.394444444444,
+    "min": 5922.627777777778,
+    "max": 6191.461111111111,
+    "spread": 0.04421314041212599
+  },
+  "arch": "x64",
+  "commit": "58e8641e1f8f78bf71763af9404fc9c785bb97af",
+  "gate": {
+    "verdict": "ungated",
+    "baseline": null,
+    "release_baseline": null,
+    "release_tag": null,
+    "comparisons": [],
+    "rerun_of": null
+  },
+  "hardware": {
+    "cpu_model": "AMD EPYC 7763 64-Core Processor",
+    "cpus": 4,
+    "memory_bytes": 16759431168,
+    "os": "Ubuntu 26.04.1 LTS",
+    "kernel": "7.0.0-1020-azure",
+    "topology": [
+      {
+        "cpu": 0,
+        "core": 0,
+        "socket": 0,
+        "thread_siblings": "0-1"
+      },
+      {
+        "cpu": 1,
+        "core": 0,
+        "socket": 0,
+        "thread_siblings": "0-1"
+      },
+      {
+        "cpu": 2,
+        "core": 1,
+        "socket": 0,
+        "thread_siblings": "2-3"
+      },
+      {
+        "cpu": 3,
+        "core": 1,
+        "socket": 0,
+        "thread_siblings": "2-3"
+      }
+    ]
+  },
+  "invalid_reasons": [
+    "run 1: achieved 6179 rps, below 99% of 20000",
+    "run 2: achieved 6191 rps, below 99% of 20000",
+    "run 3: achieved 5923 rps, below 99% of 20000",
+    "run 4: achieved 6080 rps, below 99% of 20000",
+    "run 5: achieved 5962 rps, below 99% of 20000"
+  ],
+  "latency_us": {
+    "p50": {
+      "median": 1642495,
+      "min": 1613823,
+      "max": 1699839,
+      "spread": 0.052369109190591144
+    },
+    "p99": {
+      "median": 1734655,
+      "min": 1694719,
+      "max": 1787903,
+      "spread": 0.053719039232585156
+    },
+    "p99_9": {
+      "median": 1769471,
+      "min": 1717247,
+      "max": 1801215,
+      "spread": 0.047453730521720895
+    }
+  },
+  "ref": "refs/heads/m7-verify",
+  "rps_per_vcpu": 6080.394444444444,
+  "run_url": "https://github.com/ankitbisht23/spillway/actions/runs/45839786856",
+  "runs": [
+    {
+      "url": "http://gateway:8000/bytes/1024",
+      "protocol": "HTTP/1.1",
+      "target_rps": 20000,
+      "achieved_rps": 6179.361111111111,
+      "valid": false,
+      "warmup_s": 30,
+      "duration_s": 180,
+      "requests": {
+        "scheduled": 3600000,
+        "sent": 1112285,
+        "dropped": 2487715
+      },
+      "status": {
+        "2xx": 1112285
+      },
+      "errors": {},
+      "latency_us": {
+        "p50": 1615871,
+        "p99": 1694719,
+        "p99_9": 1730559,
+        "max": 1754111
+      },
+      "hardware": {
+        "cpu_model": "AMD EPYC 7763 64-Core Processor",
+        "goarch": "amd64",
+        "num_cpu": 2,
+        "gomaxprocs": 2
+      }
+    },
+    {
+      "url": "http://gateway:8000/bytes/1024",
+      "protocol": "HTTP/1.1",
+      "target_rps": 20000,
+      "achieved_rps": 6191.461111111111,
+      "valid": false,
+      "warmup_s": 30,
+      "duration_s": 180,
+      "requests": {
+        "scheduled": 3600000,
+        "sent": 1114463,
+        "dropped": 2485537
+      },
+      "status": {
+        "2xx": 1114463
+      },
+      "errors": {},
+      "latency_us": {
+        "p50": 1613823,
+        "p99": 1699839,
+        "p99_9": 1717247,
+        "max": 1734655
+      },
+      "hardware": {
+        "cpu_model": "AMD EPYC 7763 64-Core Processor",
+        "goarch": "amd64",
+        "num_cpu": 2,
+        "gomaxprocs": 2
+      }
+    },
+    {
+      "url": "http://gateway:8000/bytes/1024",
+      "protocol": "HTTP/1.1",
+      "target_rps": 20000,
+      "achieved_rps": 5922.627777777778,
+      "valid": false,
+      "warmup_s": 30,
+      "duration_s": 180,
+      "requests": {
+        "scheduled": 3600000,
+        "sent": 1066073,
+        "dropped": 2533927
+      },
+      "status": {
+        "2xx": 1066073
+      },
+      "errors": {},
+      "latency_us": {
+        "p50": 1699839,
+        "p99": 1782783,
+        "p99_9": 1796095,
+        "max": 1856511
+      },
+      "hardware": {
+        "cpu_model": "AMD EPYC 7763 64-Core Processor",
+        "goarch": "amd64",
+        "num_cpu": 2,
+        "gomaxprocs": 2
+      }
+    },
+    {
+      "url": "http://gateway:8000/bytes/1024",
+      "protocol": "HTTP/1.1",
+      "target_rps": 20000,
+      "achieved_rps": 6080.394444444444,
+      "valid": false,
+      "warmup_s": 30,
+      "duration_s": 180,
+      "requests": {
+        "scheduled": 3600000,
+        "sent": 1094471,
+        "dropped": 2505529
+      },
+      "status": {
+        "2xx": 1094471
+      },
+      "errors": {},
+      "latency_us": {
+        "p50": 1642495,
+        "p99": 1734655,
+        "p99_9": 1769471,
+        "max": 1791999
+      },
+      "hardware": {
+        "cpu_model": "AMD EPYC 7763 64-Core Processor",
+        "goarch": "amd64",
+        "num_cpu": 2,
+        "gomaxprocs": 2
+      }
+    },
+    {
+      "url": "http://gateway:8000/bytes/1024",
+      "protocol": "HTTP/1.1",
+      "target_rps": 20000,
+      "achieved_rps": 5961.888888888889,
+      "valid": false,
+      "warmup_s": 30,
+      "duration_s": 180,
+      "requests": {
+        "scheduled": 3600000,
+        "sent": 1073140,
+        "dropped": 2526860
+      },
+      "status": {
+        "2xx": 1073140
+      },
+      "errors": {},
+      "latency_us": {
+        "p50": 1671167,
+        "p99": 1787903,
+        "p99_9": 1801215,
+        "max": 1817599
+      },
+      "hardware": {
+        "cpu_model": "AMD EPYC 7763 64-Core Processor",
+        "goarch": "amd64",
+        "num_cpu": 2,
+        "gomaxprocs": 2
+      }
+    }
+  ],
+  "setup": {
+    "gateway_vcpus": 1,
+    "cpus": {
+      "gateway": "0",
+      "loadgen": "1-2",
+      "upstream": "3"
+    },
+    "url": "http://gateway:8000/bytes/1024",
+    "protocol": "HTTP/1.1",
+    "warmup": "30s",
+    "duration": "3m",
+    "access_log_sample_rate": 0.01,
+    "trace_sample_ratio": 0.01
+  },
+  "target_rps": 20000,
+  "timestamp": "2026-11-26T14:31:10Z",
+  "valid": false
+}
