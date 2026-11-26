@@ -1,0 +1,263 @@
+{
+  "achieved_rps": {
+    "median": 4600,
+    "min": 4599.977777777778,
+    "max": 4600,
+    "spread": 4.830917874325836e-06
+  },
+  "arch": "x64",
+  "commit": "390f3f4f5b750cc919e59b9480ece6c7512c0b1b",
+  "gate": {
+    "verdict": "first",
+    "baseline": null,
+    "release_baseline": null,
+    "release_tag": null,
+    "comparisons": [],
+    "rerun_of": null,
+    "cross_model": {
+      "info": "information only (P34): another CPU model, never flagged, never fails, never makes or blocks a baseline",
+      "baseline": "results/x64/20261126T151143Z.json",
+      "cpu_model": "AMD EPYC 9V74 80-Core Processor",
+      "comparisons": [
+        {
+          "metric": "achieved_rps_median",
+          "base": 4600,
+          "value": 4600,
+          "change": 0
+        },
+        {
+          "metric": "p99_us_median",
+          "base": 1506,
+          "value": 1875,
+          "change": 0.2450199203187251
+        }
+      ]
+    }
+  },
+  "hardware": {
+    "cpu_model": "Intel(R) Xeon(R) 6975P-C",
+    "cpus": 4,
+    "memory_bytes": 16463409152,
+    "os": "Ubuntu 26.04.1 LTS",
+    "kernel": "7.0.0-1016-aws",
+    "topology": [
+      {
+        "cpu": 0,
+        "core": 0,
+        "socket": 0,
+        "thread_siblings": "0,2"
+      },
+      {
+        "cpu": 1,
+        "core": 1,
+        "socket": 0,
+        "thread_siblings": "1,3"
+      },
+      {
+        "cpu": 2,
+        "core": 0,
+        "socket": 0,
+        "thread_siblings": "0,2"
+      },
+      {
+        "cpu": 3,
+        "core": 1,
+        "socket": 0,
+        "thread_siblings": "1,3"
+      }
+    ]
+  },
+  "invalid_reasons": [],
+  "latency_us": {
+    "p50": {
+      "median": 515,
+      "min": 505,
+      "max": 524,
+      "spread": 0.036893203883495145
+    },
+    "p99": {
+      "median": 1875,
+      "min": 1827,
+      "max": 1949,
+      "spread": 0.06506666666666666
+    },
+    "p99_9": {
+      "median": 3501,
+      "min": 3141,
+      "max": 3617,
+      "spread": 0.13596115395601258
+    }
+  },
+  "ref": "refs/heads/m7-verify",
+  "rps_per_vcpu": 4600,
+  "run_url": "https://github.com/ankitbisht23/spillway/actions/runs/45864041725",
+  "runs": [
+    {
+      "url": "http://gateway:8000/bytes/1024",
+      "protocol": "HTTP/1.1",
+      "target_rps": 4600,
+      "achieved_rps": 4600,
+      "valid": true,
+      "warmup_s": 30,
+      "duration_s": 180,
+      "requests": {
+        "scheduled": 828000,
+        "sent": 828000,
+        "dropped": 0
+      },
+      "status": {
+        "2xx": 828000
+      },
+      "errors": {},
+      "latency_us": {
+        "p50": 522,
+        "p99": 1827,
+        "p99_9": 3141,
+        "max": 18735
+      },
+      "hardware": {
+        "cpu_model": "Intel(R) Xeon(R) 6975P-C",
+        "goarch": "amd64",
+        "num_cpu": 2,
+        "gomaxprocs": 2
+      }
+    },
+    {
+      "url": "http://gateway:8000/bytes/1024",
+      "protocol": "HTTP/1.1",
+      "target_rps": 4600,
+      "achieved_rps": 4599.9944444444445,
+      "valid": true,
+      "warmup_s": 30,
+      "duration_s": 180,
+      "requests": {
+        "scheduled": 828000,
+        "sent": 827999,
+        "dropped": 1
+      },
+      "status": {
+        "2xx": 827999
+      },
+      "errors": {},
+      "latency_us": {
+        "p50": 515,
+        "p99": 1869,
+        "p99_9": 3501,
+        "max": 23119
+      },
+      "hardware": {
+        "cpu_model": "Intel(R) Xeon(R) 6975P-C",
+        "goarch": "amd64",
+        "num_cpu": 2,
+        "gomaxprocs": 2
+      }
+    },
+    {
+      "url": "http://gateway:8000/bytes/1024",
+      "protocol": "HTTP/1.1",
+      "target_rps": 4600,
+      "achieved_rps": 4599.977777777778,
+      "valid": true,
+      "warmup_s": 30,
+      "duration_s": 180,
+      "requests": {
+        "scheduled": 828000,
+        "sent": 827996,
+        "dropped": 4
+      },
+      "status": {
+        "2xx": 827996
+      },
+      "errors": {},
+      "latency_us": {
+        "p50": 512,
+        "p99": 1875,
+        "p99_9": 3343,
+        "max": 22991
+      },
+      "hardware": {
+        "cpu_model": "Intel(R) Xeon(R) 6975P-C",
+        "goarch": "amd64",
+        "num_cpu": 2,
+        "gomaxprocs": 2
+      }
+    },
+    {
+      "url": "http://gateway:8000/bytes/1024",
+      "protocol": "HTTP/1.1",
+      "target_rps": 4600,
+      "achieved_rps": 4600,
+      "valid": true,
+      "warmup_s": 30,
+      "duration_s": 180,
+      "requests": {
+        "scheduled": 828000,
+        "sent": 828000,
+        "dropped": 0
+      },
+      "status": {
+        "2xx": 828000
+      },
+      "errors": {},
+      "latency_us": {
+        "p50": 505,
+        "p99": 1949,
+        "p99_9": 3617,
+        "max": 22463
+      },
+      "hardware": {
+        "cpu_model": "Intel(R) Xeon(R) 6975P-C",
+        "goarch": "amd64",
+        "num_cpu": 2,
+        "gomaxprocs": 2
+      }
+    },
+    {
+      "url": "http://gateway:8000/bytes/1024",
+      "protocol": "HTTP/1.1",
+      "target_rps": 4600,
+      "achieved_rps": 4600,
+      "valid": true,
+      "warmup_s": 30,
+      "duration_s": 180,
+      "requests": {
+        "scheduled": 828000,
+        "sent": 828000,
+        "dropped": 0
+      },
+      "status": {
+        "2xx": 828000
+      },
+      "errors": {},
+      "latency_us": {
+        "p50": 524,
+        "p99": 1918,
+        "p99_9": 3565,
+        "max": 20751
+      },
+      "hardware": {
+        "cpu_model": "Intel(R) Xeon(R) 6975P-C",
+        "goarch": "amd64",
+        "num_cpu": 2,
+        "gomaxprocs": 2
+      }
+    }
+  ],
+  "setup": {
+    "gateway_vcpus": 1,
+    "cpus": {
+      "gateway": "0",
+      "loadgen": "1-2",
+      "upstream": "3"
+    },
+    "url": "http://gateway:8000/bytes/1024",
+    "protocol": "HTTP/1.1",
+    "warmup": "30s",
+    "duration": "3m",
+    "access_log_sample_rate": 0.01,
+    "trace_sample_ratio": 0.01
+  },
+  "target_rps": 4600,
+  "timestamp": "2026-11-26T17:01:31Z",
+  "valid": true
+}
