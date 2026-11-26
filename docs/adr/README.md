@@ -96,3 +96,4 @@ Decisions that shape Spillway and are not obvious from the code or from docs/des
 | [0085](0085-kind-cluster-implementation-details.md) | kind cluster: implementation details | Accepted | 2026-11-26 |
 | [0086](0086-helm-chart-implementation-details.md) | Helm chart: implementation details | Accepted | 2026-11-26 |
 | [0087](0087-observability-as-code-implementation-details.md) | Observability as code: implementation details | Accepted | 2026-11-26 |
+| [0088](0088-verify-m7-implementation-details.md) | make verify-m7: implementation details | Accepted | 2026-11-26 |
