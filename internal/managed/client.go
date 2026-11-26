@@ -47,7 +47,10 @@ type Options struct {
 	// HeavyHitterSecret keys the digests heartbeats report
 	// (heavyhitters.Pseudonym, ADR-0053); required with HeavyHitters.
 	HeavyHitterSecret secret.Value
-	Log               *slog.Logger
+	// IdentityApplied, if set, is called with each identity once it is in
+	// use (the gateway warns of quotas it cannot count, ADR-0091).
+	IdentityApplied func(*config.Identity)
+	Log             *slog.Logger
 }
 
 // Client is a managed gateway's view of the control plane: the config and
@@ -323,6 +326,9 @@ func (c *Client) applyIdentity(v *configpb.SchemaVersion, id *configpb.Identity,
 	c.rawIdentity, c.identityEpoch = id, epoch
 	c.applied(source)
 	c.opts.Log.Info("identity applied", "source", source, "version", compiled.Version, "epoch", epoch)
+	if c.opts.IdentityApplied != nil {
+		c.opts.IdentityApplied(compiled)
+	}
 	return true
 }
 

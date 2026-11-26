@@ -236,7 +236,8 @@ func serve(ctx context.Context, s settings, log *slog.Logger, tracer trace.Trace
 		hitters = heavyhitters.New()
 		m := managed.New(configpb.NewConfigServiceClient(conn), managed.Options{
 			ReplicaID: replica, SnapshotPath: s.snapshot, Log: log, HeavyHitters: hitters, HeavyHitterSecret: s.heavyHitterSecret,
-			Compile: func(c *configpb.Config) (*config.Snapshot, error) { return config.PrepareManaged(c, log, apply) },
+			Compile:         func(c *configpb.Config) (*config.Snapshot, error) { return config.PrepareManaged(c, log, apply) },
+			IdentityApplied: warnUnenforcedQuotas(log, rl != nil),
 		})
 		log.Info("managed mode", "control_plane", s.controlPlane, "server_name", s.cpServerName, "replica", replica, "snapshot", s.snapshot)
 		go m.Run(bg)
@@ -411,6 +412,24 @@ func checkRedis(snap *config.Snapshot, haveRedis bool) error {
 		return errors.New("plans have quotas, which are counted in Redis (RL-10), but SPILLWAY_GATEWAY_REDIS_ADDRS is not set")
 	}
 	return nil
+}
+
+// warnUnenforcedQuotas returns the managed client's IdentityApplied hook:
+// without Redis, quota overrides cannot be counted, so their quotas are
+// not enforced, as a quota-only call that fails is fail_open (ADR-0070).
+// Identity cannot be refused as a config with plan quotas is (checkRedis):
+// that would hold back key revocations too. So each identity version that
+// has such overrides is logged as a warning instead (ADR-0091).
+func warnUnenforcedQuotas(log *slog.Logger, haveRedis bool) func(*config.Identity) {
+	if haveRedis {
+		return nil
+	}
+	return func(id *config.Identity) {
+		if n := id.QuotaOverrideConsumers(); n > 0 {
+			log.Warn("quota overrides are not enforced: quotas are counted in Redis (RL-10), but SPILLWAY_GATEWAY_REDIS_ADDRS is not set",
+				"identity_version", id.Version, "consumers", n)
+		}
+	}
 }
 
 // checkAuth rejects a snapshot with a route that needs bearer tokens when
