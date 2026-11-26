@@ -17,16 +17,17 @@ name: bench
 # Names the mode, rates and gate, so a script can find its run (ADR-0074).
 run-name: >-
   bench ${{ inputs.mode || 'throughput' }}
-  x64=${{ inputs.rate_x64 || 4600 }} arm64=${{ inputs.rate_arm64 || 8800 }}
+  x64=${{ inputs.rate_x64 || 4600 }} arm64=${{ inputs.rate_arm64 || 6300 }}
   gate=${{ (github.event_name == 'schedule' || inputs.gate) && inputs.mode != 'scaling' }}
 
 on:
   schedule:
     - cron: '17 3 * * *' # off the hour, when GitHub's queues are shorter
   workflow_dispatch:
-    # About 90% of the slowest run in the first, saturated run set on each
-    # runner, so the gateway runs below capacity (ADR-0016). They are also
-    # NFR-01's per-arch floors (ADR-0080).
+    # Below the slowest runner's capacity, so the gateway runs below
+    # saturation: x64 about 90% of M1's slowest saturated run (ADR-0016),
+    # arm64 80% of the slowest arm64 runner measured on 2026-11-26
+    # (ADR-0090). They are also NFR-01's per-arch floors (ADR-0080).
     inputs:
       rate_x64:
         description: Target rate on x64, requests per second
@@ -35,7 +36,7 @@ on:
       rate_arm64:
         description: Target rate on arm64, requests per second
         type: number
-        default: 8800
+        default: 6300
       gate:
         description: Gate the run set against its baselines (NFR-05)
         type: boolean
@@ -59,7 +60,7 @@ jobs:
           - runner: ubuntu-latest
             rate: ${{ inputs.rate_x64 || 4600 }}
           - runner: ubuntu-24.04-arm
-            rate: ${{ inputs.rate_arm64 || 8800 }}
+            rate: ${{ inputs.rate_arm64 || 6300 }}
     runs-on: ${{ matrix.runner }}
     # Two run sets and their builds; a scaling run is probes and two run
     # sets (ADR-0074 §D9).

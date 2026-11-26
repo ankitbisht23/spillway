@@ -338,7 +338,7 @@ Every row has an ID (NFR-01 – NFR-15) and must be demonstrated by a benchmark 
 
 | ID | Area | Target | Measured by | First measured |
 | --- | --- | --- | --- | --- |
-| NFR-01 | Throughput | ≥ 4,600 rps per gateway vCPU on x64 (`ubuntu-latest`) and ≥ 8,800 on arm64 (`ubuntu-24.04-arm`), on whatever CPU model the runner has, which the result records (ADR-0082), 1 KB responses, no-op upstream (re-baselined from M1's runs, ADR-0016) | CI benchmark (manual from M1, nightly from M7), gateway pinned to 1 vCPU (see Benchmark method) | M1 (baseline) |
+| NFR-01 | Throughput | ≥ 4,600 rps per gateway vCPU on x64 (`ubuntu-latest`) and ≥ 6,300 on arm64 (`ubuntu-24.04-arm`, re-baselined from 8,800 to 80% of the slowest runner measured, ADR-0090), on whatever CPU model the runner has, which the result records (ADR-0082), 1 KB responses, no-op upstream (re-baselined from M1's runs, ADR-0016) | CI benchmark (manual from M1, nightly from M7), gateway pinned to 1 vCPU (see Benchmark method) | M1 (baseline) |
 | NFR-02 | Scaling | Within 15% of linear from 1 to 2 gateway vCPUs | CI runner with CPU pinning: gateway on 1 then 2 vCPUs, loadgen 1, upstream 1, no Redis; valid only if loadgen hit its target rate | M7 |
 | NFR-03 | Added latency, local limits | p99 ≤ 2 ms over direct-to-upstream | Paired runs with and without the gateway | M2 |
 | NFR-04 | Added latency, Redis check | p99 ≤ 5 ms, Redis on the same host or zone | Same, with a global policy active | M3 |
