@@ -263,6 +263,133 @@ func TestManifestShape(t *testing.T) {
 	}
 }
 
+// hardeningExceptions are the containers of deploy/kind that may not have
+// the full hardening, each with why (ADR-0085 item 6, ADR-0091): Postgres's
+// entrypoint starts as root, takes its directories (chown, chmod) and drops
+// to postgres with gosu, so it runs as root first and keeps the
+// capabilities for that; Keycloak builds itself at start, so its root
+// filesystem is writable.
+var hardeningExceptions = map[string]struct {
+	root, writable bool
+	add            []any
+}{
+	"postgres/postgres": {root: true, writable: true, add: []any{"CHOWN", "DAC_OVERRIDE", "FOWNER", "SETGID", "SETUID"}},
+	"keycloak/keycloak": {writable: true},
+}
+
+// TestManifestHardening: every pod deploy/kind and the kind Jobs run has
+// the runtime's default seccomp profile, and every container no privilege
+// escalation, all capabilities dropped, a non-root user and a read-only root
+// filesystem, apart from hardeningExceptions.
+func TestManifestHardening(t *testing.T) {
+	seen := map[string]bool{}
+	for f, ds := range manifests(t) {
+		for _, d := range ds {
+			s := podSpec(d)
+			if s == nil {
+				continue
+			}
+			name, _ := get(d, "metadata", "name").(string)
+			for _, c := range containers(s) {
+				id := name + "/" + c["name"].(string)
+				ex, isEx := hardeningExceptions[id]
+				seen[id] = isEx
+				sc := func(k ...string) any {
+					if v := get(c, append([]string{"securityContext"}, k...)...); v != nil {
+						return v
+					}
+					return get(s, append([]string{"securityContext"}, k...)...)
+				}
+				if sc("seccompProfile", "type") != "RuntimeDefault" {
+					t.Errorf("%s: %s has no RuntimeDefault seccomp profile", f, id)
+				}
+				if get(c, "securityContext", "allowPrivilegeEscalation") != false {
+					t.Errorf("%s: %s allows privilege escalation", f, id)
+				}
+				if !slices.Equal(list(get(c, "securityContext", "capabilities", "drop")), []any{"ALL"}) {
+					t.Errorf("%s: %s does not drop all capabilities", f, id)
+				}
+				if add := list(get(c, "securityContext", "capabilities", "add")); !slices.Equal(add, ex.add) {
+					t.Errorf("%s: %s adds capabilities %v, want %v", f, id, add, ex.add)
+				}
+				if root := sc("runAsNonRoot") != true; root != ex.root {
+					t.Errorf("%s: %s runAsNonRoot %v; want it unless excepted", f, id, sc("runAsNonRoot"))
+				}
+				if writable := get(c, "securityContext", "readOnlyRootFilesystem") != true; writable != ex.writable {
+					t.Errorf("%s: %s readOnlyRootFilesystem %v; want it unless excepted", f, id, get(c, "securityContext", "readOnlyRootFilesystem"))
+				}
+			}
+		}
+	}
+	for id := range hardeningExceptions {
+		if !seen[id] {
+			t.Errorf("exception %s matches no container", id)
+		}
+	}
+}
+
+// TestRedisExporterPolicy: the exporter, which sends the Redis password to
+// every /scrape target, may reach only the Redis pods' 6379 and cluster
+// DNS, and only Prometheus and addresses outside the pod network reach it
+// (ADR-0091).
+func TestRedisExporterPolicy(t *testing.T) {
+	var np map[string]any
+	for _, d := range docs(t, "deploy/kind/obs/redis-exporter.yaml") {
+		if d["kind"] == "NetworkPolicy" {
+			np = d
+		}
+	}
+	if np == nil {
+		t.Fatal("no NetworkPolicy for redis-exporter")
+	}
+	b, _ := yaml.Marshal(np["spec"])
+	want := `egress:
+    - ports:
+        - port: 6379
+          protocol: TCP
+      to:
+        - namespaceSelector:
+            matchLabels:
+                kubernetes.io/metadata.name: spillway-deps
+          podSelector:
+            matchLabels:
+                app.kubernetes.io/name: redis
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+      to:
+        - namespaceSelector:
+            matchLabels:
+                kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+                k8s-app: kube-dns
+ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+                app.kubernetes.io/name: prometheus
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+                - 10.244.0.0/16
+      ports:
+        - port: 9121
+          protocol: TCP
+podSelector:
+    matchLabels:
+        app.kubernetes.io/name: redis-exporter
+policyTypes:
+    - Ingress
+    - Egress
+`
+	if string(b) != want {
+		t.Errorf("redis-exporter NetworkPolicy spec:\n%s\nwant:\n%s", b, want)
+	}
+}
+
 func mebibytes(q string) int {
 	var n int
 	switch {

@@ -1,7 +1,9 @@
 # redis_exporter on kind (ADR-0075 §D10): the newest release at least two
 # weeks old on 2026-11-25 (v1.97.0, 2026-11-04), new with M7. Prometheus's
 # redis job scrapes each Redis node through /scrape?target=…; the nodes'
-# password comes from the Secret dev-secrets and applies to every target.
+# password comes from the Secret dev-secrets and applies to every target,
+# so the NetworkPolicy at the end lets the exporter reach only the Redis
+# pods (and DNS), and only Prometheus and the kubelet reach it (ADR-0091).
 apiVersion: v1
 kind: Service
 metadata:
@@ -54,3 +56,41 @@ spec:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities: { drop: [ALL] }
+---
+# Egress: the Redis nodes' 6379 and cluster DNS only, so no /scrape target
+# elsewhere ever gets the password. Ingress: Prometheus, and addresses
+# outside the pod network (the kubelet's probe comes from the node network,
+# which kind-up learns only later); every other pod is refused.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: redis-exporter
+  namespace: spillway-obs
+  labels: { app.kubernetes.io/name: redis-exporter }
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: redis-exporter }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: { app.kubernetes.io/name: prometheus }
+        - ipBlock: { cidr: 0.0.0.0/0, except: [10.244.0.0/16] } # kind's pod network (cluster.yaml)
+      ports:
+        - { protocol: TCP, port: 9121 }
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: spillway-deps }
+          podSelector:
+            matchLabels: { app.kubernetes.io/name: redis }
+      ports:
+        - { protocol: TCP, port: 6379 }
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: kube-system }
+          podSelector:
+            matchLabels: { k8s-app: kube-dns }
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
