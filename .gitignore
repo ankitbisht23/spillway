@@ -32,3 +32,6 @@ test-results/
 .idea/
 .vscode/*
 !.vscode/extensions.json
+
+# verify-m7 results and logs (ADR-0074)
+test/verify/out/

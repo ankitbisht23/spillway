@@ -11,7 +11,7 @@ FUZZTIME ?= 5s
 # Committed dev defaults first, then local overrides if present (ADR-0004).
 COMPOSE := docker compose --env-file .env.example $(if $(wildcard .env.local),--env-file .env.local)
 
-.PHONY: tools hooks certs dev kind-up kind-down kind-smoke kind-rollout kind-images kind-grafana kind-prometheus test test-go test-web test-e2e fuzz test-integration proto api sqlc web-gen web-build lint lint-go lint-web lint-proto lint-api lint-sql lint-helm lint-obs bench bench-gate verify-m0 verify-m0-stack verify-m1 verify-m1-reload verify-m2 verify-m2-shadow verify-m3 verify-m4 verify-m5 verify-m6 accuracy chaos-redis-outage chaos-redis-primary chaos-cp-outage nfr-keys nfr-soak nfr-noisy chaos-redis-latency chaos-gateway-kill chaos
+.PHONY: tools hooks certs dev kind-up kind-down kind-smoke kind-rollout kind-images kind-grafana kind-prometheus test test-go test-web test-e2e fuzz test-integration proto api sqlc web-gen web-build lint lint-go lint-web lint-proto lint-api lint-sql lint-helm lint-obs bench bench-gate verify-m0 verify-m0-stack verify-m1 verify-m1-reload verify-m2 verify-m2-shadow verify-m3 verify-m4 verify-m5 verify-m6 verify-m7 accuracy chaos-redis-outage chaos-redis-primary chaos-cp-outage nfr-keys nfr-soak nfr-noisy chaos-redis-latency chaos-gateway-kill chaos
 
 # Host-run processes and tests reach Redis Cluster nodes through this map
 # (ADR-0004). Set only here, never in compose or .env files.
@@ -435,6 +435,19 @@ verify-m5: dev
 # CI runs none of it: its e2e job runs the flows against static gateways.
 verify-m6: dev
 	@test/verify/m6.sh
+
+# M7 exit (docs/design.md, ADR-0074, ADR-0088): every NFR row NFR-01 –
+# NFR-15 and the chaos suite on one commit, PASS/FAIL per row, about 2¼
+# hours. NFR-01 and NFR-05 come from a gated bench.yml run it dispatches on
+# HEAD (pushed, clean tree, gh as the repository's owner); NFR-02 reads the
+# newest scaling results and is an open known limit (ADR-0084 §4), printed
+# but not counted; the compose checks run through their make targets; kind
+# runs NFR-14's rolling restart with compose stopped, then make dev brings
+# compose back. Results and logs go to test/verify/out/. README=1 rewrites
+# the README's verify-m7 block from the run; PARTS="10 11 15" (or bench,
+# compose, kind, chaos) runs a subset, which is never the exit evidence.
+verify-m7:
+	@README=$(README) test/verify/m7.sh $(PARTS)
 
 # Accuracy harness v1 (NFR-06, NFR-07, ADR-0021, ADR-0069): gateway-1 …
 # gateway-$(REPLICAS) (1 to 5) run test/accuracy/gateway.yaml, or with
