@@ -208,10 +208,12 @@ func TestSummarizeAllowed(t *testing.T) {
 func TestRunFails(t *testing.T) {
 	// Boundary at 2 s: 200 within about 20 ms around the 1 s mark, against
 	// 110 for a 100 ms window. How many more, and in which window, depends
-	// on when the sender's timers fire.
+	// on when the sender's timers fire: on a loaded CI runner the count fell
+	// to 30 (main CI run 45487522090), so only an over-admission above the
+	// allowed one is required.
 	over := &fakeGateway{admitAll: true}
 	r, _, code, stderr := harnessRun(t, options{keys: 1, duration: 2 * time.Second, gateways: []gateway{over.start(t)}, patterns: []string{"boundary"}})
-	if p := r.Patterns[0]; code != 1 || r.Pass || p.Pass || p.MaxOverAdmission.Count < 50 || p.MaxOverAdmission.Key == "" {
+	if p := r.Patterns[0]; code != 1 || r.Pass || p.Pass || p.MaxOverAdmission.Count <= p.AllowedOverAdmission || p.MaxOverAdmission.Key == "" {
 		t.Errorf("over-admitting: exit code %d, %+v", code, r.Patterns)
 	}
 	if !strings.Contains(stderr, "boundary FAIL") || !strings.Contains(stderr, "(key boundary-") {

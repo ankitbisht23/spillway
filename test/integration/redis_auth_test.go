@@ -62,7 +62,10 @@ func redisWithAuth(t *testing.T) map[string]string {
 			Cmd: []string{"redis-server", "--port", "6379", "--cluster-enabled", "yes", "--appendonly", "no",
 				"--requirepass", redisAuthPassword, "--masterauth", redisAuthPassword,
 				"--cluster-announce-hostname", "redis-auth", "--cluster-preferred-endpoint-type", "hostname"},
-			WaitingFor: wait.ForLog("Ready to accept connections"),
+			// The port as well as the log line: on Docker Desktop the log
+			// line can come before the port binding is published, and
+			// MappedPort then fails with "port 6379/tcp not found".
+			WaitingFor: wait.ForAll(wait.ForLog("Ready to accept connections"), wait.ForListeningPort("6379/tcp")),
 		},
 		Started: true,
 	})
