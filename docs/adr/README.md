@@ -99,3 +99,4 @@ Decisions that shape Spillway and are not obvious from the code or from docs/des
 | [0088](0088-verify-m7-implementation-details.md) | make verify-m7: implementation details | Accepted | 2026-11-26 |
 | [0089](0089-nfr-05-x64-not-demonstrated-on-a-new-cpu-model.md) | NFR-05: x64 NOT DEMONSTRATED on a CPU model with no main baseline | Accepted | 2026-11-26 |
 | [0090](0090-arm64-bench-rate-re-baseline.md) | arm64 bench rate and NFR-01 floor re-baselined to 6,300 | Accepted | 2026-11-26 |
+| [0091](0091-m1-m7-review-fixes.md) | M1–M7 review fixes | Accepted | 2026-11-27 |
