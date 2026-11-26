@@ -114,6 +114,10 @@ type redisCall struct {
 	checks   []int            // index in limits.checks of each limit, once answered; -1 for a quota the script skipped
 	nowUS    int64            // the call's Redis TIME, which its refund names
 	slot     string           // the hash slot's kind, for its span: "tenant", "key" or "global"
+	// closed: an enforce fail_closed policy is in the call, set before its
+	// lease-served policies leave it, so its quotas follow that policy
+	// whether or not a lease serves it (ADR-0070, ADR-0091).
+	closed bool
 }
 
 // errBudgetSpent fails a Redis call that the request's budget left no time
@@ -292,6 +296,7 @@ func (l *limits) checkRedis() bool {
 	deadline := start.Add(l.budget)
 	var ctx context.Context // made for the first call sent, not for a request its leases serve
 	for _, c := range calls {
+		c.closed = failClosed(c)
 		if l.lease != nil {
 			l.useLease(c)
 			if len(c.limits) == 0 {
@@ -348,7 +353,7 @@ func (l *limits) checkRedis() bool {
 			}
 			l.checks = append(l.checks, check{policy: c.policies[i], limit: c.conf[i], windows: c.windows[i], d: d, held: written})
 		}
-		closed := res.QuotaUnseeded && res.Allowed && failClosed(c)
+		closed := res.QuotaUnseeded && res.Allowed && c.closed
 		l.decide(c, func(i int) string {
 			switch {
 			case c.limits[i].Algorithm == rlredis.Quota && res.QuotaUnseeded && closed:
@@ -570,7 +575,7 @@ func (l *limits) failed(c *redisCall, err error) bool {
 	// Debug: during an outage every request fails; the metric and the
 	// breaker's transition logs carry it.
 	l.log.Debug("redis limiter call failed; failure modes apply", "kind", kind, "node", node, "request_id", l.q.ID)
-	l.unavailable = l.unavailable || failClosed(c)
+	l.unavailable = l.unavailable || c.closed
 	at := l.registry.Now()
 	for i := 0; i < len(c.limits); {
 		p, decision, applied := c.policies[i], "allow", true
@@ -633,7 +638,8 @@ func (l *limits) failed(c *redisCall, err error) bool {
 // failClosed reports whether an enforce fail_closed policy is in c: then a
 // failure of c, or c's quotas unseeded, makes the request a 503 (RL-23,
 // ADR-0070). A quota has no failure mode of its own; it follows the
-// policies of its call, and is fail_open alone.
+// policies of its call, and is fail_open alone. checkRedis records it in
+// c.closed before leases serve any of c's policies (ADR-0091).
 func failClosed(c *redisCall) bool {
 	for _, p := range c.policies {
 		if p.FailureMode == config.FailClosed && p.Mode == config.Enforce {
