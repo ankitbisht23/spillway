@@ -715,7 +715,7 @@ Exit (`make verify-m6`): a new policy goes shadow → reviewed → enforced → 
 - [ ] Load tests against every NFR row (scaling on the CI runner, tenant isolation from loadgen’s per-tenant histograms); chaos suite; noisy-neighbour test (NFR-02, NFR-07, NFR-10, NFR-11, NFR-14, NFR-15)
 - [x] Helm chart `spillway` (gateway + control plane) on a 3-node kind cluster `spillway`; dependencies (Redis Cluster, Postgres, Keycloak, observability) as plain manifests in `deploy/kind/` using the same pinned images as compose, with Keycloak serving HTTPS (cert from a Secret) so the issuer and JWKS URLs are `https://` (SEC-04); `make kind-up` / `make kind-down`, and the Makefile always passes `--context kind-spillway`; dashboards, alert rules and runbooks as code (OB-04–OB-06, OB-08)
 - [x] kind specifics: no ingress controller — the gateway is the edge (NodePort + kind `extraPortMappings` on `127.0.0.1:443` → gateway; no port 80, the gateway serves no plain HTTP in Helm) with a preStop delay and `maxUnavailable: 0`; admin ports on the pod IP only, behind a NetworkPolicy that admits Prometheus and the kubelet (GW-25); kind ranges added to the upstream allow-list (SEC-06); control plane at `replicas: 1`; gateway snapshot on a writable volume, with a runbook for the emptyDir case
-- [ ] README: architecture, benchmark, accuracy and chaos reports with reproduction steps
+- [x] README: architecture, benchmark, accuracy and chaos reports with reproduction steps
 - [ ] Release v1.0.0: changelog, SBOM, signed multi-arch images `ghcr.io/ankitbisht23/spillway-gateway` and `ghcr.io/ankitbisht23/spillway-controlplane` (cosign keyless via GitHub OIDC)
 
 Exit (`make verify-m7`): every NFR row (NFR-01 – NFR-15) meets its target, with the measured result in the README, or an ADR re-baselines it.
@@ -748,11 +748,14 @@ One monorepo with a single Go module at the root (ADR-0002): Go binaries under `
 ```
 spillway/
 ├── .claude/settings.json # agent permissions
-├── .github/              # workflows/ (CI, bench.yml), dependabot.yml
+├── .github/              # workflows/ (CI, bench.yml, release.yml), dependabot.yml
 ├── cmd/
 │   ├── gateway/          # data plane binary
 │   ├── controlplane/     # admin API + config stream + embedded UI; `migrate` step
-│   ├── loadgen/          # accuracy harness + open-model load driver
+│   ├── loadgen/          # open-model load driver; no-op upstream (`serve`)
+│   ├── accuracy/         # accuracy harness (NFR-06, NFR-07)
+│   ├── chaos/            # chaos scenarios and exit-check drivers
+│   ├── benchgate/        # NFR-05 regression gate
 │   └── demo-traffic/     # showcase traffic simulator (D1–D7)
 ├── internal/
 │   ├── router/           # radix tree, match compile
@@ -766,8 +769,8 @@ spillway/
 │   └── telemetry/        # metrics, tracing, logging
 ├── api/                  # openapi.yaml (OpenAPI-first), proto/config.proto (the one config schema)
 ├── web/                  # React + TS admin UI (incl. Playground)
-├── deploy/               # compose/ (service configs), kind/ (cluster + dependency manifests), helm/spillway/, grafana/, prometheus/
-├── test/                 # integration/, chaos/, load/ (scripts; results on the bench-results branch)
+├── deploy/               # compose/ (service configs), kind/ (cluster, dependency and observability manifests, values), helm/spillway/, grafana/dashboards/, prometheus/rules/
+├── test/                 # integration/, chaos/, load/ (scripts; results on the bench-results branch), accuracy/, verify/, kind/, obs/
 ├── docs/                 # design.md, setup.md, demo.md, ports.md, adr/, runbooks/
 ├── go.mod                # module github.com/ankitbisht23/spillway (no go.work)
 ├── compose.yaml          # dev stack; docker compose down -v from the root
@@ -778,7 +781,8 @@ spillway/
 ├── .gitignore
 ├── .gitleaks.toml        # allowlists only fake dev values
 ├── LICENSE
-└── README.md
+├── README.md
+└── CHANGELOG.md          # Keep a Changelog (ADR-0076)
 ```
 
 | Concern | Choice |
