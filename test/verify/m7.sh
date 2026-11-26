@@ -6,7 +6,8 @@
 # (ADR-0080, ADR-0082), the bench gate's verdicts (ADR-0081), the M7 load and
 # chaos targets (ADR-0083), NFR-02 as an open known limit (ADR-0084 §4), the
 # rolling restart on kind (ADR-0086) and (c6) in verify-m5 (ADR-0087);
-# ADR-0088 records this script's own choices.
+# ADR-0088 records this script's own choices, and ADR-0089 NFR-05's x64
+# NOT DEMONSTRATED rule (a CPU model with no main baseline yet).
 #
 # Prints every sub-check's PASS/FAIL line, then one line per NFR row and per
 # extra chaos scenario with its measured number against its target, and
@@ -154,6 +155,22 @@ result_files() {
 	done
 }
 blob() { echo "$repo_url/blob/bench-results/$1"; }
+# main_models <result file>: the CPU models, one per line, of the results
+# that could be its nightly baseline but for the CPU model: benchgate's
+# eligible (from main, valid, gate pass or first, or no gate) and comparable
+# (same arch, target rate and setup) results stored before it (ADR-0081,
+# ADR-0089).
+main_models() {
+	local c=$1 f
+	for f in $(grep "^results/$(show "$c" | jq -r .arch)/" "$out/bench-files.txt"); do
+		[[ $f < $c ]] || continue
+		show "$f" | jq -c '{ref, valid, gate, target_rps, setup, model: .hardware.cpu_model}' 2>/dev/null
+	done | jq -rs --argjson c "$(show "$c")" '
+		[.[] | select(.ref == "refs/heads/main" and .valid == true
+			and (.gate == null or .gate.verdict == "pass" or .gate.verdict == "first")
+			and .target_rps == $c.target_rps and .setup == $c.setup and (.model // "") != "") | .model]
+		| unique | .[]'
+}
 
 # acc <step>: "<verdict>\t<max over-admission uniform/bursty/boundary>\t<boundary
 # 503 share>" from an accuracy run's summary lines, or verify-m3's accuracy lines.
@@ -204,7 +221,7 @@ report() {
 
 	# NFR-01 and NFR-05 (CI)
 	local t01="≥ 4,600 rps per gateway vCPU on x64, ≥ 8,800 on arm64: a valid run set at the floor, on any CPU model (ADR-0080, ADR-0082)"
-	local t05="per arch, the gate's final verdict (after its confirming re-run when flagged) is pass against the nightly baseline; first, invalid or fail is FAIL (ADR-0074, ADR-0081)"
+	local t05="per arch, the gate's final verdict (after its confirming re-run when flagged) is pass against the nightly baseline; first, invalid or fail is FAIL (ADR-0074, ADR-0081), except an x64 first on a CPU model with no main baseline yet: NOT DEMONSTRATED, not counted (ADR-0089)"
 	if [ -z "$want_bench" ]; then
 		not_run NFR-01 "$t01" "CI x64 + arm64"
 		not_run NFR-05 "$t05" "CI x64 + arm64"
@@ -212,7 +229,7 @@ report() {
 		row NFR-01 FAIL true "$t01" "CI x64 + arm64" "$bench_why"
 		row NFR-05 FAIL true "$t05" "CI x64 + arm64" "$bench_why"
 	else
-		local m01="" v01=PASS m05="" v05=PASS links=("run $bench_run=$bench_url") arch floor fs f first rerun final line
+		local m01="" v01=PASS m05="" v05=PASS nd05="" links=("run $bench_run=$bench_url") arch floor fs f first rerun final line models
 		for arch in x64 arm64; do
 			floor=$floor_x64
 			[ "$arch" = arm64 ] && floor=$floor_arm64
@@ -245,11 +262,25 @@ report() {
 				   + (if $g.baseline != null then " vs nightly \($g.baseline | sub("^.*/"; ""))" else ", no main baseline on this CPU model" end)
 				   + (if ($g.comparisons // [] | length) > 0 then " (" + ([$g.comparisons[] | "\(.against) \(.metric | metric) \(.change | pct)\(if .flagged then " flagged" else "" end)"] | join(", ")) + ")" else "" end)
 				   + (if $g.cross_model != null then "; information only (P34): vs \($g.cross_model.cpu_model) " + ([$g.cross_model.comparisons[] | "\(.metric | metric) \(.change | pct)"] | join(", ")) else "" end)] | @tsv')
-			[ "${line%%$'\t'*}" = PASS ] || v05=FAIL
+			# ADR-0089: an x64 first because the runner's CPU model has no
+			# eligible main baseline yet, while another model has one, is
+			# NOT DEMONSTRATED; any other first (and every arm64 first) fails.
+			if [ "$arch" = x64 ] && [ "$(show "$final" | jq -r '.gate.verdict // ""')" = first ]; then
+				models=$(main_models "$final")
+				if [ -n "$models" ] && ! grep -qxF "$(show "$final" | jq -r '.hardware.cpu_model // ""')" <<<"$models"; then
+					nd05=1
+					line="NOT DEMONSTRATED"$'\t'"${line#*$'\t'}; NOT DEMONSTRATED: main baselines exist only on $(paste -sd '|' - <<<"$models" | sed 's/|/, /g') (ADR-0089)"
+				fi
+			fi
+			case ${line%%$'\t'*} in PASS | "NOT DEMONSTRATED") ;; *) v05=FAIL ;; esac
 			m05="$m05${m05:+; }${line#*$'\t'}"
 		done
 		row NFR-01 "$v01" true "$t01" "CI x64 + arm64, bench.yml run $bench_run" "$m01" "${links[@]}"
-		row NFR-05 "$v05" true "$t05" "CI x64 + arm64, bench.yml run $bench_run" "$m05" "${links[@]}"
+		if [ "$v05" = PASS ] && [ -n "$nd05" ]; then
+			row NFR-05 "NOT DEMONSTRATED" false "$t05" "CI x64 + arm64, bench.yml run $bench_run" "$m05" "${links[@]}"
+		else
+			row NFR-05 "$v05" true "$t05" "CI x64 + arm64, bench.yml run $bench_run" "$m05" "${links[@]}"
+		fi
 	fi
 
 	# NFR-02 (CI, read only: ADR-0084 §4, the user's decision)
@@ -408,11 +439,14 @@ report() {
 			"$where, make verify-m4" "$(tally m4)"
 	elif [ "$parts" = all ]; then not_run "Chaos: upstream 5xx" "upstream endpoint returns 5xx" "$where"; fi
 
-	awk -F'\t' '{ printf "%-11s  %-22s %s\n", $2, $1, $6 }' "$rows"
+	awk -F'\t' '{ printf "%-16s  %-22s %s\n", $2, $1, $6 }' "$rows"
 	local failed excluded="" exit_word
 	failed=$(awk -F'\t' '$3 == "true" && $2 != "PASS"' "$rows" | wc -l | tr -d ' ')
 	if awk -F'\t' '$1 == "NFR-02" && $3 == "false"' "$rows" | grep -q .; then
 		excluded="NFR-02 is not counted: an open known limit the user accepted (ADR-0084 §4), so it is left out of the exit status; its line is not a PASS"
+	fi
+	if awk -F'\t' '$1 == "NFR-05" && $3 == "false"' "$rows" | grep -q .; then
+		excluded="$excluded${excluded:+. }NFR-05 is not counted: x64 landed on a CPU model with no main baseline yet, so the gate had nothing to compare (NOT DEMONSTRATED, the user's decision, ADR-0089), and arm64 passed against main's baseline; its line is not a PASS"
 	fi
 	if [ "$failed" -eq 0 ]; then exit_word=PASS; else exit_word="FAIL ($failed rows)"; fi
 

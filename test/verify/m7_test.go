@@ -319,7 +319,8 @@ func TestReportFailures(t *testing.T) {
 			fails:   1,
 		},
 		{
-			// NFR-05 counts first as a FAIL (ADR-0074); NFR-01 still passes.
+			// NFR-05 counts first as a FAIL (ADR-0074) when no CPU model has
+			// a main baseline (ADR-0089); NFR-01 still passes.
 			name: "x64 gate first",
 			edit: func(r *run) {
 				g := r.bench["results/x64/20261126T040100Z.json"]["gate"].(map[string]any)
@@ -507,5 +508,169 @@ func TestReadme(t *testing.T) {
 	}
 	if again, _ := os.ReadFile(readme); string(again) != s { //nolint:gosec // G304: the test's own temp file
 		t.Error("a refused rewrite changed the file")
+	}
+}
+
+// mainResult is a gated result stored on bench-results from main: a
+// baseline for later runs on its CPU model (ADR-0081).
+func mainResult(r *run, name, model, verdict string) map[string]any {
+	arch := strings.Split(name, "/")[1]
+	var b map[string]any
+	for n, f := range r.bench {
+		if strings.HasPrefix(n, "results/"+arch+"/20261126T0401") {
+			raw, _ := json.Marshal(f)
+			_ = json.Unmarshal(raw, &b)
+		}
+	}
+	b["ref"], b["run_url"], b["hardware"] = "refs/heads/main", "https://github.com/o/r/actions/runs/2", map[string]any{"cpu_model": model}
+	b["gate"] = map[string]any{"verdict": verdict, "baseline": nil, "rerun_of": nil, "comparisons": []any{}}
+	r.bench[name] = b
+	return b
+}
+
+// x64First turns the verify run's x64 result into a first verdict on its
+// CPU model, cpu-x64.
+func x64First(r *run) {
+	g := r.bench["results/x64/20261126T040100Z.json"]["gate"].(map[string]any)
+	g["verdict"], g["baseline"], g["comparisons"] = "first", nil, []any{}
+}
+
+// TestReportNFR05 checks ADR-0089: an x64 first because the runner's CPU
+// model has no eligible main baseline yet, while another model has one, is
+// NOT DEMONSTRATED and left out of the exit status; every other first, and
+// any arm64 verdict but pass, fails NFR-05.
+func TestReportNFR05(t *testing.T) {
+	const base = "results/x64/20261126T020000Z.json"
+	for _, c := range []struct {
+		name    string
+		edit    func(*run)
+		verdict string
+		counted bool
+		measure string
+	}{
+		{
+			name: "x64 first, another model has a main baseline",
+			edit: func(r *run) {
+				x64First(r)
+				mainResult(r, base, "cpu-x64-other", "first")
+				mainResult(r, "results/x64/20261125T020000Z.json", "cpu-x64-third", "pass")
+			},
+			verdict: "NOT DEMONSTRATED", counted: false,
+			measure: "x64 first on CPU cpu-x64, no main baseline on this CPU model; NOT DEMONSTRATED: main baselines exist only on cpu-x64-other, cpu-x64-third (ADR-0089)",
+		},
+		{
+			name: "x64 first and arm64 failed",
+			edit: func(r *run) {
+				x64First(r)
+				mainResult(r, base, "cpu-x64-other", "pass")
+				r.bench["results/arm64/20261126T042200Z.json"]["gate"].(map[string]any)["verdict"] = "fail"
+			},
+			verdict: "FAIL", counted: true,
+			measure: "NOT DEMONSTRATED: main baselines exist only on cpu-x64-other (ADR-0089); arm64 fail after the confirming re-run",
+		},
+		{
+			// The gate found nothing on a model that has a main baseline:
+			// the first is not the CPU model's doing.
+			name: "x64 first though its model has a main baseline",
+			edit: func(r *run) {
+				x64First(r)
+				mainResult(r, base, "cpu-x64", "pass")
+				mainResult(r, "results/x64/20261125T020000Z.json", "cpu-x64-other", "pass")
+			},
+			verdict: "FAIL", counted: true,
+		},
+		{
+			name: "arm64 first",
+			edit: func(r *run) {
+				delete(r.bench, "results/arm64/20261126T042200Z.json")
+				g := r.bench["results/arm64/20261126T040100Z.json"]["gate"].(map[string]any)
+				g["verdict"], g["baseline"], g["comparisons"] = "first", nil, []any{}
+				mainResult(r, "results/arm64/20261126T020000Z.json", "cpu-arm64-other", "pass")
+			},
+			verdict: "FAIL", counted: true,
+		},
+		{
+			name: "x64 fail against a same-model baseline",
+			edit: func(r *run) {
+				r.bench["results/x64/20261126T040100Z.json"]["gate"].(map[string]any)["verdict"] = "fail"
+				mainResult(r, base, "cpu-x64-other", "pass")
+			},
+			verdict: "FAIL", counted: true,
+		},
+		{
+			name: "only a branch result on another model",
+			edit: func(r *run) {
+				x64First(r)
+				mainResult(r, base, "cpu-x64-other", "pass")["ref"] = "refs/heads/m7-verify"
+			},
+			verdict: "FAIL", counted: true,
+		},
+		{
+			name: "only an invalid main result on another model",
+			edit: func(r *run) {
+				x64First(r)
+				mainResult(r, base, "cpu-x64-other", "pass")["valid"] = false
+			},
+			verdict: "FAIL", counted: true,
+		},
+		{
+			name: "only a flagged main result on another model",
+			edit: func(r *run) {
+				x64First(r)
+				mainResult(r, base, "cpu-x64-other", "flagged")
+			},
+			verdict: "FAIL", counted: true,
+		},
+		{
+			name: "only a main result with another setup",
+			edit: func(r *run) {
+				x64First(r)
+				mainResult(r, base, "cpu-x64-other", "pass")["setup"] = map[string]any{"gateway_vcpus": 2}
+			},
+			verdict: "FAIL", counted: true,
+		},
+		{
+			name: "only a main result at another rate",
+			edit: func(r *run) {
+				x64First(r)
+				mainResult(r, base, "cpu-x64-other", "pass")["target_rps"] = 5000
+			},
+			verdict: "FAIL", counted: true,
+		},
+		{
+			name: "only a main result stored after the run",
+			edit: func(r *run) {
+				x64First(r)
+				mainResult(r, "results/x64/20261126T050000Z.json", "cpu-x64-other", "pass")
+			},
+			verdict: "FAIL", counted: true,
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := passing()
+			c.edit(r)
+			j, code := r.report(t)
+			row := rowsOf(t, j)["NFR-05"]
+			if row["verdict"] != c.verdict || row["counted"] != c.counted {
+				t.Errorf("NFR-05 %v (counted %v), want %s (counted %v); measured %v", row["verdict"], row["counted"], c.verdict, c.counted, row["measured"])
+			}
+			if c.measure != "" && !strings.Contains(row["measured"].(string), c.measure) {
+				t.Errorf("NFR-05 measured %q lacks %q", row["measured"], c.measure)
+			}
+			wantExit, wantCode := "PASS", 0
+			if c.counted {
+				wantExit, wantCode = "FAIL (1 rows)", 1
+			}
+			if j["exit"] != wantExit || code != wantCode {
+				t.Errorf("exit %d, %v; want %d, %s", code, j["exit"], wantCode, wantExit)
+			}
+			ex, _ := j["excluded"].(string)
+			if got := strings.Contains(ex, "ADR-0089"); got == c.counted {
+				t.Errorf("excluded = %q; the ADR-0089 note should be there only when NFR-05 is not counted", ex)
+			}
+			if !c.counted && !strings.Contains(ex, "ADR-0084") {
+				t.Errorf("excluded = %q lost NFR-02's note", ex)
+			}
+		})
 	}
 }
