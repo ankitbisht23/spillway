@@ -12,7 +12,7 @@ Status: M0 (foundations) to M6 (admin UI) are done. M7 (performance and hardenin
 
 Contents: [Architecture](#architecture) · [Quick start](#quick-start) · [NFR status](#nfr-status) · [Benchmark report](#benchmark-report) · [Accuracy report](#accuracy-report) · [Chaos report](#chaos-report) · [Admin UI](#admin-ui) · [Observability](#observability) · [Known limits](#known-limits) · [verify-m7 results](#verify-m7-results)
 
-Every number below was measured by a check in this repository. Each one names its commit, date and source: a merged PR, an ADR, or a result file on the [`bench-results`](https://github.com/ankitbisht23/spillway/tree/bench-results) branch. "Laptop" means the dev machine: Apple silicon (M4 Pro), Docker Desktop with 14 CPUs and about 8.3 GB of memory. Host and Docker VM stalls on that machine are usually 4–9 ms and sometimes 100–820 ms (ADR-0027, ADR-0034). The checks' tolerances are set so that a stall alone cannot fail them. No check is ever re-run after a FAIL.
+Every number below was measured by a check in this repository. Each one names its commit, date and source: a merged PR, an ADR, or a result file on the [`bench-results`](https://github.com/ankitbisht23/spillway/tree/bench-results) branch. "Laptop" means the dev machine: Apple silicon (M4 Pro), Docker Desktop with 14 CPUs and about 8.3 GB of memory. Host and Docker VM stalls on that machine are usually 4–9 ms and sometimes 100–820 ms (ADR-0027, ADR-0034). Each check's tolerance is chosen with those stalls in mind. Where a stall can still fail a check, the report says so (see [Known limits](#known-limits)). No rule re-runs a check after a FAIL; the one re-dispatch the user authorized is reported where it happened.
 
 ## Architecture
 
@@ -101,8 +101,7 @@ Prerequisites, accounts and the pinned toolchain are in [docs/setup.md](docs/set
 make tools && make hooks && pnpm install
 make dev                                   # docker compose up -d --wait; mints dev certs
 curl --cacert "$(bin/mkcert -CAROOT)/rootCA.pem" https://localhost:8443/bytes/16
-open http://localhost:8080/                # admin UI (Keycloak dev realm login)
-open http://localhost:3000/                # Grafana: Spillway / Overview …
+# admin UI: http://localhost:8080/ (Keycloak dev realm login); Grafana: http://localhost:3000/ (Spillway / Overview …)
 docker compose down                        # stop; add -v to also wipe the volumes
 ```
 
