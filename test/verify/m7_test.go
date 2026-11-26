@@ -125,8 +125,8 @@ func passing() *run {
 		}
 	}
 	r.bench["results/x64/20261126T040100Z.json"] = result("x64", 4600, "pass", "results/x64/20261126T032000Z.json", nil)
-	r.bench["results/arm64/20261126T040100Z.json"] = result("arm64", 8800, "flagged", "results/arm64/20261126T032000Z.json", nil)
-	r.bench["results/arm64/20261126T042200Z.json"] = result("arm64", 8800, "pass", "results/arm64/20261126T032000Z.json", "results/arm64/20261126T040100Z.json")
+	r.bench["results/arm64/20261126T040100Z.json"] = result("arm64", 6300, "flagged", "results/arm64/20261126T032000Z.json", nil)
+	r.bench["results/arm64/20261126T042200Z.json"] = result("arm64", 6300, "pass", "results/arm64/20261126T032000Z.json", "results/arm64/20261126T040100Z.json")
 	other := result("x64", 4600, "pass", "results/x64/20261125T032000Z.json", nil)
 	other["run_url"] = "https://github.com/o/r/actions/runs/0" // another run's result is never read
 	other["valid"] = false
@@ -267,7 +267,7 @@ func TestReportPassing(t *testing.T) {
 	}
 	// The numbers come through.
 	for id, s := range map[string]string{
-		"NFR-01": "arm64 8800 rps per vCPU at 8800 offered (floor 8800), valid",
+		"NFR-01": "arm64 6300 rps per vCPU at 6300 offered (floor 6300), valid",
 		"NFR-03": "added p99 0.300 ms",
 		"NFR-05": "arm64 pass after the confirming re-run on CPU cpu-arm64 vs nightly 20261126T032000Z.json (nightly rps 0%, nightly p99 4.2%)",
 		"NFR-06": "1 replicas 0/0/0 (PASS; boundary 503s 5%); 3 replicas 0/0/0 (PASS; boundary 503s 60%); 5 replicas 0/0/0",
@@ -333,7 +333,7 @@ func TestReportFailures(t *testing.T) {
 			name: "arm64 run set invalid",
 			edit: func(r *run) {
 				f := r.bench["results/arm64/20261126T040100Z.json"]
-				f["valid"], f["invalid_reasons"] = false, []string{"run 3: achieved 8651 rps, below 99% of 8800"}
+				f["valid"], f["invalid_reasons"] = false, []string{"run 3: achieved 6201 rps, below 99% of 6300"}
 			},
 			want:  map[string]string{"NFR-01": "FAIL"},
 			fails: 1,

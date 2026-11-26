@@ -56,7 +56,7 @@ cd "$(dirname "$0")/../.."
 readme_begin='<!-- verify-m7:begin -->'
 readme_end='<!-- verify-m7:end -->'
 readme_file=${VERIFY_M7_README:-README.md}
-floor_x64=4600 floor_arm64=8800 # NFR-01's floors (P19, ADR-0080)
+floor_x64=4600 floor_arm64=6300 # NFR-01's floors (P19, ADR-0080, ADR-0090)
 
 # readme <json>: rewrites the block between the markers from a full run's JSON.
 readme() {
@@ -220,7 +220,7 @@ report() {
 	echo "== M7 exit: NFR by NFR"
 
 	# NFR-01 and NFR-05 (CI)
-	local t01="≥ 4,600 rps per gateway vCPU on x64, ≥ 8,800 on arm64: a valid run set at the floor, on any CPU model (ADR-0080, ADR-0082)"
+	local t01="≥ 4,600 rps per gateway vCPU on x64, ≥ 6,300 on arm64: a valid run set at the floor, on any CPU model (ADR-0080, ADR-0082, ADR-0090)"
 	local t05="per arch, the gate's final verdict (after its confirming re-run when flagged) is pass against the nightly baseline; first, invalid or fail is FAIL (ADR-0074, ADR-0081), except an x64 first on a CPU model with no main baseline yet: NOT DEMONSTRATED, not counted (ADR-0089)"
 	if [ -z "$want_bench" ]; then
 		not_run NFR-01 "$t01" "CI x64 + arm64"

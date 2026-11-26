@@ -26,8 +26,8 @@ This ADR records the choices that ADR-0074 left to the verify task. No pass rule
 
 ### Rows
 
-1. **NFR-01 and NFR-05 come from one gated dispatch**, `gh workflow run bench.yml --ref <branch> -f gate=true`, sent at the start. The run is found by its `run-name` (`bench throughput x64=4600 arm64=8800 gate=true`), head SHA and creation time. `VERIFY_M7_BENCH_RUNS=<id>` reuses a run already dispatched for HEAD; the script checks its head SHA and name first. Results are matched by `run_url`.
-   - **NFR-01** per arch reads the first run set, not the re-run. PASS when it is valid, its target is the floor, and its median per gateway vCPU, rounded, is at least the floor (x64 4,600, arm64 8,800), on any CPU model. The line prints each model.
+1. **NFR-01 and NFR-05 come from one gated dispatch**, `gh workflow run bench.yml --ref <branch> -f gate=true`, sent at the start. The run is found by its `run-name` (`bench throughput x64=4600 arm64=6300 gate=true`), head SHA and creation time. `VERIFY_M7_BENCH_RUNS=<id>` reuses a run already dispatched for HEAD; the script checks its head SHA and name first. Results are matched by `run_url`.
+   - **NFR-01** per arch reads the first run set, not the re-run. PASS when it is valid, its target is the floor, and its median per gateway vCPU, rounded, is at least the floor (x64 4,600, arm64 6,300 since ADR-0090; 8,800 before), on any CPU model. The line prints each model.
    - **NFR-05** per arch reads the final verdict: the re-run's if the first set was flagged, else the first set's. PASS when that verdict is `pass` and a nightly baseline was compared. The line prints the comparisons, and P34's cross-model figures when present.
    - If the run stores no result for an arch, or does not finish within 120 minutes of its dispatch, that arch fails both rows.
 2. **NFR-02** dispatches nothing. Per arch it reads the newest stored result with `setup.mode == "scaling"`, and judges it as `scaling.jq` and `scaling.sh` did when they stored it.
