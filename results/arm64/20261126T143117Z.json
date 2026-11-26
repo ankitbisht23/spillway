@@ -1,0 +1,250 @@
+{
+  "achieved_rps": {
+    "median": 10155.33888888889,
+    "min": 9595.855555555556,
+    "max": 10512.266666666666,
+    "spread": 0.0902393431807352
+  },
+  "arch": "arm64",
+  "commit": "58e8641e1f8f78bf71763af9404fc9c785bb97af",
+  "gate": {
+    "verdict": "ungated",
+    "baseline": null,
+    "release_baseline": null,
+    "release_tag": null,
+    "comparisons": [],
+    "rerun_of": null
+  },
+  "hardware": {
+    "cpu_model": "implementer 0x41 part 0xd49",
+    "cpus": 4,
+    "memory_bytes": 16715857920,
+    "os": "Ubuntu 24.04.5 LTS",
+    "kernel": "7.0.0-1020-azure",
+    "topology": [
+      {
+        "cpu": 0,
+        "core": 1,
+        "socket": 36,
+        "thread_siblings": "0"
+      },
+      {
+        "cpu": 1,
+        "core": 2,
+        "socket": 36,
+        "thread_siblings": "1"
+      },
+      {
+        "cpu": 2,
+        "core": 3,
+        "socket": 36,
+        "thread_siblings": "2"
+      },
+      {
+        "cpu": 3,
+        "core": 4,
+        "socket": 36,
+        "thread_siblings": "3"
+      }
+    ]
+  },
+  "invalid_reasons": [
+    "run 1: achieved 9992 rps, below 99% of 20000",
+    "run 2: achieved 10359 rps, below 99% of 20000",
+    "run 3: achieved 9596 rps, below 99% of 20000",
+    "run 4: achieved 10512 rps, below 99% of 20000",
+    "run 5: achieved 10155 rps, below 99% of 20000"
+  ],
+  "latency_us": {
+    "p50": {
+      "median": 982015,
+      "min": 951807,
+      "max": 1041919,
+      "spread": 0.09176234578901545
+    },
+    "p99": {
+      "median": 1054719,
+      "min": 999935,
+      "max": 1157119,
+      "spread": 0.14902926751106219
+    },
+    "p99_9": {
+      "median": 1065983,
+      "min": 1020415,
+      "max": 1244159,
+      "spread": 0.2098945292748571
+    }
+  },
+  "ref": "refs/heads/m7-verify",
+  "rps_per_vcpu": 10155.33888888889,
+  "run_url": "https://github.com/ankitbisht23/spillway/actions/runs/45839798366",
+  "runs": [
+    {
+      "url": "http://gateway:8000/bytes/1024",
+      "protocol": "HTTP/1.1",
+      "target_rps": 20000,
+      "achieved_rps": 9991.527777777777,
+      "valid": false,
+      "warmup_s": 30,
+      "duration_s": 180,
+      "requests": {
+        "scheduled": 3600000,
+        "sent": 1798475,
+        "dropped": 1801525
+      },
+      "status": {
+        "2xx": 1798475
+      },
+      "errors": {},
+      "latency_us": {
+        "p50": 995327,
+        "p99": 1097727,
+        "p99_9": 1130495,
+        "max": 1150975
+      },
+      "hardware": {
+        "cpu_model": "implementer 0x41 part 0xd49",
+        "goarch": "arm64",
+        "num_cpu": 2,
+        "gomaxprocs": 2
+      }
+    },
+    {
+      "url": "http://gateway:8000/bytes/1024",
+      "protocol": "HTTP/1.1",
+      "target_rps": 20000,
+      "achieved_rps": 10359.216666666667,
+      "valid": false,
+      "warmup_s": 30,
+      "duration_s": 180,
+      "requests": {
+        "scheduled": 3600000,
+        "sent": 1864659,
+        "dropped": 1735341
+      },
+      "status": {
+        "2xx": 1864659
+      },
+      "errors": {},
+      "latency_us": {
+        "p50": 955391,
+        "p99": 1054719,
+        "p99_9": 1065983,
+        "max": 1078271
+      },
+      "hardware": {
+        "cpu_model": "implementer 0x41 part 0xd49",
+        "goarch": "arm64",
+        "num_cpu": 2,
+        "gomaxprocs": 2
+      }
+    },
+    {
+      "url": "http://gateway:8000/bytes/1024",
+      "protocol": "HTTP/1.1",
+      "target_rps": 20000,
+      "achieved_rps": 9595.855555555556,
+      "valid": false,
+      "warmup_s": 30,
+      "duration_s": 180,
+      "requests": {
+        "scheduled": 3600000,
+        "sent": 1727254,
+        "dropped": 1872746
+      },
+      "status": {
+        "2xx": 1727254
+      },
+      "errors": {},
+      "latency_us": {
+        "p50": 1041919,
+        "p99": 1157119,
+        "p99_9": 1244159,
+        "max": 1262591
+      },
+      "hardware": {
+        "cpu_model": "implementer 0x41 part 0xd49",
+        "goarch": "arm64",
+        "num_cpu": 2,
+        "gomaxprocs": 2
+      }
+    },
+    {
+      "url": "http://gateway:8000/bytes/1024",
+      "protocol": "HTTP/1.1",
+      "target_rps": 20000,
+      "achieved_rps": 10512.266666666666,
+      "valid": false,
+      "warmup_s": 30,
+      "duration_s": 180,
+      "requests": {
+        "scheduled": 3600000,
+        "sent": 1892208,
+        "dropped": 1707792
+      },
+      "status": {
+        "2xx": 1892208
+      },
+      "errors": {},
+      "latency_us": {
+        "p50": 951807,
+        "p99": 999935,
+        "p99_9": 1020415,
+        "max": 1034239
+      },
+      "hardware": {
+        "cpu_model": "implementer 0x41 part 0xd49",
+        "goarch": "arm64",
+        "num_cpu": 2,
+        "gomaxprocs": 2
+      }
+    },
+    {
+      "url": "http://gateway:8000/bytes/1024",
+      "protocol": "HTTP/1.1",
+      "target_rps": 20000,
+      "achieved_rps": 10155.33888888889,
+      "valid": false,
+      "warmup_s": 30,
+      "duration_s": 180,
+      "requests": {
+        "scheduled": 3600000,
+        "sent": 1827961,
+        "dropped": 1772039
+      },
+      "status": {
+        "2xx": 1827961
+      },
+      "errors": {},
+      "latency_us": {
+        "p50": 982015,
+        "p99": 1039871,
+        "p99_9": 1060863,
+        "max": 1079295
+      },
+      "hardware": {
+        "cpu_model": "implementer 0x41 part 0xd49",
+        "goarch": "arm64",
+        "num_cpu": 2,
+        "gomaxprocs": 2
+      }
+    }
+  ],
+  "setup": {
+    "gateway_vcpus": 1,
+    "cpus": {
+      "gateway": "0",
+      "loadgen": "1-2",
+      "upstream": "3"
+    },
+    "url": "http://gateway:8000/bytes/1024",
+    "protocol": "HTTP/1.1",
+    "warmup": "30s",
+    "duration": "3m",
+    "access_log_sample_rate": 0.01,
+    "trace_sample_ratio": 0.01
+  },
+  "target_rps": 20000,
+  "timestamp": "2026-11-26T14:31:17Z",
+  "valid": false
+}
