@@ -125,7 +125,7 @@ The latest recorded measurement of each NFR row ([Non-functional requirements](d
 
 | NFR | Target (abridged) | Latest recorded | Source | Reproduce |
 | --- | --- | --- | --- | --- |
-| NFR-01 throughput | ≥ 4,600 rps per gateway vCPU on x64, ≥ 8,800 on arm64, any CPU model | Met on both arches: x64 4,600 valid on three CPU models; arm64 8,800 valid in 2 of 3 M7 run sets | [Benchmark report](#benchmark-report) | `gh workflow run bench.yml` |
+| NFR-01 throughput | ≥ 4,600 rps per gateway vCPU on x64, ≥ 6,300 on arm64 (ADR-0090), any CPU model | x64 4,600 valid on three CPU models; arm64 at the old 8,800 floor valid in 2 of 3 M7 run sets, re-measured at 6,300 by `make verify-m7` | [Benchmark report](#benchmark-report), ADR-0090 | `gh workflow run bench.yml` |
 | NFR-02 scaling | within 15% of linear from 1 to 2 gateway vCPUs (S ≥ 1.70) | **Open known limit**: 0 of 2 dispatches valid; would-be S x64 2.013, arm64 1.517 | ADR-0084, #94 | `gh workflow run bench.yml -f mode=scaling` |
 | NFR-03 added latency, local limits | p99 ≤ 2 ms | 0.282 ms added (laptop) | #91 (m7-perf, main cfebf6a), 2026-11-25 | `make verify-m2` |
 | NFR-04 added latency, Redis check | p99 ≤ 5 ms | 0.262 ms added (laptop) | #91, 2026-11-25 | `make verify-m3` |
@@ -368,7 +368,7 @@ To check them: `make lint-obs` runs promtool `check rules` and the rule tests, t
 - **Boundary-pattern 503s** in the accuracy harness: 55–61% strict and 33–42% batched on the laptop. They are a known limit of the 5 ms Redis budget under synchronized bursts; the fix that was tried is ADR-0079, status Rejected. Over-admission is unaffected.
 - **`make verify-m3` fails some full runs on the laptop**, from host and Docker VM stalls in the full-outage 10 ms line and the killed-primary surviving-key rule. The user accepted this on 2026-11-13 (ADR-0027, ADR-0034): 3 of 6 full runs passed at the M4 review. In the M7 perf review (#91), 1 run failed its accuracy (sender behind schedule) and full-outage lines, while NFR-04 and the killed primary passed. No rule was loosened.
 - **NFR-05 on x64** depends on the CPU model GitHub assigns. A night on a model with no `main` baseline yet gets `first` and is not compared (ADR-0081). arm64 has shown one model so far.
-- **NFR-01 on arm64** at 8,800 is close to that runner's limit: one of three run sets at the floor was invalid (#91).
+- **NFR-01 on arm64** was re-baselined from 8,800 to 6,300 rps per vCPU on 2026-11-26 (ADR-0090). Some `ubuntu-24.04-arm` runners saturate below 8,800 (the slowest measured: 7,938), so run sets at 8,800 were invalid or had p99 spikes of 100 ms – 1.3 s on the same commit that passed elsewhere. 6,300 is 80% of that slowest runner.
 - **kind:** Keycloak's only name there is its in-cluster one, so interactive admin-UI use stays on compose. kind and compose are not run together (memory). A Redis pod that restarts comes back empty.
 - **One active control-plane replica** (CP-22), and no Alertmanager in v1.
 

@@ -81,8 +81,8 @@ if [ "$mode" = all ]; then
 		files=$(git ls-tree -r --name-only origin/bench-results results/)
 	fi
 	for arch in x64 arm64; do
-		floor=4600 # NFR-01's per-arch floor (P19, ADR-0080)
-		if [ "$arch" = arm64 ]; then floor=8800; fi
+		floor=4600 # NFR-01's per-arch floor (P19, ADR-0080, ADR-0090)
+		if [ "$arch" = arm64 ]; then floor=6300; fi
 		found=""
 		for f in $(grep "^results/$arch/" <<<"$files" | sort -r); do
 			if git show "origin/bench-results:$f" | jq -e '.valid and .ref == "refs/heads/main" and (.gate == null or .gate.verdict == "pass" or .gate.verdict == "first")' >/dev/null; then
