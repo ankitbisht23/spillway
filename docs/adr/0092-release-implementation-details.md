@@ -25,7 +25,7 @@ Two facts shape the answer. GitHub runs `workflow_dispatch` only for workflows t
 11. **Release notes** are CHANGELOG.md's section without its heading (`deploy/release/notes.sh`). The 1.0.0 section is dated 2026-11-27, the day it was prepared; whoever tags later may change the date in a PR first.
 12. **The `release` environment** must exist with the user as required reviewer before the first tag: a job that names a missing environment creates it unprotected. docs/setup.md Step 3 says so and gives the tag commands.
 13. **NFR-04 on Docker Desktop for Mac** (the user's decision, 2026-11-27): the README's Known limits and the changelog's Known limitations say that NFR-04 and the other Redis-budget checks can fail a verify run when the VM pauses longer than the 5 ms budget more than once in a run, that ADR-0034 excuses one burst of 1 s or less, and what was seen on a69b856. No pass rule changes.
-14. **(P41) Repo layout** (proposed; numbered after the P40 the verify-main step put to the user): the `deploy/` line gains `release/` ("…, prometheus/rules/, release/ (release build and publish scripts)"), and the `test/` line gains `release/`.
+14. **(P41) Repo layout** (proposed; numbered after P40, which the verify-main step put to the user: let ADR-0034 excuse several short bursts per run instead of one, still open): the `deploy/` line gains `release/` ("…, prometheus/rules/, release/ (release build and publish scripts)"), and the `test/` line gains `release/`.
 
 ## Consequences
 
