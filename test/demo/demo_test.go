@@ -272,7 +272,7 @@ func TestDemoMode(t *testing.T) {
 // TestDemoReset: a demo with an extra tenant, a tenant on another plan, a
 // deleted consumer, an issued key and a published config change goes back
 // to the seed with make demo-reset: three tenants on their plans, eleven
-// consumers without keys, one published version that is the seed's, three
+// consumers without keys but the base load's own, one published version that is the seed's, three
 // live replicas running it; gateway-1 serves it, so a fresh key gets free's
 // limit. The dev database spillway is as it was, and make demo-reset
 // prints neither the key nor a secret or token.
@@ -331,9 +331,16 @@ func TestDemoReset(t *testing.T) {
 	if len(consumers) != 11 || byName(consumers, "free-co-web").ID == 0 {
 		t.Errorf("%d consumers after the reset", len(consumers))
 	}
+	// No seeded key; only the base-load service, which make demo-reset
+	// starts again, has issued one key for each of its consumers
+	// (ADR-0096 §1, ADR-0102 §13).
 	for _, cs := range consumers {
-		if keys := list(t, c, fmt.Sprintf("/consumers/%d/keys", cs.ID)); len(keys) != 0 {
-			t.Errorf("consumer %s has %d keys after the reset", cs.Name, len(keys))
+		want := 0
+		if slices.Contains([]string{"free-co-web", "pro-co-web", "enterprise-co-web"}, cs.Name) {
+			want = 1
+		}
+		if keys := list(t, c, fmt.Sprintf("/consumers/%d/keys", cs.ID)); len(keys) != want {
+			t.Errorf("consumer %s has %d keys after the reset, want %d", cs.Name, len(keys), want)
 		}
 	}
 	var versions struct {
