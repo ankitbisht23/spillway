@@ -194,3 +194,8 @@ button.link-button { padding: 0; border: 0; background: none; color: var(--accen
 .row-actions { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0.5rem; }
 .secret code { display: block; padding: 0.5rem; border: 1px solid var(--border); border-radius: var(--radius); word-break: break-all; user-select: all; }
 .quota-full { color: var(--danger); font-weight: 600; }
+
+/* The Playground (UI-07). */
+.scenarios, .faults { margin: 0; padding: 0; list-style: none; display: grid; gap: 0.5rem; }
+.headers code { overflow-wrap: anywhere; }
+.bucket meter { width: 12rem; vertical-align: middle; }
