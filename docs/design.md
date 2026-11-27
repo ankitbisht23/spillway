@@ -716,7 +716,7 @@ Exit (`make verify-m6`): a new policy goes shadow → reviewed → enforced → 
 - [x] Helm chart `spillway` (gateway + control plane) on a 3-node kind cluster `spillway`; dependencies (Redis Cluster, Postgres, Keycloak, observability) as plain manifests in `deploy/kind/` using the same pinned images as compose, with Keycloak serving HTTPS (cert from a Secret) so the issuer and JWKS URLs are `https://` (SEC-04); `make kind-up` / `make kind-down`, and the Makefile always passes `--context kind-spillway`; dashboards, alert rules and runbooks as code (OB-04–OB-06, OB-08)
 - [x] kind specifics: no ingress controller — the gateway is the edge (NodePort + kind `extraPortMappings` on `127.0.0.1:443` → gateway; no port 80, the gateway serves no plain HTTP in Helm) with a preStop delay and `maxUnavailable: 0`; admin ports on the pod IP only, behind a NetworkPolicy that admits Prometheus and the kubelet (GW-25); kind ranges added to the upstream allow-list (SEC-06); control plane at `replicas: 1`; gateway snapshot on a writable volume, with a runbook for the emptyDir case
 - [x] README: architecture, benchmark, accuracy and chaos reports with reproduction steps
-- [ ] Release v1.0.0: changelog, SBOM, signed multi-arch images `ghcr.io/ankitbisht23/spillway-gateway` and `ghcr.io/ankitbisht23/spillway-controlplane` (cosign keyless via GitHub OIDC)
+- [x] Release v1.0.0: changelog, SBOM, signed multi-arch images `ghcr.io/ankitbisht23/spillway-gateway` and `ghcr.io/ankitbisht23/spillway-controlplane` (cosign keyless via GitHub OIDC)
 
 Exit (`make verify-m7`): every NFR row (NFR-01 – NFR-15) meets its target, with the measured result in the README, or an ADR re-baselines it.
 
