@@ -18,6 +18,10 @@ const demo: components["schemas"]["Demo"] = {
     { name: "payments", policy: "payments-limit", limit: { rate: 100, burst: 200, period: "1s" } },
   ],
   scenarios: ["d1", "d2", "d3"],
+  faults: [
+    { name: "redis-cut", active: false },
+    { name: "upstream-slow", active: false },
+  ],
 };
 
 /** Serves GET /demo with answer and counts the requests and their tokens. */

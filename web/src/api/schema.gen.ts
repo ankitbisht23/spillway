@@ -786,6 +786,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/demo/faults/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The fault. */
+                name: components["schemas"]["DemoFaultName"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** Switch a demo fault on or off (SC-03, ADR-0095 §5): redis-cut (D5) cuts the demo gateways' Redis traffic at toxiproxy, upstream-slow (D6) delays the orders upstream 4 s in toxiproxy. The control plane changes the toxics through toxiproxy's API only; setting the state a fault already has changes nothing there. One audit record per call. 404 not_found, as for an unknown path, when demo mode is off */
+        put: operations["setDemoFault"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1666,6 +1686,24 @@ export interface components {
             routes: components["schemas"]["DemoRoute"][];
             /** @description The scenarios that the Playground runs (d1, d2 and d3). */
             scenarios: string[];
+            /** @description The two fault switches (SC-03), redis-cut then upstream-slow, with their states read from toxiproxy (at most 1 s old). */
+            faults: components["schemas"]["DemoFault"][];
+        };
+        /**
+         * @description A demo fault (SC-03, ADR-0095 §5): redis-cut is D5's Redis outage, upstream-slow D6's slow upstream.
+         * @enum {string}
+         */
+        DemoFaultName: "redis-cut" | "upstream-slow";
+        DemoFault: {
+            name: components["schemas"]["DemoFaultName"];
+            /** @description Whether any of the fault's toxics is in place in toxiproxy (false: none is); null when toxiproxy could not be read or lacks one of the fault's proxies. setDemoFault never answers null. */
+            active: boolean | null;
+        };
+        DemoFaultChange: {
+            /** @description true switches the fault on, false off. */
+            active: boolean;
+            /** @description Why, for the audit log; 1 to 500 characters when given. */
+            note?: string;
         };
         DemoTenant: {
             name: string;
@@ -4120,6 +4158,48 @@ export interface operations {
                 };
             };
             404: components["responses"]["NotFound"];
+            default: components["responses"]["Error"];
+        };
+    };
+    setDemoFault: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The fault. */
+                name: components["schemas"]["DemoFaultName"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DemoFaultChange"];
+            };
+        };
+        responses: {
+            /** @description The fault, read back from toxiproxy */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DemoFault"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            404: components["responses"]["NotFound"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            422: components["responses"]["ValidationFailed"];
+            /** @description Toxiproxy failed or lacks a demo proxy, which the message names (unavailable); the toxics already changed stay as they are, so the same call again completes the change */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
             default: components["responses"]["Error"];
         };
     };

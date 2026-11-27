@@ -2,10 +2,14 @@ package api
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -27,6 +31,13 @@ const demoPrefix = BasePath + "/demo"
 // WithDemo sets demo mode, off by default.
 func (s *Server) WithDemo(on bool) *Server {
 	s.demoKeys = demo.Keys{On: on}
+	return s
+}
+
+// WithDemoToxiproxy sets the toxiproxy API through which demo mode
+// switches its faults, such as http://toxiproxy:8474 (ADR-0095 §1, §5).
+func (s *Server) WithDemoToxiproxy(base string) *Server {
+	s.faults = demo.NewFaults(base)
 	return s
 }
 
@@ -78,7 +89,7 @@ func (s *Server) GetDemo(ctx context.Context, _ apiv1.GetDemoRequestObject) (api
 	for _, p := range cfg.GetPlans() {
 		plans[p.GetId()] = p
 	}
-	out := apiv1.Demo{Tenants: []apiv1.DemoTenant{}, Routes: []apiv1.DemoRoute{}, Scenarios: demoScenarios}
+	out := apiv1.Demo{Tenants: []apiv1.DemoTenant{}, Routes: []apiv1.DemoRoute{}, Scenarios: demoScenarios, Faults: s.faultStates(ctx)}
 	for _, t := range tenants[:min(len(tenants), maxLimit)] {
 		dt := apiv1.DemoTenant{Name: t.Name}
 		if p, ok := plans[t.PlanID]; ok {
@@ -112,6 +123,63 @@ func (s *Server) GetDemo(ctx context.Context, _ apiv1.GetDemoRequestObject) (api
 		out.Routes = append(out.Routes, dr)
 	}
 	return apiv1.GetDemo200JSONResponse(out), nil
+}
+
+// faultStates are the faults with their states from toxiproxy, nil where
+// unknown (ADR-0095 §2).
+func (s *Server) faultStates(ctx context.Context) []apiv1.DemoFault {
+	states := map[string]*bool{}
+	if s.faults != nil {
+		states = s.faults.States(ctx)
+	}
+	out := make([]apiv1.DemoFault, 0, len(demo.FaultNames))
+	for _, name := range demo.FaultNames {
+		out = append(out, apiv1.DemoFault{Name: apiv1.DemoFaultName(name), Active: states[name]})
+	}
+	return out
+}
+
+// maxFaultNote is the longest note of a fault switch, in characters
+// (ADR-0095 §5).
+const maxFaultNote = 500
+
+// SetDemoFault switches a fault on or off through toxiproxy and, once
+// toxiproxy has confirmed the change, writes its audit record (SC-03,
+// ADR-0095 §5). Setting the state the fault has changes nothing in
+// toxiproxy and is still recorded.
+func (s *Server) SetDemoFault(ctx context.Context, req apiv1.SetDemoFaultRequestObject) (apiv1.SetDemoFaultResponseObject, error) {
+	if !req.Name.Valid() {
+		return nil, &apiError{http.StatusNotFound, apiv1.ErrorCodeNotFound, "no such fault: want redis-cut or upstream-slow", nil}
+	}
+	// active is required, and a bool's zero value would read as off.
+	var body struct {
+		Active *bool `json:"active"`
+	}
+	if raw, _ := ctx.Value(bodyKey{}).([]byte); req.Body == nil || json.Unmarshal(raw, &body) != nil || body.Active == nil {
+		return nil, invalid("body: active: required")
+	}
+	if n := req.Body.Note; n != nil {
+		if c := utf8.RuneCountInString(*n); c < 1 || c > maxFaultNote {
+			return nil, validation("demo_fault", "note", fmt.Sprintf("note: 1 to %d characters when given", maxFaultNote))
+		}
+	}
+	if s.faults == nil {
+		return nil, &apiError{http.StatusServiceUnavailable, apiv1.ErrorCodeUnavailable, "no toxiproxy is configured", nil}
+	}
+	name, active := string(req.Name), req.Body.Active
+	before, err := s.faults.Set(ctx, name, active)
+	if fe, ok := errors.AsType[*demo.FaultError](err); ok {
+		s.log.Warn("demo fault: toxiproxy failed", "fault", name, "active", active, "err", fe, "cause", fe.Cause, "request_id", requestIDOf(ctx))
+		return nil, &apiError{http.StatusServiceUnavailable, apiv1.ErrorCodeUnavailable, fe.Error(), nil}
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := s.store.RecordDemoFault(ctx, audit(ctx, nil), name, before, active, req.Body.Note); err != nil {
+		return nil, err
+	}
+	s.log.Info("demo fault switched", "fault", name, "active", active, "before", before, "request_id", requestIDOf(ctx))
+	return apiv1.SetDemoFault200JSONResponse{Name: req.Name, Active: &active}, nil
 }
 
 // demoLimit is l with its burst filled in: a GCRA burst defaults to the

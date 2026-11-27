@@ -151,7 +151,8 @@ func serve(log *slog.Logger, getenv func(string) string) error {
 	}
 	apiServer := api.New(st, s.allow, net.DefaultResolver, api.OIDC{Verifier: verifier}, s.hitterSecret, log).WithPrometheus(prom).WithDemo(s.demoMode)
 	if s.demoMode {
-		log.Info("demo mode is on: the /api/v1/demo operations answer and every key issued or rotated expires within 30 minutes")
+		apiServer.WithDemoToxiproxy(s.demoToxiproxyURL)
+		log.Info("demo mode is on: the /api/v1/demo operations answer and every key issued or rotated expires within 30 minutes", "toxiproxy", s.demoToxiproxyURL)
 	}
 	hub := live.NewHub(live.Config{Prometheus: prom, Postgres: apiServer.LiveSource(), Registerer: reg, Log: log})
 	// The REST API and the admin UI share the listener, same origin (UI-09,

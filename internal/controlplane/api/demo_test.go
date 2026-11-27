@@ -244,3 +244,76 @@ func TestDemoJanitorOff(t *testing.T) {
 		t.Fatal("the janitor runs with demo mode off")
 	}
 }
+
+// TestSetDemoFault: in demo mode setDemoFault is admin only (the four
+// other roles 403, no token 401); an unknown fault is 404, a body without
+// active 400, a note over 500 characters 422, all before toxiproxy; with no
+// toxiproxy, or one lacking a demo proxy, it is 503 unavailable naming the
+// proxy, before the store (nil here), with no toxic changed; getDemo's
+// handler is not reached by any of them. The audit record and the success
+// path need Postgres (test/integration).
+func TestSetDemoFault(t *testing.T) {
+	var gets, changes atomic.Int64
+	tp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			changes.Add(1)
+			w.WriteHeader(500)
+			return
+		}
+		gets.Add(1)
+		_, _ = io.WriteString(w, `{"demo-redis-0": {"toxics": []}}`) // the other demo proxies are missing
+	}))
+	t.Cleanup(tp.Close)
+	var logs bytes.Buffer
+	newH := func(toxiproxy string) http.Handler {
+		s := New(nil, nil, nil, fakeAuth{}, secret.Value{}, logger(&logs)).WithDemo(true)
+		if toxiproxy != "" {
+			s.WithDemoToxiproxy(toxiproxy)
+		}
+		return s.Handler()
+	}
+	h := newH(tp.URL)
+	const path = "/api/v1/demo/faults/redis-cut"
+	for _, role := range Roles {
+		a := do(t, h, "PUT", path, `{"active": true}`, "Authorization", "Bearer "+token(role))
+		if role != "admin" && (a.status != 403 || a.err.Code != apiv1.ErrorCodeForbidden) {
+			t.Errorf("%s: %d %+v, want 403", role, a.status, a.err)
+		}
+	}
+	if a := do(t, h, "PUT", path, `{"active": true}`, "Authorization", ""); a.status != 401 {
+		t.Errorf("no token: %d", a.status)
+	}
+	if gets.Load() != 1 {
+		t.Errorf("toxiproxy read %d times, want once (the admin's call)", gets.Load())
+	}
+	for name, tt := range map[string]struct {
+		path, body string
+		status     int
+		code       apiv1.ErrorCode
+		msg        string
+	}{
+		"unknown fault":    {"/api/v1/demo/faults/redis-slow", `{"active": true}`, 404, apiv1.ErrorCodeNotFound, "no such fault: want redis-cut or upstream-slow"},
+		"no active":        {path, `{}`, 400, apiv1.ErrorCodeInvalidRequest, "body: active: required"},
+		"active null":      {path, `{"active": null}`, 400, apiv1.ErrorCodeInvalidRequest, "body: active: required"},
+		"no body":          {path, ``, 400, apiv1.ErrorCodeInvalidRequest, ""},
+		"unknown field":    {path, `{"active": true, "on": true}`, 400, apiv1.ErrorCodeInvalidRequest, ""},
+		"empty note":       {path, `{"active": true, "note": ""}`, 422, apiv1.ErrorCodeValidationFailed, "validation failed: note: 1 to 500 characters when given"},
+		"long note":        {path, `{"active": true, "note": "` + strings.Repeat("é", 501) + `"}`, 422, apiv1.ErrorCodeValidationFailed, ""},
+		"a missing proxy":  {path, `{"active": true, "note": "` + strings.Repeat("é", 500) + `"}`, 503, apiv1.ErrorCodeUnavailable, "toxiproxy has no proxy demo-redis-1 (make demo creates it)"},
+		"off, missing too": {"/api/v1/demo/faults/upstream-slow", `{"active": false}`, 503, apiv1.ErrorCodeUnavailable, "toxiproxy has no proxy demo-upstream-1 (make demo creates it)"},
+	} {
+		a := do(t, h, "PUT", tt.path, tt.body)
+		if a.status != tt.status || a.err.Code != tt.code || tt.msg != "" && a.err.Error != tt.msg {
+			t.Errorf("%s: %d %+v, want %d %s %q", name, a.status, a.err, tt.status, tt.code, tt.msg)
+		}
+	}
+	if a := do(t, newH(""), "PUT", path, `{"active": false}`); a.status != 503 || a.err.Error != "no toxiproxy is configured" {
+		t.Errorf("no toxiproxy: %d %+v", a.status, a.err)
+	}
+	if changes.Load() != 0 {
+		t.Errorf("%d toxic changes sent", changes.Load())
+	}
+	if !strings.Contains(logs.String(), "demo fault: toxiproxy failed") || strings.Contains(logs.String(), tokenSecret) {
+		t.Errorf("logs: %s", logs.String())
+	}
+}

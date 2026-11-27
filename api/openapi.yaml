@@ -1751,6 +1751,49 @@ paths:
               schema: { $ref: '#/components/schemas/Demo' }
         '404': { $ref: '#/components/responses/NotFound' }
         default: { $ref: '#/components/responses/Error' }
+  /demo/faults/{name}:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        description: The fault.
+        schema: { $ref: '#/components/schemas/DemoFaultName' }
+    put:
+      operationId: setDemoFault
+      tags: [demo]
+      summary: >-
+        Switch a demo fault on or off (SC-03, ADR-0095 §5): redis-cut (D5)
+        cuts the demo gateways' Redis traffic at toxiproxy, upstream-slow (D6)
+        delays the orders upstream 4 s in toxiproxy. The control plane changes
+        the toxics through toxiproxy's API only; setting the state a fault
+        already has changes nothing there. One audit record per call. 404
+        not_found, as for an unknown path, when demo mode is off
+      x-spillway-roles: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DemoFaultChange' }
+      responses:
+        '200':
+          description: The fault, read back from toxiproxy
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DemoFault' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '503':
+          description: >-
+            Toxiproxy failed or lacks a demo proxy, which the message names
+            (unavailable); the toxics already changed stay as they are, so
+            the same call again completes the change
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        default: { $ref: '#/components/responses/Error' }
 components:
   securitySchemes:
     bearer:
@@ -2707,7 +2750,7 @@ components:
     Demo:
       type: object
       additionalProperties: false
-      required: [tenants, routes, scenarios]
+      required: [tenants, routes, scenarios, faults]
       properties:
         tenants:
           type: array
@@ -2721,6 +2764,34 @@ components:
           type: array
           description: The scenarios that the Playground runs (d1, d2 and d3).
           items: { type: string }
+        faults:
+          type: array
+          description: The two fault switches (SC-03), redis-cut then upstream-slow, with their states read from toxiproxy (at most 1 s old).
+          items: { $ref: '#/components/schemas/DemoFault' }
+    DemoFaultName:
+      type: string
+      description: 'A demo fault (SC-03, ADR-0095 §5): redis-cut is D5''s Redis outage, upstream-slow D6''s slow upstream.'
+      enum: [redis-cut, upstream-slow]
+    DemoFault:
+      type: object
+      additionalProperties: false
+      required: [name, active]
+      properties:
+        name: { $ref: '#/components/schemas/DemoFaultName' }
+        active:
+          type: boolean
+          nullable: true
+          description: >-
+            Whether any of the fault's toxics is in place in toxiproxy (false:
+            none is); null when toxiproxy could not be read or lacks one of
+            the fault's proxies. setDemoFault never answers null.
+    DemoFaultChange:
+      type: object
+      additionalProperties: false
+      required: [active]
+      properties:
+        active: { type: boolean, description: 'true switches the fault on, false off.' }
+        note: { type: string, minLength: 1, maxLength: 500, description: 'Why, for the audit log; 1 to 500 characters when given.' }
     DemoTenant:
       type: object
       additionalProperties: false

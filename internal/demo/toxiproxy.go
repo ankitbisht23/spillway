@@ -129,3 +129,66 @@ func (t *Toxiproxy) Create(ctx context.Context, p Proxy) error {
 	}
 	return nil
 }
+
+// Toxic is one toxic of a toxiproxy proxy (ADR-0095 §5).
+type Toxic struct {
+	Name       string           `json:"name"`
+	Type       string           `json:"type"`
+	Stream     string           `json:"stream"`
+	Toxicity   float64          `json:"toxicity"`
+	Attributes map[string]int64 `json:"attributes"`
+}
+
+// ProxyToxics returns every proxy's toxic names, by proxy name, in one call.
+func (t *Toxiproxy) ProxyToxics(ctx context.Context) (map[string][]string, error) {
+	status, b, err := t.do(ctx, http.MethodGet, "/proxies", nil)
+	if err != nil {
+		return nil, err
+	}
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("toxiproxy GET /proxies: status %d", status)
+	}
+	var m map[string]struct {
+		Toxics []Toxic `json:"toxics"`
+	}
+	if err := json.Unmarshal(b, &m); err != nil {
+		return nil, fmt.Errorf("toxiproxy GET /proxies: %w", err)
+	}
+	out := make(map[string][]string, len(m))
+	for name, p := range m {
+		names := []string{}
+		for _, x := range p.Toxics {
+			names = append(names, x.Name)
+		}
+		out[name] = names
+	}
+	return out, nil
+}
+
+// AddToxic adds x to the proxy; a toxic of that name already there is not
+// an error.
+func (t *Toxiproxy) AddToxic(ctx context.Context, proxy string, x Toxic) error {
+	path := "/proxies/" + url.PathEscape(proxy) + "/toxics"
+	status, _, err := t.do(ctx, http.MethodPost, path, x)
+	if err != nil {
+		return err
+	}
+	if status != http.StatusOK && status != http.StatusConflict {
+		return fmt.Errorf("toxiproxy POST %s: status %d", path, status)
+	}
+	return nil
+}
+
+// DeleteToxic removes the proxy's toxic name; one that is not there is not
+// an error.
+func (t *Toxiproxy) DeleteToxic(ctx context.Context, proxy, name string) error {
+	path := "/proxies/" + url.PathEscape(proxy) + "/toxics/" + url.PathEscape(name)
+	status, _, err := t.do(ctx, http.MethodDelete, path, nil)
+	if err != nil {
+		return err
+	}
+	if status != http.StatusNoContent && status != http.StatusNotFound {
+		return fmt.Errorf("toxiproxy DELETE %s: status %d", path, status)
+	}
+	return nil
+}

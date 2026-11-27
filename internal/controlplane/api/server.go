@@ -64,7 +64,11 @@ type Server struct {
 	// demoKeys is demo mode and its 30-minute key rule (SC-08, ADR-0095);
 	// the zero value is off.
 	demoKeys demo.Keys
-	log      *slog.Logger
+	// faults switches the demo's faults through toxiproxy (SC-03,
+	// ADR-0095 §5); nil without a toxiproxy, which getDemo shows as unknown
+	// states and setDemoFault answers 503.
+	faults *demo.Faults
+	log    *slog.Logger
 }
 
 // Allowlist is the upstream allow-list of SEC-06, the same networks as the

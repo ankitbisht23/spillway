@@ -62,6 +62,7 @@ export const operationRoles = {
   revokeKey: ["key-admin", "admin"],
   rollbackConfig: ["publisher", "admin"],
   rotateKey: ["key-admin", "admin"],
+  setDemoFault: ["admin"],
   updateAccessList: ["key-admin", "admin"],
   updateConfigSettings: ["editor", "admin"],
   updateConsumer: ["key-admin", "admin"],

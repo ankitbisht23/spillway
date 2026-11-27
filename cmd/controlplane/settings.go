@@ -50,6 +50,11 @@ type settings struct {
 	// only the demo stack sets it, from DEMO_MODE. Off, everything under
 	// /api/v1/demo is 404.
 	demoMode bool
+	// SPILLWAY_CP_DEMO_TOXIPROXY_URL: the toxiproxy API the demo's fault
+	// switches use (SC-03, ADR-0095 §1, §5), http or https, no user info;
+	// required in demo mode, ignored otherwise. The demo stack sets
+	// http://toxiproxy:8474.
+	demoToxiproxyURL string
 
 	// SPILLWAY_CP_PROMETHEUS_URL: the Prometheus the live-data stream's
 	// named queries and the shadow report's counts run against (UI-01,
@@ -122,6 +127,18 @@ func loadSettings(getenv func(string) string) (settings, error) {
 		if s.demoMode, err = strconv.ParseBool(v); err != nil {
 			return s, errors.New("SPILLWAY_CP_DEMO_MODE: want true or false")
 		}
+	}
+	if s.demoMode {
+		// Any http or https URL without user info, query or fragment, as
+		// for Prometheus.
+		v := getenv("SPILLWAY_CP_DEMO_TOXIPROXY_URL")
+		if v == "" {
+			return s, errors.New("SPILLWAY_CP_DEMO_TOXIPROXY_URL is required in demo mode: the toxiproxy API of the fault switches (SC-03)")
+		}
+		if _, err := live.ParsePrometheusURL(v); err != nil {
+			return s, fmt.Errorf("SPILLWAY_CP_DEMO_TOXIPROXY_URL: %w", err)
+		}
+		s.demoToxiproxyURL = v
 	}
 	s.oidcIssuer, s.oidcJWKSURL = getenv("SPILLWAY_CP_OIDC_ISSUER"), getenv("SPILLWAY_CP_OIDC_JWKS_URL")
 	s.oidcAudience = cmp.Or(getenv("SPILLWAY_CP_OIDC_AUDIENCE"), "spillway-controlplane")
