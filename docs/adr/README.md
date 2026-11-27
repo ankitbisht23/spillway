@@ -101,3 +101,10 @@ Decisions that shape Spillway and are not obvious from the code or from docs/des
 | [0090](0090-arm64-bench-rate-re-baseline.md) | arm64 bench rate and NFR-01 floor re-baselined to 6,300 | Accepted | 2026-11-26 |
 | [0091](0091-m1-m7-review-fixes.md) | M1–M7 review fixes | Accepted | 2026-11-27 |
 | [0092](0092-release-implementation-details.md) | Release: implementation details | Accepted | 2026-11-27 |
+| [0093](0093-m8-showcase-plan-and-decisions.md) | M8 showcase: plan and decisions | Accepted | 2026-11-27 |
+| [0094](0094-demo-stack-seed-database-and-redis-path.md) | Demo stack: seed, demo database and the toxiproxy Redis path | Accepted | 2026-11-27 |
+| [0095](0095-demo-mode-guards-demo-keys-and-fault-switches.md) | Demo mode guards, demo keys and fault switches | Accepted | 2026-11-27 |
+| [0096](0096-traffic-simulator-playground-and-grafana-demo.md) | Traffic simulator, Playground and the Grafana Demo dashboard | Accepted | 2026-11-27 |
+| [0097](0097-public-demo-caddy-tunnel-and-demo-share.md) | Public demo: Caddy, the tunnel, make demo-share and its stand-in test | Accepted | 2026-11-27 |
+| [0098](0098-make-verify-m8.md) | make verify-m8 | Accepted | 2026-11-27 |
+| [0099](0099-readme-gifs-and-recording.md) | README GIFs and recording | Accepted | 2026-11-27 |
