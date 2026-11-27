@@ -139,11 +139,17 @@ func byName(es []entity, name string) entity {
 
 // TestDemoUp: make demo, run again on the running demo, prints no secret,
 // token or key, and reports the seed.
+// The second run seeds again and changes nothing (ADR-0094 §2, §3).
 func TestDemoUp(t *testing.T) {
-	out := runMake(t, "demo")
-	noLeak(t, "make demo", out)
-	if !strings.Contains(out, "demo-seed: done") || !strings.Contains(out, "no API keys") {
-		t.Errorf("make demo did not report the seed:\n%s", out)
+	for run := 1; run <= 2; run++ {
+		out := runMake(t, "demo")
+		noLeak(t, "make demo", out)
+		if !strings.Contains(out, "demo-seed: done") || !strings.Contains(out, "no API keys") {
+			t.Errorf("make demo run %d did not report the seed:\n%s", run, out)
+		}
+		if run == 2 && !strings.Contains(out, "(0 created, 0 updated, 14 unchanged)") {
+			t.Errorf("make demo on the running demo changed the seed:\n%s", out)
+		}
 	}
 }
 
