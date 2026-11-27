@@ -16,7 +16,7 @@ gateway:
   replicas: 3
   image:
     repository: ghcr.io/ankitbisht23/spillway-gateway
-    tag: "" # default: the chart's appVersion
+    tag: "" # default: v<the chart's appVersion>, the release tag (ADR-0076)
     pullPolicy: IfNotPresent
   # GW-27: GOMAXPROCS and GOMEMLIMIT follow these limits. No CPU limit, so
   # the gateway is never throttled; GOMAXPROCS follows the node's CPUs.

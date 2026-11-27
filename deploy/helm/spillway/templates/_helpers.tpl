@@ -7,9 +7,10 @@ app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version }}
 {{- end }}
 
-{{/* image: repository:tag, the tag defaulting to the chart's appVersion. */}}
+{{/* image: repository:tag, the tag defaulting to v<appVersion>, the release
+   workflow's image tag (ADR-0076). */}}
 {{- define "spillway.image" -}}
-{{- printf "%s:%s" .image.repository (.image.tag | default .root.Chart.AppVersion) }}
+{{- printf "%s:%s" .image.repository (.image.tag | default (printf "v%s" .root.Chart.AppVersion)) }}
 {{- end }}
 
 {{/*
