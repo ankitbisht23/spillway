@@ -330,8 +330,10 @@ func (m metrics) sum(name string, match ...string) float64 {
 // TestFaultRedisCut is D5 on gateway-1 (RL-22 – RL-24, the chaos table's
 // full outage through toxiproxy): pro-co-mobile sends catalog 50 rps
 // (fail_open), payments 10 rps (fail_closed) and orders (degraded, its
-// per-replica 33/s, burst 66 with three live replicas). Before: Redis
-// decides at least 90% of catalog and payments. make demo-fault-redis ON=1
+// per-replica 33/s, burst 66 with three live replicas). Before (10 s):
+// Redis decides at least 90% of catalog and payments, and every answer is
+// 2xx but for payments 503s that carry only timeout Redis errors (a stall,
+// fail_closed). make demo-fault-redis ON=1
 // puts the cut on all six demo-redis proxies; for 10 s from its return:
 // at least 99.9% of catalog is 2xx, every payments answer is 503, orders
 // at 66 rps admits (2xx − 66) ÷ 10 s within ± 10% of 33/s and denies the
@@ -340,12 +342,14 @@ func (m metrics) sum(name string, match ...string) float64 {
 // each route's median latency is at most the median before + 10 ms, and at
 // least 99% of gateway-1's Redis checks end within 10 ms (the 5 ms budget,
 // RL-22, plus ADR-0027's slack). make demo-fault-redis ON=0 removes it;
-// Redis decides again within 5 s, and at least 90% of the next 5 s.
+// Redis decides again within 5 s, and at least 90% of the next 10 s.
 func TestFaultRedisCut(t *testing.T) {
 	clearFaultsAfter(t)
 	key := issueKey(t, "pro-co-mobile")
 
-	before := phase(t, key, 5*time.Second, load{"catalog", 50}, load{"payments", 10}, load{"orders", 20})
+	// 10 s, as ADR-0098 d5.0: one stall of the Redis path (≤ 0.82 s) costs
+	// under 10% of the window's Redis decisions.
+	before := phase(t, key, 10*time.Second, load{"catalog", 50}, load{"payments", 10}, load{"orders", 20})
 	for _, r := range []string{"catalog", "payments", "orders"} {
 		t.Logf("before the cut: %d of %d %s answers carried a Redis error", count(before[r], func(a answer) bool { return a.redisErr != "" }), len(before[r]), r)
 	}
@@ -354,13 +358,28 @@ func TestFaultRedisCut(t *testing.T) {
 			t.Errorf("before the cut: %.1f%% of %s decided by Redis, want at least 90%%", 100*s, r)
 		}
 	}
+	// Every answer 2xx, except that a payments (fail_closed) Redis call a
+	// stall pushes past its 5 ms budget answers 503 by design (ADR-0098's
+	// stall table, ADR-0101 §11): such a 503 must carry only timeout Redis
+	// errors. The 90% share above bounds how many there are.
+	stalled := func(r string, a answer) bool {
+		if r != "payments" || a.status != http.StatusServiceUnavailable || a.redisErr == "" {
+			return false
+		}
+		for k := range strings.SplitSeq(a.redisErr, ",") {
+			if k != "timeout" {
+				return false
+			}
+		}
+		return true
+	}
 	for r, as := range before {
-		if s := share(as, is2xx); s != 1 {
-			t.Errorf("before the cut: %.1f%% of %s 2xx, want all", 100*s, r)
-			for _, a := range as {
-				if !is2xx(a) {
-					t.Logf("before the cut: %s due %.3f s: status %d, Redis error %q, latency %.1f ms", r, a.due.Seconds(), a.status, a.redisErr, float64(a.latency.Microseconds())/1000)
-				}
+		if n := count(as, func(a answer) bool { return !is2xx(a) && !stalled(r, a) }); n > 0 {
+			t.Errorf("before the cut: %d of %d %s answers neither 2xx nor a fail_closed Redis timeout", n, len(as), r)
+		}
+		for _, a := range as {
+			if !is2xx(a) {
+				t.Logf("before the cut: %s due %.3f s: status %d, Redis error %q, latency %.1f ms", r, a.due.Seconds(), a.status, a.redisErr, float64(a.latency.Microseconds())/1000)
 			}
 		}
 	}
@@ -451,7 +470,7 @@ func TestFaultRedisCut(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 	}
 	t.Logf("recovery: Redis decides again %.2f s after make demo-fault-redis ON=0 returned", time.Since(off).Seconds())
-	after := phase(t, key, 5*time.Second, load{"catalog", 50}, load{"payments", 10})
+	after := phase(t, key, 10*time.Second, load{"catalog", 50}, load{"payments", 10})
 	for r, as := range after {
 		if s := share(as, func(a answer) bool { return a.decision }); s < 0.9 {
 			t.Errorf("after the cut: %.1f%% of %s decided by Redis, want at least 90%%", 100*s, r)
