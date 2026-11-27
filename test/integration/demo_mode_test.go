@@ -193,7 +193,7 @@ func TestDemoKeys(t *testing.T) {
 	iss := newTestIssuer(t)
 	database := migratedDatabase(t)
 	grpcAddr := freeAddr(t)
-	cp := startCP(t, "controlplane", database, grpcAddr, iss, "SPILLWAY_CP_DEMO_MODE=true")
+	cp := startCP(t, "controlplane", database, grpcAddr, iss, "SPILLWAY_CP_DEMO_MODE=true", "SPILLWAY_CP_DEMO_TOXIPROXY_URL="+toxiproxyAPI) // required in demo mode (ADR-0101)
 	v := publishYAML(t, cp.rest, demoKeyConfig(upstreamAnswering(t, "ok")), "demo keys")
 	tenant, _ := created(t, cp.rest, "/tenants", map[string]any{"name": "free-co", "plan_id": planID(t, cp.rest)})
 	consumer := func(name string) int64 {
