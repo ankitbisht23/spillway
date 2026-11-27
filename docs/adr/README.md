@@ -109,3 +109,4 @@ Decisions that shape Spillway and are not obvious from the code or from docs/des
 | [0098](0098-make-verify-m8.md) | make verify-m8 | Accepted | 2026-11-27 |
 | [0099](0099-readme-gifs-and-recording.md) | README GIFs and recording | Accepted | 2026-11-27 |
 | [0100](0100-demo-guards-implementation-details.md) | Demo guards: implementation details | Accepted | 2026-11-27 |
+| [0101](0101-fault-switches-implementation-details.md) | Fault switches: implementation details | Proposed | 2026-11-27 |
