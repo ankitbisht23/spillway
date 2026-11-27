@@ -156,7 +156,12 @@ function PlaygroundScreen({ demo: probed }: { demo: Demo }) {
   };
 
   const start = useMutation({
-    mutationFn: async (body: components["schemas"]["PlaygroundRunRequest"]) => (await call(api.POST("/demo/playground/runs", { body }))).data,
+    mutationFn: async ({ body, previous }: { body: components["schemas"]["PlaygroundRunRequest"]; previous: string | undefined }) => {
+      // One run at a time per address (ADR-0096 §3): a new run stops the
+      // caller's running one first.
+      if (previous) await api.DELETE("/demo/playground/runs/{id}", { params: { path: { id: previous } } }).catch(() => undefined);
+      return (await call(api.POST("/demo/playground/runs", { body }))).data;
+    },
     onMutate: () => {
       closeStream.current?.();
       closeStream.current = null;
@@ -172,9 +177,11 @@ function PlaygroundScreen({ demo: probed }: { demo: Demo }) {
     mutationFn: async (id: string) => (await call(api.DELETE("/demo/playground/runs/{id}", { params: { path: { id } } }))).data,
   });
 
+  const begin = (body: components["schemas"]["PlaygroundRunRequest"]) =>
+    start.mutate({ body, previous: state.phase === "running" ? state.run?.id : undefined });
   const fire = (e: FormEvent) => {
     e.preventDefault();
-    start.mutate({ kind: "custom", tenant, route, rate, duration_s: duration });
+    begin({ kind: "custom", tenant, route, rate, duration_s: duration });
   };
   const running = state.phase === "running" || state.phase === "starting";
   const pg = demo.playground;
@@ -225,7 +232,7 @@ function PlaygroundScreen({ demo: probed }: { demo: Demo }) {
           <ul className="scenarios">
             {SCENARIOS.map((s) => (
               <li key={s.id}>
-                <button type="button" disabled={start.isPending} onClick={() => start.mutate({ kind: "scenario", scenario: s.id })}>{s.title}</button>
+                <button type="button" disabled={start.isPending} onClick={() => begin({ kind: "scenario", scenario: s.id })}>{s.title}</button>
                 <span className="muted"> {s.story}</span>
               </li>
             ))}

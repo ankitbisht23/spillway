@@ -589,11 +589,12 @@ type Run struct {
 }
 
 // active reports whether r counts against the caps: from its admission
-// until its end event; r.pg.mu held.
+// until it is stopped or ends (a stopped run's requests in flight, at
+// most 256, finish within 5 s); r.pg.mu held.
 func (r *Run) active() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.state != stateEnded
+	return r.state != stateEnded && r.halted.Load() == nil
 }
 
 // Info is r as the spec's PlaygroundRun.

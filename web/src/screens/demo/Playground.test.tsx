@@ -222,6 +222,7 @@ describe("the Playground screen (UI-07, SC-04, ADR-0096 §3)", () => {
     await user.click(screen.getByRole("button", { name: "D2 Noisy neighbour" }));
     await waitFor(() => expect(runs.streams).toHaveLength(2));
     expect(runs.bodies[1]).toEqual({ kind: "scenario", scenario: "d2" });
+    expect(runs.stops).toEqual([RUN_ID]); // the running run first
     nth(runs.streams, 1).send("tick", {
       t: "2026-11-28T10:01:01Z", elapsed_s: 1, replicas: { "gateway-1": 217 },
       tenants: { "free-co": counts(10, 490), "pro-co": counts(50, 0), "enterprise-co": counts(100, 0) }, last: {},

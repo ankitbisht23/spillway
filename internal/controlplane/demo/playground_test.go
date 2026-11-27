@@ -582,3 +582,21 @@ func TestPlaygroundUnavailable(t *testing.T) {
 		t.Errorf("a refused start counted: %d active, %d left", a, left)
 	}
 }
+
+// TestPlaygroundStopFreesItsSlot: a stopped run stops counting against
+// the caps at once, so its caller's next run from the same address
+// starts while the stopped one's last requests finish.
+func TestPlaygroundStopFreesItsSlot(t *testing.T) {
+	g := newGateway(t, 1<<30)
+	p := newPG(t, &fakeKeys{}, nil, g)
+	r, err := p.Start(t.Context(), alice, CustomShape("free-co", "orders", 50, MaxDuration))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.Stop("alice", r.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.Start(t.Context(), alice, CustomShape("pro-co", "orders", 50, MaxDuration)); err != nil {
+		t.Errorf("a start right after a stop: %v", err)
+	}
+}
