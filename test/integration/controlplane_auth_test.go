@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -134,8 +135,10 @@ func specOperations(t *testing.T) []specOperation {
 // matrix calls every operation as each of tokens (role → token) and with
 // no token: no token is 401, a role the spec does not list 403, a listed
 // role anything else. IDs in paths are the largest int64, which no entity
-// has, and bodies are {}, so no call changes anything.
-func matrix(t *testing.T, c cpClient, tokens map[string]string) {
+// has, and bodies are {}, so no call changes anything. With demoMode false
+// (the control plane's default) every demo operation is 404 to every caller
+// instead (SC-08, ADR-0095).
+func matrix(t *testing.T, c cpClient, tokens map[string]string, demoMode bool) {
 	t.Helper()
 	ops := specOperations(t)
 	if len(ops) < 43 {
@@ -147,6 +150,14 @@ func matrix(t *testing.T, c cpClient, tokens map[string]string) {
 		var body any
 		if op.body {
 			body = map[string]any{}
+		}
+		if !demoMode && strings.HasPrefix(op.path, "/demo") {
+			for _, tok := range append(slices.Collect(maps.Values(tokens)), "") {
+				if a := c.as(tok).call(op.method, path, body, "If-Match", `"1"`); a.status != 404 {
+					t.Errorf("%s with demo mode off: %d %s, want 404", op.id, a.status, a.body)
+				}
+			}
+			continue
 		}
 		if a := c.as("").call(op.method, path, body, "If-Match", `"1"`); a.status != 401 {
 			t.Errorf("%s without a token: %d %s", op.id, a.status, a.body)
@@ -162,15 +173,18 @@ func matrix(t *testing.T, c cpClient, tokens map[string]string) {
 }
 
 // TestControlPlaneRoleMatrix runs the role matrix against a control plane
-// on Postgres, with tokens of a test issuer (CP-12, SEC-08).
+// on Postgres, with tokens of a test issuer (CP-12, SEC-08), in demo mode
+// and with demo mode off (SC-08).
 func TestControlPlaneRoleMatrix(t *testing.T) {
-	c, iss, _ := startControlPlane(t, io.Discard)
-	tokens := map[string]string{}
-	for _, role := range api.Roles {
-		tokens[role] = iss.token(t, "user-"+role, "test-"+role, role)
+	for _, demoMode := range []bool{true, false} {
+		c, iss, _ := startControlPlaneMode(t, io.Discard, demoMode)
+		tokens := map[string]string{}
+		for _, role := range api.Roles {
+			tokens[role] = iss.token(t, "user-"+role, "test-"+role, role)
+		}
+		tokens["none"] = iss.token(t, "user-none", "test-none")
+		matrix(t, c, tokens, demoMode)
 	}
-	tokens["none"] = iss.token(t, "user-none", "test-none")
-	matrix(t, c, tokens)
 }
 
 // TestControlPlaneTokens checks the token rules against a control plane on
@@ -525,8 +539,9 @@ func TestComposeRBAC(t *testing.T) {
 	for _, role := range api.Roles {
 		tokens[role] = keycloakToken(t, "password", "rbac-tests", "test-"+role)
 	}
-	matrix(t, c, tokens)
-	matrix(t, c, map[string]string{"admin": keycloakToken(t, "client_credentials", "spillway-ci", "")})
+	// make dev's control plane runs with demo mode off.
+	matrix(t, c, tokens, false)
+	matrix(t, c, map[string]string{"admin": keycloakToken(t, "client_credentials", "spillway-ci", "")}, false)
 	// The gateway's test client has no control-plane audience.
 	c.as(keycloakToken(t, "client_credentials", "gateway-tests", "")).must(401, "GET", "/plans", nil)
 }

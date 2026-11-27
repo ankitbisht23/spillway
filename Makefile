@@ -215,10 +215,12 @@ demo-down:
 	@$(MAKE) --no-print-directory dev
 	@deploy/demo/demo.sh down-check
 
-# The demo's tests (SC-01, ADR-0094, test/demo, build tag demo): make demo
-# prints no secret, token or key; make demo-reset puts a modified demo back
-# to the seed and leaves the dev database as it was. Then make demo-down,
-# whatever the result. About 3 minutes on a built stack.
+# The demo's tests (SC-01, SC-08, ADR-0094, ADR-0095, test/demo, build tag
+# demo): make demo prints no secret, token or key and runs in demo mode
+# (demo keys expire within 30 minutes and have their own limits); make
+# demo-reset puts a modified demo back to the seed and leaves the dev
+# database as it was. Then make demo-down, whatever the result. About 4
+# minutes on a built stack.
 test-demo:
 	@go test -tags demo -count=1 -timeout 30m -v ./test/demo/; rc=$$?; \
 		$(MAKE) --no-print-directory demo-down; exit $$rc

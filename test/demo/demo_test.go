@@ -1,9 +1,10 @@
 //go:build demo
 
-// Package demo holds the demo stack's tests (SC-01, ADR-0094), run by make
-// test-demo against the running demo, from the host: make demo prints no
-// secret, token or key; make demo-reset restores a modified demo to the
-// seed and leaves the dev database spillway as it was.
+// Package demo holds the demo stack's tests (SC-01, SC-08, ADR-0094,
+// ADR-0095), run by make test-demo against the running demo, from the
+// host: make demo prints no secret, token or key and runs in demo mode;
+// make demo-reset restores a modified demo to the seed and leaves the dev
+// database spillway as it was.
 package demo
 
 import (
@@ -150,6 +151,120 @@ func TestDemoUp(t *testing.T) {
 		if run == 2 && !strings.Contains(out, "(0 created, 0 updated, 14 unchanged)") {
 			t.Errorf("make demo on the running demo changed the seed:\n%s", out)
 		}
+	}
+}
+
+// send sends GET /v1/orders to gateway-1 with key and returns the status,
+// 0 for no answer.
+func send(t *testing.T, key string) int {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, "GET", gatewayURL+"/v1/orders", nil)
+	req.Header.Set("X-API-Key", key)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0
+	}
+	_ = resp.Body.Close()
+	return resp.StatusCode
+}
+
+// until waits up to 30 s for cond, failing with what.
+func until(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	for deadline := time.Now().Add(30 * time.Second); !cond(); time.Sleep(200 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("after 30 s: %s", what)
+		}
+	}
+}
+
+// TestDemoMode: make demo runs the control plane in demo mode (SC-08,
+// ADR-0095): GET /api/v1/demo answers the seeded tenants and routes; a key
+// issued without an expiry expires 30 minutes after its creation and one
+// asked for 31 minutes is 422; a free-co-playground key is limited by its
+// own counter (free's 10/s, burst 20), so free-co-web's key is still
+// admitted; an 8 s key is refused by gateway-1 with 401 once it has
+// expired; and no key appears in the control plane's or a gateway's log.
+// Waits allow 30 s, and the expiry check leaves 2 s after the expiry,
+// both far above the host's 0.82 s stalls (ADR-0034).
+func TestDemoMode(t *testing.T) {
+	c := client(t)
+	var d struct {
+		Tenants []struct {
+			Name string `json:"name"`
+			Plan string `json:"plan"`
+		} `json:"tenants"`
+		Routes []struct {
+			Name   string `json:"name"`
+			Policy string `json:"policy"`
+		} `json:"routes"`
+	}
+	must(t, c, 200, "GET", "/demo", nil, &d)
+	if fmt.Sprint(d.Tenants) != "[{free-co free} {pro-co pro} {enterprise-co enterprise}]" ||
+		fmt.Sprint(d.Routes) != "[{orders consumer-plan} {catalog catalog-limit} {payments payments-limit}]" {
+		t.Errorf("getDemo: %+v", d)
+	}
+
+	consumers := list(t, c, "/consumers?limit=500")
+	type issuedKey struct {
+		ID        int64     `json:"id"`
+		Key       string    `json:"key"`
+		CreatedAt time.Time `json:"created_at"`
+		ExpiresAt time.Time `json:"expires_at"`
+	}
+	var keys []string
+	issue := func(consumer string, body map[string]any) issuedKey {
+		t.Helper()
+		var k issuedKey
+		must(t, c, 201, "POST", fmt.Sprintf("/consumers/%d/keys", byName(consumers, consumer).ID), body, &k)
+		keys = append(keys, k.Key)
+		return k
+	}
+	pg := issue("free-co-playground", map[string]any{})
+	if d := pg.ExpiresAt.Sub(pg.CreatedAt) - 30*time.Minute; d < -time.Second || d > time.Second {
+		t.Errorf("a demo key: expires_at - created_at = %v, want 30 min ± 1 s", pg.ExpiresAt.Sub(pg.CreatedAt))
+	}
+	a, err := c.Call(t.Context(), "POST", fmt.Sprintf("/consumers/%d/keys", byName(consumers, "free-co-playground").ID),
+		map[string]any{"expires_at": time.Now().Add(31 * time.Minute)})
+	if err != nil || a.Status != 422 {
+		t.Errorf("31 minutes ahead: %d %v", a.Status, err)
+	}
+
+	// Own limits: the playground key runs into free's limit; the web
+	// consumer's key, of the same tenant, is still admitted.
+	until(t, "the playground key works on gateway-1", func() bool { return send(t, pg.Key) == 200 })
+	limited := 0
+	for range 60 {
+		switch code := send(t, pg.Key); code {
+		case 429:
+			limited++
+		case 200:
+		default:
+			t.Fatalf("the playground key: %d", code)
+		}
+	}
+	web := issue("free-co-web", map[string]any{})
+	until(t, "the web key works on gateway-1", func() bool { return send(t, web.Key) == 200 })
+	if limited == 0 {
+		t.Error("61 playground requests in a row, none limited by free's 10/s, burst 20")
+	}
+
+	// An 8 s key: refused once it has expired.
+	short := issue("free-co-mobile", map[string]any{"expires_at": time.Now().Add(8 * time.Second)})
+	until(t, "the 8 s key works on gateway-1", func() bool { c := send(t, short.Key); return c == 200 || c == 429 })
+	time.Sleep(time.Until(short.ExpiresAt.Add(2 * time.Second)))
+	if code := send(t, short.Key); code != 401 {
+		t.Errorf("2 s after its expiry the key answered %d, want 401", code)
+	}
+
+	for _, name := range []string{"spillway-controlplane-1", "spillway-gateway-1-1", "spillway-gateway-2-1", "spillway-gateway-3-1"} {
+		out, err := exec.CommandContext(t.Context(), "docker", "logs", name).CombinedOutput() //nolint:gosec // G204: the demo's own containers
+		if err != nil {
+			t.Fatalf("docker logs %s: %v", name, err)
+		}
+		noLeak(t, name+"'s log", string(out), keys...)
 	}
 }
 
