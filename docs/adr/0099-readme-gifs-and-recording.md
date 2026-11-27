@@ -47,7 +47,7 @@ D5's GIF is a terminal scene so the video (which covers D5 in the UI) and the RE
 - **What is never on screen.** No scene opens the issue-key or rotate dialogs. Terminal output names keys by ID (`key #412`, ADR-0096 §1); the Playground never receives a key (UI-07); Throttling shows a key's ID and public prefix only (CP-15's prefix is not the key). No scene prints the environment.
 - **Checks that fail `make demo-gifs` and delete the GIF:**
   - terminal: each tape's `.ascii` capture must not match the key grammar `spw_[0-9A-Za-z]{8}_[0-9A-Za-z]{43}`, a JWT (`eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.`), `dev-only-not-secret` or `client_secret`;
-  - UI: at every step each spec checks `document.body.innerText` and every input's value for the same patterns; a console listener fails the spec on any console message; a response listener fails it when a response body matches the key grammar, except Keycloak's token endpoint (which returns tokens to the page by design, never rendered).
+  - UI: at every step from the scene start on (after login, whose password field holds the dev password by design and is cut from the video) each spec checks `document.body.innerText` and every input's value for the same patterns; a console listener fails the spec on any console message; a response listener fails it when a response body matches the key grammar, except Keycloak's token endpoint (which returns tokens to the page by design, never rendered).
 - The login form is cut from every video (§3), and its password field is masked anyway.
 
 ### 5. Artifacts and clean-up

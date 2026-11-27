@@ -78,7 +78,7 @@ What exists: compose's Postgres (`pgdata` volume, owner role `spillway`, app rol
   | `pro-co` (`pro`) | `pro-co-web`, `pro-co-mobile` (D1, D3, D5, D6), `pro-co-playground`, `pro-co-service` (`jwt_subject` = `gateway-tests`'s service account `0b5e7c1a-5f1d-4c3e-9a00-0000000000c2`, ADR-0049) |
   | `enterprise-co` (`enterprise`) | `enterprise-co-web` (D4's would-be-hit consumer), `enterprise-co-mobile` (D2), `enterprise-co-playground` |
 
-- **Why the numbers.** Every GCRA burst covers at least one second of its rate (free 2 s, pro 2 s, degraded pro 2 s, payments 2 s, ceiling 1 s), which ADR-0098 relies on to make admissions independent of host stalls. Every period is 1 s, so limiter keys live at most a few seconds (RL-15) and a reset needs no Redis clean-up. With no quotas there is nothing to flush, and the demo override leaves `SPILLWAY_CP_REDIS_ADDRS` unset (flusher off, ADR-0070), so the demo control plane never writes quota epochs for tenant IDs that the dev database also uses.
+- **Why the numbers.** Every GCRA burst covers at least one second of its rate (free 2 s, pro 2 s, degraded pro 2 s, payments 2 s, ceiling 1 s), which ADR-0098 relies on to make admissions independent of host stalls. Every period is 1 s, so limiter keys live at most a few seconds (RL-15) and a reset needs no Redis clean-up. With no quotas there is nothing to flush, and the demo override sets `SPILLWAY_CP_REDIS_ADDRS: ""` (an override cannot unset a variable; empty means no seeds, so the flusher is off, ADR-0070), so the demo control plane never writes quota epochs for tenant IDs that the dev database also uses.
 
 ### 4. The demo gateways (D4)
 

@@ -17,7 +17,7 @@ What exists and matters for exposure: the realm `spillway` is imported from `dep
 - **Images** (exact, multi-arch indexes with linux/amd64 and linux/arm64, over two weeks old on 2026-11-27):
   - `caddy:2.11.9-alpine@sha256:003a97808e781aa9f7e75cc2f43d34d461099031faf5e20faefb9f61126836f0` (built 2026-11-05);
   - `cloudflare/cloudflared:2026.11.0@sha256:b94b96edf2c9c4360f8879c8580cfaa99077f19c849ec595ca2f711b27d4f344` (built 2026-11-12).
-  Dependabot's docker ecosystem watches both like the other images.
+  Dependabot's `docker-compose` ecosystem scans only `/` today, so the task that adds each image adds `/deploy/compose` to that ecosystem's directories in `.github/dependabot.yml`; if Dependabot does not recognise `demo.compose.yml` by its file name, the PR says so and these images (like the vhs image, ADR-0099) are bumped by hand, by digest.
 - **Addresses.** The demo override gives `caddy` the fixed address **172.29.255.10** and the tunnel container (`tunnel` or `tunnel-stand-in`, never both) **172.29.255.11** on compose's network (172.29.0.0/16; Docker allocates from the bottom, so the top addresses stay free).
 - **Service `caddy`** (profile `demo`, label `spillway.demo`, from the grafana-demo task): `ports: ["127.0.0.1:8888:8888"]` (docs/ports.md), `read_only: true`, tmpfs `/data:uid=1000,gid=1000` and `/config:uid=1000,gid=1000`, `cap_drop: [ALL]`, `user: "1000:1000"`, the Caddyfile `deploy/demo/Caddyfile` mounted read-only, healthcheck `wget -q -O /dev/null http://127.0.0.1:8888/api/ui-config`, depends on `controlplane`, `keycloak` and `grafana-demo` healthy.
 - **Caddyfile** (complete; Caddy writes no access log, so it logs no client address):
@@ -114,6 +114,7 @@ The demo seed gains, for the issuer check of the gateways (§4 s4), route **`ser
 - The repository's public dev credentials stop working for the length of a share, except the visitors' viewer account; the owner needs `DEMO_ADMIN_PASSWORD` to act as admin.
 - The share path is tested on every verify-m8 run without a Cloudflare account, a network connection or a secret.
 - GitHub login gives visitors a viewer account; the owner's GitHub account is not made admin automatically (setup.md Step 4.6 changes).
+- Brute-force detection applies to `test-viewer` too, whose password is public: anyone can lock the shared visitors' account out for Keycloak's wait time (its defaults: 30 failures, then waits from 60 s). Accepted for a short-lived share; GitHub login (named tunnel) is the visitors' way around it.
 
 ## Alternatives considered
 
