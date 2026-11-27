@@ -26,7 +26,7 @@ COPY cmd/ cmd/
 COPY internal/ internal/
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
 	CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
-	go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o /out/ ./cmd/gateway ./cmd/loadgen ./cmd/accuracy ./cmd/chaos
+	go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o /out/ ./cmd/gateway ./cmd/loadgen ./cmd/accuracy ./cmd/chaos ./cmd/demo-traffic
 # The managed gateway's snapshot directory (CP-07, ADR-0038): owned by the
 # non-root user, so a new named volume mounted there is writable too.
 RUN mkdir -p /out/state
@@ -55,6 +55,13 @@ FROM gcr.io/distroless/static-debian13:nonroot@sha256:25ac8f0c3b2334a9eb05452266
 COPY --from=build /out/chaos /chaos
 USER 65532:65532
 ENTRYPOINT ["/chaos"]
+
+# The demo's tool (SC-01, ADR-0094, ADR-0096 §1): the demo-seed and
+# demo-init one-shots.
+FROM gcr.io/distroless/static-debian13:nonroot@sha256:25ac8f0c3b2334a9eb05452266bd4697864a8c8ef0ef71e5e6480d7f92868329 AS demo-traffic
+COPY --from=build /out/demo-traffic /demo-traffic
+USER 65532:65532
+ENTRYPOINT ["/demo-traffic"]
 
 # The control plane (CP-10, ADR-0036): `serve` by default, `migrate` as the
 # compose one-shot (CP-19).
