@@ -346,6 +346,9 @@ func TestFaultRedisCut(t *testing.T) {
 	key := issueKey(t, "pro-co-mobile")
 
 	before := phase(t, key, 5*time.Second, load{"catalog", 50}, load{"payments", 10}, load{"orders", 20})
+	for _, r := range []string{"catalog", "payments", "orders"} {
+		t.Logf("before the cut: %d of %d %s answers carried a Redis error", count(before[r], func(a answer) bool { return a.redisErr != "" }), len(before[r]), r)
+	}
 	for _, r := range []string{"catalog", "payments"} {
 		if s := share(before[r], func(a answer) bool { return a.decision }); s < 0.9 {
 			t.Errorf("before the cut: %.1f%% of %s decided by Redis, want at least 90%%", 100*s, r)
@@ -354,6 +357,11 @@ func TestFaultRedisCut(t *testing.T) {
 	for r, as := range before {
 		if s := share(as, is2xx); s != 1 {
 			t.Errorf("before the cut: %.1f%% of %s 2xx, want all", 100*s, r)
+			for _, a := range as {
+				if !is2xx(a) {
+					t.Logf("before the cut: %s due %.3f s: status %d, Redis error %q, latency %.1f ms", r, a.due.Seconds(), a.status, a.redisErr, float64(a.latency.Microseconds())/1000)
+				}
+			}
 		}
 	}
 
