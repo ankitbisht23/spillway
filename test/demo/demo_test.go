@@ -63,14 +63,15 @@ func must(t *testing.T, c *demo.Client, want int, method, path string, body, out
 	return a
 }
 
-// runMake runs a make target in the repository and returns its output.
-func runMake(t *testing.T, target string) string {
+// runMake runs a make target in the repository, with variables such as
+// ON=1 after it, and returns its output.
+func runMake(t *testing.T, target string, vars ...string) string {
 	t.Helper()
-	cmd := exec.CommandContext(t.Context(), "make", "--no-print-directory", "-C", "../..", target) //nolint:gosec // G204: the tests' own targets
+	cmd := exec.CommandContext(t.Context(), "make", append([]string{"--no-print-directory", "-C", "../..", target}, vars...)...) //nolint:gosec // G204: the tests' own targets
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
 	if err := cmd.Run(); err != nil {
-		t.Fatalf("make %s: %v\n%s", target, err, out.String())
+		t.Fatalf("make %s %s: %v\n%s", target, strings.Join(vars, " "), err, out.String())
 	}
 	return out.String()
 }

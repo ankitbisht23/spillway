@@ -72,17 +72,36 @@ func TestLoadSettings(t *testing.T) {
 }
 
 // TestDemoModeSetting: SPILLWAY_CP_DEMO_MODE is off unless set to a value
-// strconv.ParseBool reads as true (SC-08, ADR-0095 §1).
+// strconv.ParseBool reads as true (SC-08, ADR-0095 §1); in demo mode
+// SPILLWAY_CP_DEMO_TOXIPROXY_URL is required and checked, and with demo
+// mode off it is ignored (SC-03).
 func TestDemoModeSetting(t *testing.T) {
+	base := func(mode, toxiproxy string) map[string]string {
+		return withOIDC(map[string]string{
+			"SPILLWAY_CP_DATABASE_URL":       "postgres://spillway_app@db:5432/spillway",
+			"SPILLWAY_CP_DATABASE_PASSWORD":  secretValue,
+			"SPILLWAY_CP_ALLOWED_NETWORKS":   "172.29.0.0/16",
+			"SPILLWAY_CP_DEMO_MODE":          mode,
+			"SPILLWAY_CP_DEMO_TOXIPROXY_URL": toxiproxy,
+		})
+	}
 	for v, want := range map[string]bool{"": false, "false": false, "0": false, "true": true, "1": true, "TRUE": true} {
-		s, err := loadSettings(env(withOIDC(map[string]string{
-			"SPILLWAY_CP_DATABASE_URL":      "postgres://spillway_app@db:5432/spillway",
-			"SPILLWAY_CP_DATABASE_PASSWORD": secretValue,
-			"SPILLWAY_CP_ALLOWED_NETWORKS":  "172.29.0.0/16",
-			"SPILLWAY_CP_DEMO_MODE":         v,
-		})))
-		if err != nil || s.demoMode != want {
-			t.Errorf("SPILLWAY_CP_DEMO_MODE=%q: demo mode %v, %v; want %v", v, s.demoMode, err, want)
+		s, err := loadSettings(env(base(v, "http://toxiproxy:8474")))
+		if err != nil || s.demoMode != want || want != (s.demoToxiproxyURL == "http://toxiproxy:8474") {
+			t.Errorf("SPILLWAY_CP_DEMO_MODE=%q: demo mode %v, toxiproxy %q, %v; want %v", v, s.demoMode, s.demoToxiproxyURL, err, want)
+		}
+	}
+	if s, err := loadSettings(env(base("false", "not a URL"))); err != nil || s.demoToxiproxyURL != "" {
+		t.Errorf("demo mode off: a toxiproxy URL is ignored, got %q, %v", s.demoToxiproxyURL, err)
+	}
+	for v, msg := range map[string]string{
+		"":                               "SPILLWAY_CP_DEMO_TOXIPROXY_URL is required in demo mode",
+		"toxiproxy:8474":                 "SPILLWAY_CP_DEMO_TOXIPROXY_URL: want an http or https URL",
+		"http://u:p@toxiproxy:8474":      "SPILLWAY_CP_DEMO_TOXIPROXY_URL: user info is not allowed",
+		"http://toxiproxy:8474/?debug=1": "SPILLWAY_CP_DEMO_TOXIPROXY_URL: a query or fragment is not allowed",
+	} {
+		if _, err := loadSettings(env(base("true", v))); err == nil || !strings.Contains(err.Error(), msg) {
+			t.Errorf("SPILLWAY_CP_DEMO_TOXIPROXY_URL=%q: %v, want %q", v, err, msg)
 		}
 	}
 }

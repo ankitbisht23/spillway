@@ -6,6 +6,9 @@
 #   demo.sh down        make demo-down, before make dev: delete the demo proxies, remove the demo containers
 #   demo.sh down-check  make demo-down, after make dev: no demo container, no demo proxy
 #   demo.sh clean       make dev, before up: remove every demo container
+#   demo.sh fault <redis-cut|upstream-slow> <1|0>, demo.sh fault clear
+#                       make demo-fault-redis, -upstream, -clear: switch a demo
+#                       fault through the control plane's setDemoFault (SC-03)
 #
 # None of them removes a volume, touches the dev database spillway or
 # Redis, or prints a secret or key.
@@ -67,12 +70,40 @@ up() {
 	EOF
 }
 
+# fault switches a demo fault, or with clear both off, through the control
+# plane's setDemoFault, as admin with the spillway-ci service token (SC-03,
+# ADR-0095 §5): demo-traffic fault in a one-off container of the demo-seed
+# service, which has the control plane's and Keycloak's URLs and the token's
+# client. --no-deps, so it never starts or recreates another service. With
+# demo mode off it fails with demo-traffic's demo-mode-off message.
+fault() {
+	local args
+	case "${1:-} ${2:-}" in
+	"redis-cut 1" | "upstream-slow 1") args=("$1" on) ;;
+	"redis-cut 0" | "upstream-slow 0") args=("$1" off) ;;
+	"clear ") args=(clear) ;;
+	*)
+		echo "usage: $0 fault <redis-cut|upstream-slow> <1|0>, or $0 fault clear (make demo-fault-redis ON=1|0, make demo-fault-upstream ON=1|0, make demo-fault-clear)" >&2
+		exit 2
+		;;
+	esac
+	"${demo[@]}" run --rm --no-deps demo-seed fault "${args[@]}"
+}
+
 reset() {
 	local start=$SECONDS id
 	id=$("${compose[@]}" ps -q controlplane)
 	if [ -z "$id" ] || [ "$(docker inspect -f '{{index .Config.Labels "spillway.demo"}}' "$id")" != "true" ]; then
 		echo "demo-reset: the demo is not running; start it with make demo" >&2
 		exit 1
+	fi
+	# Both faults off first, while the control plane answers (ADR-0094 §1):
+	# the reset keeps the proxies, so a fault left on would outlive it. If
+	# the control plane cannot, the proxies are created again, without
+	# toxics; the demo gateways restart below anyway.
+	if ! fault clear; then
+		echo "demo-reset: the faults could not be switched off through the control plane; creating the demo proxies again" >&2
+		"${demo[@]}" run --rm --no-deps demo-init
 	fi
 	"${demo[@]}" stop controlplane
 	"${compose[@]}" exec -T postgres psql -U spillway -d spillway -v ON_ERROR_STOP=1 -qc 'DROP DATABASE IF EXISTS spillway_demo WITH (FORCE)'
@@ -87,6 +118,14 @@ reset() {
 }
 
 down() {
+	local id
+	# Both faults off through the API while the demo control plane runs
+	# (ADR-0094 §2), so the switch is audited; deleting the proxies below
+	# removes any toxic left either way.
+	id=$("${compose[@]}" ps -q --status running controlplane)
+	if [ -n "$id" ] && [ "$(docker inspect -f '{{index .Config.Labels "spillway.demo"}}' "$id")" = "true" ]; then
+		fault clear || echo "demo-down: the faults could not be switched off through the control plane; deleting the proxies removes them" >&2
+	fi
 	if [ -n "$("${compose[@]}" ps -q --status running toxiproxy)" ]; then
 		"${demo[@]}" run --rm --no-deps demo-init proxies -delete
 	fi
@@ -123,8 +162,9 @@ reset) reset ;;
 down) down ;;
 down-check) down_check ;;
 clean) clean ;;
+fault) fault "${2:-}" "${3:-}" ;;
 *)
-	echo "usage: $0 up|reset|down|down-check|clean" >&2
+	echo "usage: $0 up|reset|down|down-check|clean|fault" >&2
 	exit 2
 	;;
 esac

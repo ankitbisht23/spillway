@@ -493,6 +493,7 @@ plans:
 | GET | `/api/v1/replicas` | Replicas, applied config and identity versions, last heartbeat |
 | GET | `/api/v1/stream` | SSE: live metrics, replica status, heavy hitters, Playground results (demo mode) |
 | GET | `/api/v1/demo` | Demo mode: tenants, routes, scenarios, fault states and the caller's Playground limits (404 when demo mode is off, SC-08) |
+| PUT | `/api/v1/demo/faults/{name}` | Switch a D5 or D6 fault on or off (admin, SC-03) |
 | GET | `/api/v1/audit` | Audit log, paginated |
 | GET | `/api/v1/me` | The caller’s subject, display name and Spillway roles (UI-04) |
 
@@ -577,7 +578,7 @@ A reviewer should see the limiter earn its keep in under five minutes: `make dem
 
 - **SC-01** (M8) `make demo` boots the stack in demo mode with seeded tenants, consumers, plans, routes and policies in its own database (`spillway_demo`), and demo keys are issued at run time (SC-08); `make demo-reset` restores it in one command without touching the dev database, and `make demo-down` returns to `make dev`.
 - **SC-02** (M8) Traffic simulator `cmd/demo-traffic --scenario=d1…d7` drives base load plus each scenario’s bursts.
-- **SC-03** (M8) Fault switches for D5 and D6 as `make` targets and Playground buttons, toxiproxy only: Redis traffic runs through per-node toxiproxy proxies via the ADR-0004 address map, and upstream latency is added in toxiproxy. Operator role only, `DEMO_MODE=true` only; no container gets the Docker socket.
+- **SC-03** (M8) Fault switches for D5 and D6 as `make` targets and Playground buttons, both through one audited control-plane endpoint, toxiproxy only: the demo gateways' Redis traffic runs through per-node toxiproxy proxies via the ADR-0004 address map, which D5 cuts, and D6's upstream latency is added in toxiproxy. Admin role only, `DEMO_MODE=true` only; no container gets the Docker socket.
 - **SC-04** (M8) Playground screen in the admin UI (UI-07).
 - **SC-05** (M8) Grafana Demo dashboard: allowed vs denied and p99 per tenant, limiter mode, replica count.
 - **SC-06** (M8) README: architecture diagram, one GIF per scenario, benchmark, accuracy and chaos tables, a quick start of three commands or fewer.

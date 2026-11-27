@@ -105,13 +105,15 @@ services:
   # the demo has no quotas, and the demo control plane never writes quota
   # state for tenant IDs the dev database also uses (D29). Demo mode
   # (SC-08, ADR-0095 §1) comes from DEMO_MODE, which make demo sets true;
-  # only this file maps it, so make dev's control plane never has it.
+  # only this file maps it, so make dev's control plane never has it. The
+  # fault switches (SC-03, ADR-0095 §5) speak only HTTP to toxiproxy's API.
   controlplane:
     labels: { spillway.demo: "true" }
     environment:
       SPILLWAY_CP_DATABASE_URL: postgres://spillway_app@postgres:5432/spillway_demo?sslmode=disable
       SPILLWAY_CP_REDIS_ADDRS: ""
       SPILLWAY_CP_DEMO_MODE: ${DEMO_MODE:-false}
+      SPILLWAY_CP_DEMO_TOXIPROXY_URL: http://toxiproxy:8474
     depends_on:
       demo-migrate: { condition: service_completed_successfully }
 

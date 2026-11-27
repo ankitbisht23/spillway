@@ -11,7 +11,7 @@ FUZZTIME ?= 5s
 # Committed dev defaults first, then local overrides if present (ADR-0004).
 COMPOSE := docker compose --env-file .env.example $(if $(wildcard .env.local),--env-file .env.local)
 
-.PHONY: tools hooks certs dev demo demo-reset demo-down test-demo kind-up kind-down kind-smoke kind-rollout kind-images kind-grafana kind-prometheus test test-go test-web test-e2e fuzz test-integration proto api sqlc web-gen web-build lint lint-go lint-web lint-proto lint-api lint-sql lint-helm lint-obs lint-actions release-build release-publish bench bench-gate verify-m0 verify-m0-stack verify-m1 verify-m1-reload verify-m2 verify-m2-shadow verify-m3 verify-m4 verify-m5 verify-m6 verify-m7 accuracy chaos-redis-outage chaos-redis-primary chaos-cp-outage nfr-keys nfr-soak nfr-noisy chaos-redis-latency chaos-gateway-kill chaos
+.PHONY: tools hooks certs dev demo demo-reset demo-down demo-fault-redis demo-fault-upstream demo-fault-clear test-demo kind-up kind-down kind-smoke kind-rollout kind-images kind-grafana kind-prometheus test test-go test-web test-e2e fuzz test-integration proto api sqlc web-gen web-build lint lint-go lint-web lint-proto lint-api lint-sql lint-helm lint-obs lint-actions release-build release-publish bench bench-gate verify-m0 verify-m0-stack verify-m1 verify-m1-reload verify-m2 verify-m2-shadow verify-m3 verify-m4 verify-m5 verify-m6 verify-m7 accuracy chaos-redis-outage chaos-redis-primary chaos-cp-outage nfr-keys nfr-soak nfr-noisy chaos-redis-latency chaos-gateway-kill chaos
 
 # Host-run processes and tests reach Redis Cluster nodes through this map
 # (ADR-0004). Set only here, never in compose or .env files.
@@ -215,12 +215,29 @@ demo-down:
 	@$(MAKE) --no-print-directory dev
 	@deploy/demo/demo.sh down-check
 
+# The demo's fault switches (SC-03, ADR-0095 §5): ON=1 switches a fault on,
+# ON=0 off; demo-fault-clear switches both off. D5's redis-cut cuts the demo
+# gateways' Redis traffic at toxiproxy's demo-redis-N proxies, D6's
+# upstream-slow delays the orders upstream 4 s at demo-upstream-N. Each
+# calls the control plane's setDemoFault as admin (spillway-ci), so it is
+# audited and answers 404 with demo mode off; nothing here talks to
+# toxiproxy or Docker's socket directly.
+demo-fault-redis:
+	@deploy/demo/demo.sh fault redis-cut "$(ON)"
+
+demo-fault-upstream:
+	@deploy/demo/demo.sh fault upstream-slow "$(ON)"
+
+demo-fault-clear:
+	@deploy/demo/demo.sh fault clear
+
 # The demo's tests (SC-01, SC-08, ADR-0094, ADR-0095, test/demo, build tag
 # demo): make demo prints no secret, token or key and runs in demo mode
 # (demo keys expire within 30 minutes and have their own limits); make
 # demo-reset puts a modified demo back to the seed and leaves the dev
-# database as it was. Then make demo-down, whatever the result. About 4
-# minutes on a built stack.
+# database as it was; the fault switches show D5's failure modes and D6's
+# breaker and retry budget on gateway-1 (SC-03, ADR-0101). Then make
+# demo-down, whatever the result. About 6 minutes on a built stack.
 test-demo:
 	@go test -tags demo -count=1 -timeout 30m -v ./test/demo/; rc=$$?; \
 		$(MAKE) --no-print-directory demo-down; exit $$rc

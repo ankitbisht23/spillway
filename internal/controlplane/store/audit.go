@@ -47,6 +47,9 @@ type change struct {
 	// diff, when not nil, is the record's diff instead of before and after:
 	// publish and rollback record their changes list (ADR-0040).
 	diff any
+	// name, when not empty, is the entity ID instead of id: a demo fault's
+	// name (ADR-0095 §5).
+	name string
 }
 
 // write inserts c's audit record. The diff is {"before": …, "after": …}
@@ -72,6 +75,9 @@ func (a Audit) write(ctx context.Context, q *db.Queries, c change) error {
 		roles = []string{}
 	}
 	id := strconv.FormatInt(c.id, 10)
+	if c.name != "" {
+		id = c.name
+	}
 	p := db.InsertAuditParams{
 		ActorSub: a.Actor.Sub, ActorName: a.Actor.Name, ActorRoles: roles, Action: c.action, Entity: c.entity,
 		EntityID: &id, Diff: b, Note: c.note, RequestID: a.RequestID,
