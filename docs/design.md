@@ -492,6 +492,7 @@ plans:
 | GET | `/api/v1/policies/{id}/shadow-report` | Would-be denials over a window |
 | GET | `/api/v1/replicas` | Replicas, applied config and identity versions, last heartbeat |
 | GET | `/api/v1/stream` | SSE: live metrics, replica status, heavy hitters, Playground results (demo mode) |
+| GET | `/api/v1/demo` | Demo mode: tenants, routes, scenarios, fault states and the caller's Playground limits (404 when demo mode is off, SC-08) |
 | GET | `/api/v1/audit` | Audit log, paginated |
 | GET | `/api/v1/me` | The caller’s subject, display name and Spillway roles (UI-04) |
 
@@ -581,7 +582,7 @@ A reviewer should see the limiter earn its keep in under five minutes: `make dem
 - **SC-05** (M8) Grafana Demo dashboard: allowed vs denied and p99 per tenant, limiter mode, replica count.
 - **SC-06** (M8) README: architecture diagram, one GIF per scenario, benchmark, accuracy and chaos tables, a quick start of three commands or fewer.
 - **SC-07** (M8) A 3–4 minute walkthrough video (D1, D2, D4, D5) and a live-demo script in `docs/demo.md`.
-- **SC-08** (M8) Demo mode is off by default: Playground, demo endpoints and fault switches return 404 unless `DEMO_MODE=true`, and demo keys expire after 30 minutes with their own limits.
+- **SC-08** (M8) Demo mode is off by default: the Playground, demo endpoints and fault switches (everything under `/api/v1/demo/`) return 404 unless the control plane runs with `DEMO_MODE=true`, and the UI then hides the Playground. In demo mode every API key the control plane issues or rotates expires within 30 minutes; Playground keys never leave the control plane, belong to per-tenant playground consumers with their own counters, and Playground runs are capped per run, per caller, per client IP and in total.
 - **SC-09** (M8) Public demo: one reverse proxy (Caddy, port 8888) behind one tunnel — UI at `/`, Keycloak at `/auth`, Grafana at `/grafana`. `make demo-share` starts a quick tunnel and, from its URL, sets Keycloak’s `KC_HOSTNAME`, the control plane’s and gateways’ expected issuer (`<url>/auth/realms/spillway`), the UI’s OIDC authority and Grafana’s root URL, adds `<url>/oidc/callback` to the `admin-ui` client’s redirect URIs, `<url>/signed-out` to its post-logout redirect URIs and `<url>` to its web origins through the Keycloak admin API, and restarts what changed; a named tunnel gives a stable link.
 
 ## Build plan
