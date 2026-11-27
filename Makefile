@@ -11,7 +11,7 @@ FUZZTIME ?= 5s
 # Committed dev defaults first, then local overrides if present (ADR-0004).
 COMPOSE := docker compose --env-file .env.example $(if $(wildcard .env.local),--env-file .env.local)
 
-.PHONY: tools hooks certs dev demo demo-reset demo-down demo-fault-redis demo-fault-upstream demo-fault-clear demo-d1 demo-d2 demo-d3 demo-d4 demo-d5 demo-d6 demo-d7 test-demo kind-up kind-down kind-smoke kind-rollout kind-images kind-grafana kind-prometheus test test-go test-web test-e2e fuzz test-integration proto api sqlc web-gen web-build lint lint-go lint-web lint-proto lint-api lint-sql lint-helm lint-obs lint-actions release-build release-publish bench bench-gate verify-m0 verify-m0-stack verify-m1 verify-m1-reload verify-m2 verify-m2-shadow verify-m3 verify-m4 verify-m5 verify-m6 verify-m7 accuracy chaos-redis-outage chaos-redis-primary chaos-cp-outage nfr-keys nfr-soak nfr-noisy chaos-redis-latency chaos-gateway-kill chaos
+.PHONY: tools hooks certs dev demo demo-reset demo-down demo-fault-redis demo-fault-upstream demo-fault-clear demo-d1 demo-d2 demo-d3 demo-d4 demo-d5 demo-d6 demo-d7 test-demo kind-up kind-down kind-smoke kind-rollout kind-images kind-grafana kind-prometheus test test-go test-web test-e2e test-e2e-demo fuzz test-integration proto api sqlc web-gen web-build lint lint-go lint-web lint-proto lint-api lint-sql lint-helm lint-obs lint-actions release-build release-publish bench bench-gate verify-m0 verify-m0-stack verify-m1 verify-m1-reload verify-m2 verify-m2-shadow verify-m3 verify-m4 verify-m5 verify-m6 verify-m7 accuracy chaos-redis-outage chaos-redis-primary chaos-cp-outage nfr-keys nfr-soak nfr-noisy chaos-redis-latency chaos-gateway-kill chaos
 
 # Host-run processes and tests reach Redis Cluster nodes through this map
 # (ADR-0004). Set only here, never in compose or .env files.
@@ -319,6 +319,17 @@ test-web:
 test-e2e: dev
 	pnpm -C web e2e
 	rm -rf web/playwright-report web/test-results
+
+# The Playground's Playwright flows (UI-07, SC-04, ADR-0096 §3) on the demo
+# stack: make demo, then web/e2e/playground.spec.ts with
+# playwright.demo.config.ts (a viewer fires traffic and sees allowed and
+# denied over the run's stream, same origin only; an admin switches D6's
+# fault), then make demo-down, whatever the result. The report and results
+# are removed after a passing run, kept after a failing one (gitignored).
+test-e2e-demo: demo
+	@pnpm -C web exec playwright test -c playwright.demo.config.ts; rc=$$?; \
+		$(MAKE) --no-print-directory demo-down; \
+		if [ $$rc -eq 0 ]; then rm -rf web/playwright-report web/test-results; fi; exit $$rc
 
 # Runs each Fuzz* target for FUZZTIME (go test -fuzz takes one target per run).
 fuzz:
