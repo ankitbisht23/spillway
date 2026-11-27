@@ -117,6 +117,40 @@ services:
     depends_on:
       demo-migrate: { condition: service_completed_successfully }
 
+  # The base load (SC-02, ADR-0096 §1, §2): demo-traffic run
+  # --scenario=base sends each tenant's base load round robin over the
+  # three demo gateways while the demo runs, with keys it issues at start
+  # and replaces before they expire (never printed). make demo-d1 … d7
+  # stop it, run the scenario (base load plus its bursts) in a one-off
+  # container of this service and start it again (deploy/demo/scenario.sh),
+  # so exactly one base load runs at any time. Its health listener is
+  # loopback inside the container (8090, docs/ports.md).
+  demo-traffic:
+    <<: *demo-traffic
+    labels: { spillway.demo: "true" }
+    command: ["run", "--scenario=base"]
+    environment:
+      SPILLWAY_DEMO_CP_URL: http://controlplane:8080
+      SPILLWAY_DEMO_TOKEN_URL: http://keycloak:8080/auth/realms/spillway/protocol/openid-connect/token
+      SPILLWAY_DEMO_CLIENT_ID: spillway-ci
+      SPILLWAY_DEMO_CLIENT_SECRET: ${SPILLWAY_CI_CLIENT_SECRET:-dev-only-not-secret} # never printed (SEC-09)
+      SPILLWAY_DEMO_GATEWAYS: http://gateway-1:8000,http://gateway-2:8000,http://gateway-3:8000
+      SPILLWAY_DEMO_ADMIN_URLS: http://gateway-1:8001,http://gateway-2:8001,http://gateway-3:8001
+    ulimits:
+      nofile: 65536
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "/demo-traffic", "healthcheck"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    depends_on:
+      controlplane: { condition: service_healthy }
+      keycloak: { condition: service_healthy }
+      gateway-1: { condition: service_healthy }
+      gateway-2: { condition: service_healthy }
+      gateway-3: { condition: service_healthy }
+
   # The demo gateways: always these three (ADR-0094 §4); gateway-4 and
   # gateway-5 stay down.
   gateway-1:

@@ -1,4 +1,4 @@
-package main
+package loadgen
 
 import (
 	"context"
@@ -49,8 +49,8 @@ func TestSchedule(t *testing.T) {
 	const total = 30
 	var started atomic.Int64
 	answer := make(chan struct{})
-	g := generator{clock: clk, rate: 10, warmup: time.Second, duration: 2 * time.Second, maxInFlight: total,
-		do: func(context.Context) (int, string, error) {
+	g := Generator{Clock: clk, Rate: 10, Warmup: time.Second, Duration: 2 * time.Second, MaxInFlight: total,
+		Do: func(context.Context, time.Time) (int, string, error) {
 			// Nothing is answered until the last request has been sent.
 			if started.Add(1) == total {
 				close(answer)
@@ -62,7 +62,7 @@ func TestSchedule(t *testing.T) {
 				return 0, "", errors.New("the generator waited for an answer before sending")
 			}
 		}}
-	r := g.run(t.Context())
+	r := g.Run(t.Context())
 
 	var want []time.Time
 	for i := range total {
@@ -71,7 +71,7 @@ func TestSchedule(t *testing.T) {
 	if !slices.Equal(clk.sleeps, want) {
 		t.Errorf("due times = %v, want every 100 ms from the start: %v", clk.sleeps, want)
 	}
-	if r.Requests != (requestCounts{Scheduled: 20, Sent: 20}) || r.Status["2xx"] != 20 || len(r.Status) != 1 || len(r.Errors) != 0 {
+	if r.Requests != (RequestCounts{Scheduled: 20, Sent: 20}) || r.Status["2xx"] != 20 || len(r.Status) != 1 || len(r.Errors) != 0 {
 		t.Errorf("requests = %+v, status = %v, errors = %v; want 20 scheduled, sent and 2xx", r.Requests, r.Status, r.Errors)
 	}
 	if r.TargetRPS != 10 || r.AchievedRPS != 10 || !r.Valid || r.WarmupS != 1 || r.DurationS != 2 || r.Protocol != "HTTP/1.1" {
@@ -94,10 +94,10 @@ func TestSchedule(t *testing.T) {
 func TestScheduleLate(t *testing.T) {
 	start := time.Unix(1_000_000, 0)
 	clk := &fakeClock{now: start, lag: time.Second}
-	g := generator{clock: clk, rate: 10, duration: 2 * time.Second, maxInFlight: 100,
-		do: func(context.Context) (int, string, error) { return http.StatusOK, "HTTP/1.1", nil }}
-	r := g.run(t.Context())
-	if r.Requests != (requestCounts{Scheduled: 20, Sent: 10, Dropped: 10}) || r.AchievedRPS != 5 || r.Valid {
+	g := Generator{Clock: clk, Rate: 10, Duration: 2 * time.Second, MaxInFlight: 100,
+		Do: func(context.Context, time.Time) (int, string, error) { return http.StatusOK, "HTTP/1.1", nil }}
+	r := g.Run(t.Context())
+	if r.Requests != (RequestCounts{Scheduled: 20, Sent: 10, Dropped: 10}) || r.AchievedRPS != 5 || r.Valid {
 		t.Errorf("requests = %+v, achieved = %v rps, valid = %v; want 10 of 20 sent, 5 rps, invalid", r.Requests, r.AchievedRPS, r.Valid)
 	}
 	// Latency includes the lateness: the first request was due at 0 and sent at 1 s.
@@ -112,16 +112,16 @@ func TestScheduleLate(t *testing.T) {
 func TestFailures(t *testing.T) {
 	start := time.Unix(1_000_000, 0)
 	var calls atomic.Int64
-	g := generator{clock: &fakeClock{now: start}, rate: 10, warmup: time.Second, duration: 2 * time.Second, maxInFlight: 100,
-		do: func(context.Context) (int, string, error) {
+	g := Generator{Clock: &fakeClock{now: start}, Rate: 10, Warmup: time.Second, Duration: 2 * time.Second, MaxInFlight: 100,
+		Do: func(context.Context, time.Time) (int, string, error) {
 			if calls.Add(1)%2 == 0 {
 				return 0, "", errors.New("no answer")
 			}
 			return http.StatusServiceUnavailable, "HTTP/1.1", nil
 		}}
-	r := g.run(t.Context())
+	r := g.Run(t.Context())
 	// The fake clock stops at the last request's due time, 2.9 s.
-	want := failures{Count: 30, First: start, Last: start.Add(2900 * time.Millisecond), SpanMS: 2900}
+	want := Failures{Count: 30, First: start, Last: start.Add(2900 * time.Millisecond), SpanMS: 2900}
 	if r.Failures == nil || !r.Failures.First.Equal(want.First) || !r.Failures.Last.Equal(want.Last) || r.Failures.Count != want.Count || r.Failures.SpanMS != want.SpanMS {
 		t.Errorf("failures = %+v, want %+v", r.Failures, want)
 	}
@@ -129,12 +129,12 @@ func TestFailures(t *testing.T) {
 		t.Errorf("status = %v, errors = %v; want the 20 measured requests", r.Status, r.Errors)
 	}
 
-	g.do = func(context.Context) (int, string, error) { return http.StatusOK, "HTTP/1.1", nil }
-	if r := g.run(t.Context()); r.Failures != nil {
+	g.Do = func(context.Context, time.Time) (int, string, error) { return http.StatusOK, "HTTP/1.1", nil }
+	if r := g.Run(t.Context()); r.Failures != nil {
 		t.Errorf("failures = %+v in a run of 2xx, want none", r.Failures)
 	}
 
-	var s stats
+	var s Stats
 	at := func(ms int) time.Time { return start.Add(time.Duration(ms) * time.Millisecond) }
 	s.fail(at(500), at(600))
 	s.fail(at(200), at(300))
@@ -154,8 +154,36 @@ func TestErrorKind(t *testing.T) {
 		{&url.Error{Op: "Get", URL: "http://x", Err: &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}}, "other"},
 		{errors.New("unexpected EOF"), "other"},
 	} {
-		if got := errorKind(tt.err); got != tt.want {
-			t.Errorf("errorKind(%v) = %q, want %q", tt.err, got, tt.want)
+		if got := ErrorKind(tt.err); got != tt.want {
+			t.Errorf("ErrorKind(%v) = %q, want %q", tt.err, got, tt.want)
 		}
+	}
+}
+
+// TestPer runs a rate below one a second, 1 request every 2 s for 10 s: due
+// at 0, 2, … 8 s, valid, and achieved 0.5 rps; Do gets each due time.
+func TestPer(t *testing.T) {
+	start := time.Unix(1_000_000, 0)
+	clk := &fakeClock{now: start}
+	var mu sync.Mutex
+	var dues []time.Time
+	g := Generator{Clock: clk, Rate: 1, Per: 2 * time.Second, Duration: 10 * time.Second, MaxInFlight: 10,
+		Do: func(_ context.Context, due time.Time) (int, string, error) {
+			mu.Lock()
+			dues = append(dues, due)
+			mu.Unlock()
+			return http.StatusOK, "HTTP/1.1", nil
+		}}
+	r := g.Run(t.Context())
+	var want []time.Time
+	for i := range 5 {
+		want = append(want, start.Add(time.Duration(i)*2*time.Second))
+	}
+	slices.SortFunc(dues, func(a, b time.Time) int { return a.Compare(b) })
+	if !slices.Equal(clk.sleeps, want) || !slices.Equal(dues, want) {
+		t.Errorf("due times %v, Do saw %v; want every 2 s: %v", clk.sleeps, dues, want)
+	}
+	if r.Requests != (RequestCounts{Scheduled: 5, Sent: 5}) || !r.Valid || r.AchievedRPS != 0.5 {
+		t.Errorf("requests %+v, valid %v, achieved %v; want 5 sent, valid, 0.5 rps", r.Requests, r.Valid, r.AchievedRPS)
 	}
 }

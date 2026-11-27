@@ -26,6 +26,7 @@ services=(
 	redis-0 redis-1 redis-2 redis-3 redis-4 redis-5 postgres keycloak
 	otel-collector tempo loki prometheus redis-exporter grafana toxiproxy
 	upstream-1 upstream-2 upstream-3 controlplane gateway-1 gateway-2 gateway-3
+	demo-traffic
 )
 
 # demo_containers lists the IDs of the spillway project's demo containers.
@@ -66,6 +67,7 @@ up() {
 		  admin UI       http://localhost:8080 (the realm's test users, docs/setup.md Step 4)
 		  gateway-1      http://localhost:8000 (gateway-2 and gateway-3 inside the network)
 		  Grafana        http://localhost:3000
+		  base load      258 rps per the demo-traffic service; make demo-d1 … make demo-d7 run a scenario
 		  make demo-reset restores the seed; make demo-down returns to make dev
 	EOF
 }
@@ -105,7 +107,8 @@ reset() {
 		echo "demo-reset: the faults could not be switched off through the control plane; creating the demo proxies again" >&2
 		"${demo[@]}" run --rm --no-deps demo-init
 	fi
-	"${demo[@]}" stop controlplane
+	# The base load stops first: its keys go with the database.
+	"${demo[@]}" stop demo-traffic controlplane
 	"${compose[@]}" exec -T postgres psql -U spillway -d spillway -v ON_ERROR_STOP=1 -qc 'DROP DATABASE IF EXISTS spillway_demo WITH (FORCE)'
 	# demo-db and demo-migrate run again as the control plane's
 	# dependencies; up --wait cannot name a one-shot, so the seed runs on
@@ -114,6 +117,8 @@ reset() {
 	DEMO_MODE=true "${demo[@]}" run --rm --no-deps demo-seed
 	# From the new config, not from a snapshot of the dropped database.
 	DEMO_MODE=true "${demo[@]}" up -d --wait --wait-timeout 300 --force-recreate --no-deps gateway-1 gateway-2 gateway-3
+	# The base load again, with keys from the new database.
+	DEMO_MODE=true "${demo[@]}" up -d --wait --wait-timeout 300 --no-deps demo-traffic
 	echo "demo-reset: done in $((SECONDS - start)) s"
 }
 

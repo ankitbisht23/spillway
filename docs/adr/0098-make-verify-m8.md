@@ -1,6 +1,6 @@
 # 0098. make verify-m8
 
-- **Status:** Accepted; d6.3's retry-budget rule superseded by 0101
+- **Status:** Accepted; d6.3's retry-budget rule superseded by 0101; D4's policy level and d6.1's before-the-fault window amended by 0102
 - **Date:** 2026-11-27
 - **Requirement IDs:** SC-01 – SC-03, SC-08, SC-09, RL-03, RL-05, RL-08, RL-09, RL-11 – RL-14, RL-21 – RL-26, GW-13, GW-14, UI-01, CP-04, CP-09, CP-13, CP-20, NFR-06, NFR-13, NFR-15, SEC-05
 

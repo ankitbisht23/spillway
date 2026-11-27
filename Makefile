@@ -11,7 +11,7 @@ FUZZTIME ?= 5s
 # Committed dev defaults first, then local overrides if present (ADR-0004).
 COMPOSE := docker compose --env-file .env.example $(if $(wildcard .env.local),--env-file .env.local)
 
-.PHONY: tools hooks certs dev demo demo-reset demo-down demo-fault-redis demo-fault-upstream demo-fault-clear test-demo kind-up kind-down kind-smoke kind-rollout kind-images kind-grafana kind-prometheus test test-go test-web test-e2e fuzz test-integration proto api sqlc web-gen web-build lint lint-go lint-web lint-proto lint-api lint-sql lint-helm lint-obs lint-actions release-build release-publish bench bench-gate verify-m0 verify-m0-stack verify-m1 verify-m1-reload verify-m2 verify-m2-shadow verify-m3 verify-m4 verify-m5 verify-m6 verify-m7 accuracy chaos-redis-outage chaos-redis-primary chaos-cp-outage nfr-keys nfr-soak nfr-noisy chaos-redis-latency chaos-gateway-kill chaos
+.PHONY: tools hooks certs dev demo demo-reset demo-down demo-fault-redis demo-fault-upstream demo-fault-clear demo-d1 demo-d2 demo-d3 demo-d4 demo-d5 demo-d6 demo-d7 test-demo kind-up kind-down kind-smoke kind-rollout kind-images kind-grafana kind-prometheus test test-go test-web test-e2e fuzz test-integration proto api sqlc web-gen web-build lint lint-go lint-web lint-proto lint-api lint-sql lint-helm lint-obs lint-actions release-build release-publish bench bench-gate verify-m0 verify-m0-stack verify-m1 verify-m1-reload verify-m2 verify-m2-shadow verify-m3 verify-m4 verify-m5 verify-m6 verify-m7 accuracy chaos-redis-outage chaos-redis-primary chaos-cp-outage nfr-keys nfr-soak nfr-noisy chaos-redis-latency chaos-gateway-kill chaos
 
 # Host-run processes and tests reach Redis Cluster nodes through this map
 # (ADR-0004). Set only here, never in compose or .env files.
@@ -231,13 +231,25 @@ demo-fault-upstream:
 demo-fault-clear:
 	@deploy/demo/demo.sh fault clear
 
+# The scenarios D1–D7 on the running demo (SC-02, ADR-0096 §2): each stops
+# the base-load service, runs demo-traffic run --scenario=dN (the base load
+# plus the scenario's bursts, faults or actions, 45–90 s) with a line a
+# second and a summary per tenant, then starts the base load again, also
+# after Ctrl-C (deploy/demo/scenario.sh). make demo-d7 BLOCK=1 also blocks
+# the leaked key once heavy hitters show it and times the block per
+# replica. Keys are named by ID, never printed.
+demo-d1 demo-d2 demo-d3 demo-d4 demo-d5 demo-d6 demo-d7:
+	@BLOCK="$(BLOCK)" deploy/demo/scenario.sh $(@:demo-%=%)
+
 # The demo's tests (SC-01, SC-08, ADR-0094, ADR-0095, test/demo, build tag
 # demo): make demo prints no secret, token or key and runs in demo mode
 # (demo keys expire within 30 minutes and have their own limits); make
 # demo-reset puts a modified demo back to the seed and leaves the dev
 # database as it was; the fault switches show D5's failure modes and D6's
-# breaker and retry budget on gateway-1 (SC-03, ADR-0101). Then make
-# demo-down, whatever the result. About 6 minutes on a built stack.
+# breaker and retry budget on gateway-1 (SC-03, ADR-0101); make demo-d1
+# runs its scenario with the base load and starts the base load again
+# (SC-02). Then make demo-down, whatever the result. About 8 minutes on a
+# built stack.
 test-demo:
 	@go test -tags demo -count=1 -timeout 30m -v ./test/demo/; rc=$$?; \
 		$(MAKE) --no-print-directory demo-down; exit $$rc
