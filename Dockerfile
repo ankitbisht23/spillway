@@ -8,7 +8,7 @@
 # control plane only. Its output is the same on every platform, so it runs
 # once, on the build machine's. Node 25 and later have no corepack: pnpm
 # comes from npm at package.json's packageManager version.
-FROM --platform=$BUILDPLATFORM node:26.13.0-trixie-slim AS web
+FROM --platform=$BUILDPLATFORM node:26.13.0-trixie-slim@sha256:5adad64f9a1fca2d51972caa65983634c8a774eb300d72b20f7f2a0f60368072 AS web
 WORKDIR /src
 RUN npm install -g pnpm@12.16.1
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
@@ -17,7 +17,7 @@ RUN --mount=type=cache,target=/root/.local/share/pnpm/store pnpm install --froze
 COPY web/ web/
 RUN pnpm -C web build
 
-FROM --platform=$BUILDPLATFORM golang:1.27.4-trixie AS build
+FROM --platform=$BUILDPLATFORM golang:1.27.4-trixie@sha256:430985542100b871e108ccc00e8dcc5eef08ca14ee5825e98ebf563d8ffec4ee AS build
 ARG TARGETOS TARGETARCH VERSION=dev
 WORKDIR /src
 COPY go.mod go.sum ./
