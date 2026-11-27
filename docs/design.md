@@ -574,7 +574,7 @@ A reviewer should see the limiter earn its keep in under five minutes: `make dem
 | D6 | Upstream protection | Upstream slowed: breaker opens, retries stay within budget | GW-13, GW-14 |
 | D7 | Leaked key | Heavy hitters surface an abusive key; one click blocks it (an identity change, ≤ 5 s) | RL-21, RL-09, CP-20 |
 
-- **SC-01** (M8) `make demo` boots the stack with seeded tenants, plans, keys and policies; `make demo-reset` restores it in one command.
+- **SC-01** (M8) `make demo` boots the stack in demo mode with seeded tenants, consumers, plans, routes and policies in its own database (`spillway_demo`), and demo keys are issued at run time (SC-08); `make demo-reset` restores it in one command without touching the dev database, and `make demo-down` returns to `make dev`.
 - **SC-02** (M8) Traffic simulator `cmd/demo-traffic --scenario=d1…d7` drives base load plus each scenario’s bursts.
 - **SC-03** (M8) Fault switches for D5 and D6 as `make` targets and Playground buttons, toxiproxy only: Redis traffic runs through per-node toxiproxy proxies via the ADR-0004 address map, and upstream latency is added in toxiproxy. Operator role only, `DEMO_MODE=true` only; no container gets the Docker socket.
 - **SC-04** (M8) Playground screen in the admin UI (UI-07).
@@ -722,7 +722,7 @@ Exit (`make verify-m7`): every NFR row (NFR-01 – NFR-15) meets its target, wit
 
 ### M8 Showcase · est. 1.5 weeks
 
-- [ ] Demo seed data, `make demo` and `make demo-reset` (SC-01)
+- [x] Demo seed data, `make demo` and `make demo-reset` (SC-01)
 - [ ] Traffic simulator and toxiproxy-only fault switches for D1–D7 (SC-02, SC-03)
 - [ ] Playground screen with server-side traffic, and Grafana Demo dashboard (SC-04, SC-05, UI-07)
 - [ ] Demo-mode guards and expiring demo keys (SC-08)
@@ -769,7 +769,7 @@ spillway/
 │   └── telemetry/        # metrics, tracing, logging
 ├── api/                  # openapi.yaml (OpenAPI-first), proto/config.proto (the one config schema)
 ├── web/                  # React + TS admin UI (incl. Playground)
-├── deploy/               # compose/ (service configs), kind/ (cluster, dependency and observability manifests, values), helm/spillway/, grafana/dashboards/, prometheus/rules/
+├── deploy/               # compose/ (service configs), demo/ (demo seed, Caddyfile, demo scripts), kind/ (cluster, dependency and observability manifests, values), helm/spillway/, grafana/dashboards/, grafana/demo/, prometheus/rules/
 ├── test/                 # integration/, chaos/, load/ (scripts; results on the bench-results branch), accuracy/, verify/, kind/, obs/
 ├── docs/                 # design.md, setup.md, demo.md, ports.md, adr/, runbooks/
 ├── go.mod                # module github.com/ankitbisht23/spillway (no go.work)

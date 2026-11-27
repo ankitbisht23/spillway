@@ -1,0 +1,32 @@
+# The demo's tenants and consumers (SC-01, ADR-0094 §3), one tenant per plan
+# of deploy/demo/config.yaml. demo-traffic seed creates each by its exact
+# name if absent, or puts it back on its plan; every consumer is on its
+# tenant's plan. No API key is seeded: demo keys are issued at run time and
+# expire within 30 minutes (ADR-0095 §3).
+#   -web         base load (ADR-0096 §2)
+#   -mobile      the scenarios' bursts
+#   -partner     D7's heavy hitter
+#   -playground  the Playground's keys (ADR-0096 §3)
+#   -service     gateway-tests' service account, for the service route (ADR-0097 §3)
+tenants:
+  - name: free-co
+    plan: free
+    consumers:
+      - name: free-co-web
+      - name: free-co-mobile
+      - name: free-co-partner
+      - name: free-co-playground
+  - name: pro-co
+    plan: pro
+    consumers:
+      - name: pro-co-web
+      - name: pro-co-mobile
+      - name: pro-co-playground
+      - name: pro-co-service
+        jwt_subject: 0b5e7c1a-5f1d-4c3e-9a00-0000000000c2
+  - name: enterprise-co
+    plan: enterprise
+    consumers:
+      - name: enterprise-co-web
+      - name: enterprise-co-mobile
+      - name: enterprise-co-playground

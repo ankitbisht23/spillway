@@ -1,0 +1,122 @@
+# The demo stack (SC-01, ADR-0094 §2): everything demo-only, used only by
+# the demo targets as a second file after compose.yaml, with --profile
+# replicas --profile demo (deploy/demo/demo.sh). compose.yaml does not
+# change. Every container this file creates or overrides carries the label
+# spillway.demo=true, and make dev removes such containers before it starts
+# the dev stack, so no dev, verify or bench run meets a demo container.
+#
+# The demo runs on its own database, spillway_demo, in compose's Postgres
+# (ADR-0094 §1); gateway-1 … gateway-3 run in managed mode and reach Redis
+# through toxiproxy's demo-redis-N proxies (ADR-0094 §4, §5).
+
+x-env-local: &env-local
+  - path: .env.local
+    required: false
+
+x-demo-traffic: &demo-traffic
+  build: { context: ., target: demo-traffic }
+  image: spillway-demo-traffic:dev
+  profiles: [demo]
+  env_file: *env-local
+  read_only: true
+
+x-demo-gateway: &demo-gateway
+  labels: { spillway.demo: "true" }
+  # Managed mode (ADR-0038): both files set empty, the control plane set.
+  # The address map sends each Redis node, as the seeds name it and as
+  # every slot map, MOVED and ASK names it, through its demo proxy, where
+  # D5 cuts it (ADR-0094 §5).
+  environment:
+    SPILLWAY_GATEWAY_CONFIG: ""
+    SPILLWAY_GATEWAY_IDENTITY: ""
+    SPILLWAY_GATEWAY_CONTROL_PLANE: controlplane:9090
+    SPILLWAY_REDIS_ADDR_MAP: redis-0:6379=toxiproxy:26380,redis-1:6379=toxiproxy:26381,redis-2:6379=toxiproxy:26382,redis-3:6379=toxiproxy:26383,redis-4:6379=toxiproxy:26384,redis-5:6379=toxiproxy:26385
+  depends_on:
+    demo-init: { condition: service_completed_successfully }
+    demo-seed: { condition: service_completed_successfully }
+
+services:
+  # One-shot: creates the database spillway_demo, owned by spillway, if it
+  # does not exist (ADR-0094 §1).
+  demo-db:
+    image: postgres:18.6@sha256:e3d24f6906d0760bf4da0dae872415391ededefad23fd471c47dc53b0ddf3c42
+    profiles: [demo]
+    labels: { spillway.demo: "true", spillway.oneshot: "true" }
+    env_file: *env-local
+    read_only: true
+    environment:
+      PGHOST: postgres
+      PGUSER: spillway
+      PGDATABASE: spillway
+      PGPASSWORD: ${POSTGRES_PASSWORD:-dev-only-not-secret}
+    entrypoint: ["sh", "-c"]
+    command:
+      - psql -tAc "SELECT 1 FROM pg_database WHERE datname = 'spillway_demo'" | grep -q 1 || psql -v ON_ERROR_STOP=1 -c 'CREATE DATABASE spillway_demo OWNER spillway'
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  # One-shot: compose's migrate, on spillway_demo.
+  demo-migrate:
+    build: { context: ., target: controlplane }
+    image: spillway-controlplane:dev
+    profiles: [demo]
+    labels: { spillway.demo: "true", spillway.oneshot: "true" }
+    env_file: *env-local
+    read_only: true
+    command: ["migrate"]
+    environment:
+      SPILLWAY_CP_MIGRATE_DATABASE_URL: postgres://spillway@postgres:5432/spillway_demo?sslmode=disable # the owner role
+      SPILLWAY_CP_MIGRATE_PASSWORD: ${POSTGRES_PASSWORD:-dev-only-not-secret}
+      SPILLWAY_CP_DATABASE_PASSWORD: ${SPILLWAY_CP_DATABASE_PASSWORD:-dev-only-not-secret} # the app role's, as compose's migrate sets it
+    depends_on:
+      demo-db: { condition: service_completed_successfully }
+
+  # One-shot: the demo's toxiproxy proxies, demo-redis-0 … 5 on 26380-26385
+  # and demo-upstream-1 … 3 on 26391-26393, inside the network only
+  # (ADR-0094 §5, docs/ports.md). make demo-down deletes them.
+  demo-init:
+    <<: *demo-traffic
+    labels: { spillway.demo: "true", spillway.oneshot: "true" }
+    command: ["proxies"]
+    environment:
+      SPILLWAY_DEMO_TOXIPROXY_URL: http://toxiproxy:8474
+    depends_on:
+      toxiproxy: { condition: service_healthy }
+
+  # One-shot: imports and publishes deploy/demo/config.yaml and creates the
+  # tenants and consumers of deploy/demo/seed.yaml through the REST API with
+  # a spillway-ci service token (ADR-0094 §3); idempotent; no API key.
+  demo-seed:
+    <<: *demo-traffic
+    labels: { spillway.demo: "true", spillway.oneshot: "true" }
+    command: ["seed"]
+    environment:
+      SPILLWAY_DEMO_CP_URL: http://controlplane:8080
+      SPILLWAY_DEMO_TOKEN_URL: http://keycloak:8080/auth/realms/spillway/protocol/openid-connect/token
+      SPILLWAY_DEMO_CLIENT_ID: spillway-ci
+      SPILLWAY_DEMO_CLIENT_SECRET: ${SPILLWAY_CI_CLIENT_SECRET:-dev-only-not-secret} # never printed (SEC-09)
+    volumes: ["./deploy/demo:/etc/spillway-demo:ro"]
+    depends_on:
+      controlplane: { condition: service_healthy }
+      keycloak: { condition: service_healthy }
+
+  # The control plane on spillway_demo. No Redis seeds, so the quota
+  # flusher is off (an override cannot unset a variable; empty means none):
+  # the demo has no quotas, and the demo control plane never writes quota
+  # state for tenant IDs the dev database also uses (D29).
+  controlplane:
+    labels: { spillway.demo: "true" }
+    environment:
+      SPILLWAY_CP_DATABASE_URL: postgres://spillway_app@postgres:5432/spillway_demo?sslmode=disable
+      SPILLWAY_CP_REDIS_ADDRS: ""
+    depends_on:
+      demo-migrate: { condition: service_completed_successfully }
+
+  # The demo gateways: always these three (ADR-0094 §4); gateway-4 and
+  # gateway-5 stay down.
+  gateway-1:
+    <<: *demo-gateway
+  gateway-2:
+    <<: *demo-gateway
+  gateway-3:
+    <<: *demo-gateway
