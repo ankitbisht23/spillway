@@ -29,6 +29,7 @@ ADR-0096 §1 and §2 settle `demo-traffic run --scenario=base|d1…d7` (with `--
 - Every scenario runs from make, prints what the viewer should see, and judges itself by ADR-0098's rules with `--check`, so the verify task wraps the checks without re-implementing them.
 - D4 shows a route-level policy; the README's D4 scene and `docs/demo.md` describe it as "a stricter per-consumer limit on orders".
 - `make test-demo` grows by about 75 s (`TestScenarioD1`); the base load now runs during the demo's other tests too.
+- **Open for the user: d6.1's "before the fault" window.** d6.1 is built as ADR-0098 states it: every `orders` answer due in [0, Ts) is 2xx, Ts being when `setDemoFault upstream-slow on` returns. The load runs on through the switch, so a request due a few milliseconds before Ts can still be in flight when toxiproxy adds the 4 s latency toxic; its response is then delayed past the 2.5 s per-try timeout and it answers 504. One check run in four failed d6.1 that way (3 × 504 among 2,395 answers, every other D6 rule passing; the gateway behaved correctly). Proposed, not applied (it changes a pass rule): judge as "before the fault" only the answers completed before the switch-on request was sent, and print how many in-flight requests that leaves out. Alternatives: keep the rule (D6's check then fails some runs by timing alone), or pause the D6 stream around the switch (changes the load shape).
 
 ## Alternatives considered
 
