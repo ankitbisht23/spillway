@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -73,17 +74,40 @@ func TestLoadSettings(t *testing.T) {
 
 // TestDemoModeSetting: SPILLWAY_CP_DEMO_MODE is off unless set to a value
 // strconv.ParseBool reads as true (SC-08, ADR-0095 §1); in demo mode
-// SPILLWAY_CP_DEMO_TOXIPROXY_URL is required and checked, and with demo
-// mode off it is ignored (SC-03).
+// SPILLWAY_CP_DEMO_TOXIPROXY_URL (SC-03) and SPILLWAY_CP_DEMO_GATEWAYS
+// (UI-07) are required and checked, and with demo mode off they are
+// ignored.
 func TestDemoModeSetting(t *testing.T) {
-	base := func(mode, toxiproxy string) map[string]string {
+	const gateways = "http://gateway-1:8000,http://gateway-2:8000,http://gateway-3:8000"
+	baseGW := func(mode, toxiproxy, gw string) map[string]string {
 		return withOIDC(map[string]string{
 			"SPILLWAY_CP_DATABASE_URL":       "postgres://spillway_app@db:5432/spillway",
 			"SPILLWAY_CP_DATABASE_PASSWORD":  secretValue,
 			"SPILLWAY_CP_ALLOWED_NETWORKS":   "172.29.0.0/16",
 			"SPILLWAY_CP_DEMO_MODE":          mode,
 			"SPILLWAY_CP_DEMO_TOXIPROXY_URL": toxiproxy,
+			"SPILLWAY_CP_DEMO_GATEWAYS":      gw,
 		})
+	}
+	base := func(mode, toxiproxy string) map[string]string { return baseGW(mode, toxiproxy, gateways) }
+	if s, err := loadSettings(env(base("true", "http://toxiproxy:8474"))); err != nil ||
+		!slices.Equal(s.demoGateways, []string{"http://gateway-1:8000", "http://gateway-2:8000", "http://gateway-3:8000"}) {
+		t.Errorf("demo gateways %q, %v", s.demoGateways, err)
+	}
+	if s, err := loadSettings(env(baseGW("false", "", "not a URL"))); err != nil || s.demoGateways != nil {
+		t.Errorf("demo mode off: the gateways are ignored, got %q, %v", s.demoGateways, err)
+	}
+	for v, msg := range map[string]string{
+		"":                          "SPILLWAY_CP_DEMO_GATEWAYS: required in demo mode",
+		" , ":                       "SPILLWAY_CP_DEMO_GATEWAYS: required in demo mode",
+		"gateway-1:8000":            "want an http or https URL",
+		"http://u:p@gateway-1:8000": "user info is not allowed",
+		"http://gateway-1:8000/v1":  "a path is not allowed",
+		"http://gateway-1:8000,http://gateway-1:8000/": "is listed twice",
+	} {
+		if _, err := loadSettings(env(baseGW("true", "http://toxiproxy:8474", v))); err == nil || !strings.Contains(err.Error(), msg) {
+			t.Errorf("SPILLWAY_CP_DEMO_GATEWAYS=%q: %v, want %q", v, err, msg)
+		}
 	}
 	for v, want := range map[string]bool{"": false, "false": false, "0": false, "true": true, "1": true, "TRUE": true} {
 		s, err := loadSettings(env(base(v, "http://toxiproxy:8474")))

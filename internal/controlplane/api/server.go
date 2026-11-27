@@ -68,7 +68,10 @@ type Server struct {
 	// ADR-0095 §5); nil without a toxiproxy, which getDemo shows as unknown
 	// states and setDemoFault answers 503.
 	faults *demo.Faults
-	log    *slog.Logger
+	// playground runs the Playground's runs (UI-07, ADR-0096 §3); nil
+	// without demo gateways, which starts answer 503.
+	playground *demo.Playground
+	log        *slog.Logger
 }
 
 // Allowlist is the upstream allow-list of SEC-06, the same networks as the
@@ -90,8 +93,9 @@ func New(st *store.Store, allowed Allowlist, resolver Resolver, authn Authentica
 // elsewhere. Each operation's path and method go through guard first
 // (ADR-0040); other requests reach only the 404, never the body reader or
 // the generated server. The stream goes from the guard to its own handler
-// (ADR-0059). With demo mode off, paths under /api/v1/demo answer that same
-// 404 before the guard (ADR-0095).
+// (ADR-0059), as does a Playground run's (ADR-0096 §3). With demo mode
+// off, paths under /api/v1/demo answer that same 404 before the guard
+// (ADR-0095).
 func (s *Server) Handler() http.Handler {
 	notFound := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, &apiError{http.StatusNotFound, apiv1.ErrorCodeNotFound, "no such path", nil})
@@ -110,12 +114,15 @@ func (s *Server) Handler() http.Handler {
 	guarded.Handle("/", notFound)
 	for pattern, op := range operations() {
 		next := api
-		if op.id == openStreamID {
+		switch op.id {
+		case openStreamID:
 			next = http.HandlerFunc(s.openStream)
+		case openPlaygroundStreamID:
+			next = http.HandlerFunc(s.openPlaygroundStream)
 		}
 		guarded.Handle(pattern, s.guard(op, next))
 	}
-	return requestID(s.demoGuard(guarded, notFound))
+	return requestID(withClientIP(s.demoGuard(guarded, notFound)))
 }
 
 type requestIDKey struct{}

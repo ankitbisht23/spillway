@@ -75,6 +75,11 @@ var matrix = map[string][]string{
 	"getShadowReport":    all,       // a read, every role (ADR-0060)
 	"getDemo":            all,       // a read, every role; 404 when demo mode is off (ADR-0095)
 	"setDemoFault":       {"admin"}, // admin only, no operator role exists (P42, ADR-0095 §5)
+	// Every role may start Playground runs (P46, D16); stop and stream
+	// are the run's owner's only, as 404 to anyone else (ADR-0096 §3).
+	"startPlaygroundRun":   all,
+	"stopPlaygroundRun":    all,
+	"openPlaygroundStream": all,
 }
 
 // specOp is one operation of the spec as a request.

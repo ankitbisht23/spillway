@@ -106,7 +106,9 @@ services:
   # state for tenant IDs the dev database also uses (D29). Demo mode
   # (SC-08, ADR-0095 §1) comes from DEMO_MODE, which make demo sets true;
   # only this file maps it, so make dev's control plane never has it. The
-  # fault switches (SC-03, ADR-0095 §5) speak only HTTP to toxiproxy's API.
+  # fault switches (SC-03, ADR-0095 §5) speak only HTTP to toxiproxy's API;
+  # the Playground (UI-07, ADR-0096 §3) sends its runs round robin to the
+  # three demo gateways inside the network.
   controlplane:
     labels: { spillway.demo: "true" }
     environment:
@@ -114,6 +116,7 @@ services:
       SPILLWAY_CP_REDIS_ADDRS: ""
       SPILLWAY_CP_DEMO_MODE: ${DEMO_MODE:-false}
       SPILLWAY_CP_DEMO_TOXIPROXY_URL: http://toxiproxy:8474
+      SPILLWAY_CP_DEMO_GATEWAYS: http://gateway-1:8000,http://gateway-2:8000,http://gateway-3:8000
     depends_on:
       demo-migrate: { condition: service_completed_successfully }
 
