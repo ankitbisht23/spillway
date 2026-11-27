@@ -106,7 +106,7 @@ Decisions that shape Spillway and are not obvious from the code or from docs/des
 | [0095](0095-demo-mode-guards-demo-keys-and-fault-switches.md) | Demo mode guards, demo keys and fault switches | Accepted | 2026-11-27 |
 | [0096](0096-traffic-simulator-playground-and-grafana-demo.md) | Traffic simulator, Playground and the Grafana Demo dashboard | Accepted | 2026-11-27 |
 | [0097](0097-public-demo-caddy-tunnel-and-demo-share.md) | Public demo: Caddy, the tunnel, make demo-share and its stand-in test | Accepted | 2026-11-27 |
-| [0098](0098-make-verify-m8.md) | make verify-m8 | Accepted | 2026-11-27 |
+| [0098](0098-make-verify-m8.md) | make verify-m8 | Accepted; d6.3's retry-budget rule superseded by 0101 | 2026-11-27 |
 | [0099](0099-readme-gifs-and-recording.md) | README GIFs and recording | Accepted | 2026-11-27 |
 | [0100](0100-demo-guards-implementation-details.md) | Demo guards: implementation details | Accepted | 2026-11-27 |
-| [0101](0101-fault-switches-implementation-details.md) | Fault switches: implementation details | Proposed | 2026-11-27 |
+| [0101](0101-fault-switches-implementation-details.md) | Fault switches: implementation details | Accepted | 2026-11-27 |

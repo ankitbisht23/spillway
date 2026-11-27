@@ -31,8 +31,9 @@ import (
 // and every GCRA burst holds 2 s of its rate, so requests a stall holds
 // back are admitted when they arrive; latency checks compare medians;
 // gateway-side, 1% of the Redis checks may exceed 10 ms (a stall lengthens
-// only the few checks in flight); D6's budget windows are ADR-0031's rule,
-// bounded by each scrape's send and receive times; every wait (5 s for
+// only the few checks in flight); D6's budget rule (ADR-0101) follows from
+// the gateway's own grant rule whatever the timing, and a stall only widens
+// a scrape's send-to-receive span, which bounds its read time; every wait (5 s for
 // Redis to decide again, 15 s for the breaker to open, 30 s for it to
 // close) is many times the longest stall.
 
@@ -452,14 +453,16 @@ func TestFaultRedisCut(t *testing.T) {
 
 // TestFaultUpstreamSlow is D6 on gateway-1 (GW-13, GW-14): pro-co-mobile
 // sends orders at 30 rps, gateway-1's metrics are scraped every second.
-// Before: every answer 2xx, circuit closed. make demo-fault-upstream ON=1
-// adds 4 s to every orders endpoint (over its 2.5 s per-try timeout); the
-// circuit opens within 15 s and gw_requests_total{reason="circuit_open"}
-// grows; retries stay within the budget in every window of ADR-0031's rule
-// (b) (ΔR ≤ 0.2 × first attempts + 30 over 8–10 s windows, at least 30
-// windows, every scrape answered, at most 2 s apart). make
-// demo-fault-upstream ON=0 removes it after 20 s; the circuit closes within
-// 30 s and at least 99% of the answers due 20–30 s after are 2xx.
+// Before (10 s of steady load): every answer 2xx, circuit closed. make
+// demo-fault-upstream ON=1 adds 4 s to every orders endpoint (over its 2.5 s
+// per-try timeout); the circuit opens within 15 s and
+// gw_requests_total{reason="circuit_open"} grows; retries stay within the
+// budget by ADR-0101's rule, which amends ADR-0098 d6.3 (for scrapes i < j
+// read at most 9.9 s apart, ΔR(i, j) ≤ 0.2 × ΔQ(k, j) + 30, k the latest
+// scrape read at least 10 s before i; at least 30 windows of 8–9.9 s, every
+// scrape answered, at most 2 s apart). make demo-fault-upstream ON=0 removes
+// it after 20 s; the circuit closes within 30 s and at least 99% of the
+// answers due 20–30 s after are 2xx.
 func TestFaultUpstreamSlow(t *testing.T) {
 	clearFaultsAfter(t)
 	key := issueKey(t, "pro-co-mobile")
@@ -488,7 +491,8 @@ func TestFaultUpstreamSlow(t *testing.T) {
 	t.Cleanup(stopScrapes)
 	circuit := func(m metrics) float64 { return m.sum("gw_circuit_state", "upstream", "orders") }
 
-	before := phase(t, key, 5*time.Second, load{"orders", 30})["orders"]
+	// 10 s, so that the first windows of the fault have their k.
+	before := phase(t, key, 10*time.Second, load{"orders", 30})["orders"]
 	if s := share(before, is2xx); s != 1 {
 		t.Errorf("before the fault: %.1f%% of orders 2xx, want all", 100*s)
 	}
@@ -550,7 +554,14 @@ func TestFaultUpstreamSlow(t *testing.T) {
 		t.Errorf("gw_requests_total{route=\"orders\", reason=\"circuit_open\"} did not grow in the fault (%v)", d)
 	}
 
-	// ADR-0031's rule (b), as d6.3 of ADR-0098.
+	// ADR-0101's rule, which amends ADR-0098 d6.3 (the user's decision of
+	// 2026-11-27). The budget grants a retry at s only while
+	// R(s-10 s, s] + 1 ≤ 0.2 × Q(s-10 s, s] + 30, its window covering at
+	// least 9.9 s. For i < j read at most 9.9 s apart, every retry counted
+	// in ΔR(i, j) lies in the window of the last of them, s, and that
+	// window's Q counts only first attempts that ended after k (read at
+	// least 10 s before i) and by j. Read times are bounded by each
+	// scrape's send and receive times.
 	retries := func(m metrics) float64 { return m.sum("gw_retries_total", "upstream", "orders", "outcome", "sent") }
 	firsts := func(m metrics) float64 {
 		return m.sum("gw_upstream_duration_seconds_count", "upstream", "orders", "attempt", "1")
@@ -565,25 +576,38 @@ func TestFaultUpstreamSlow(t *testing.T) {
 		}
 	}
 	for j, mj := range scrapes {
-		for _, mi := range scrapes[:j] {
-			if !mi.ok || !mj.ok || mj.recv.Sub(mi.sent) > 10*time.Second || mj.sent.Sub(mi.recv) < 8*time.Second {
+		counted := false
+		for i, mi := range scrapes[:j] {
+			if !mi.ok || !mj.ok || mj.recv.Sub(mi.sent) > 9900*time.Millisecond {
 				continue
 			}
-			r, q := retries(mj)-retries(mi), firsts(mj)-firsts(mi)
-			windows++
+			k := -1
+			for c, mc := range scrapes[:i] {
+				if mc.ok && mi.sent.Sub(mc.recv) >= 10*time.Second {
+					k = c
+				}
+			}
+			if k < 0 {
+				continue
+			}
+			r, q := retries(mj)-retries(mi), firsts(mj)-firsts(scrapes[k])
 			if 5*r > q+150 {
 				over++
+				t.Logf("retry budget: scrapes %d–%d (k %d): %.0f retries, %.0f first attempts", i, j, k, r, q)
 			}
 			tightest = max(tightest, r/(q/5+30))
-			break
+			if !counted && mj.sent.Sub(mi.recv) >= 8*time.Second {
+				windows++
+				counted = true
+			}
 		}
 	}
 	last, first := scrapes[len(scrapes)-1], scrapes[0]
 	sent := retries(last) - retries(first)
 	exhausted := last.sum("gw_retries_total", "upstream", "orders", "outcome", "budget_exhausted") - first.sum("gw_retries_total", "upstream", "orders", "outcome", "budget_exhausted")
-	t.Logf("retry budget: %d windows, %d over, tightest at %.0f%% of its budget; retries sent %.0f, budget_exhausted %.0f", windows, over, 100*tightest, sent, exhausted)
+	t.Logf("retry budget: %d windows, %d pairs over, tightest at %.0f%% of its budget; retries sent %.0f, budget_exhausted %.0f", windows, over, 100*tightest, sent, exhausted)
 	if windows < 30 || over > 0 {
-		t.Errorf("retry budget: %d windows, %d over; want at least 30 and none over", windows, over)
+		t.Errorf("retry budget: %d windows, %d pairs over; want at least 30 windows and no pair over", windows, over)
 	}
 	if sent == 0 {
 		t.Error("no retry was sent in the fault")
