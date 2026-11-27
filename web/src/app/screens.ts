@@ -6,7 +6,8 @@ import type { OperationId } from "../api/roles.gen";
  * from roles that cannot call it, and its URL shows Not allowed (ADR-0058):
  * the audit log's read is admin only; Tenants exists only to manage tenants,
  * which is admin only (every role still reads tenant names elsewhere). A
- * screen with also is current under those paths too.
+ * screen with also is current under those paths too. A screen with demo is
+ * shown only while GET /demo answers (demo mode, SC-08).
  */
 export const navigation = [
   { to: "/overview", label: "Overview" },
@@ -18,8 +19,9 @@ export const navigation = [
   { to: "/tenants", label: "Tenants", op: "createTenant" },
   { to: "/replicas", label: "Replicas" },
   { to: "/history", label: "History" },
+  { to: "/playground", label: "Playground", demo: true },
   { to: "/audit", label: "Audit", op: "listAudit" },
-] as const satisfies readonly { to: string; label: string; op?: OperationId; also?: readonly string[] }[];
+] as const satisfies readonly { to: string; label: string; op?: OperationId; also?: readonly string[]; demo?: true }[];
 
 /** The operation that decides whether a screen is shown, if any. */
 export function screenOp(s: (typeof navigation)[number]): OperationId | undefined {

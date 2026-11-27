@@ -299,7 +299,7 @@ export interface paths {
         /** List a consumer's API keys, by id ascending; prefix only, never the key or its hash */
         get: operations["listConsumerKeys"];
         put?: never;
-        /** Issue an API key for the consumer (CP-15); applies at once with a new identity version (CP-20). The key is in this answer only: the control plane keeps its prefix and the SHA-256 of its secret (ADR-0039) */
+        /** Issue an API key for the consumer (CP-15); applies at once with a new identity version (CP-20). The key is in this answer only: the control plane keeps its prefix and the SHA-256 of its secret (ADR-0039). In demo mode every key expires within 30 minutes of its issue (SC-08, ADR-0095) */
         post: operations["issueKey"];
         delete?: never;
         options?: never;
@@ -319,7 +319,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Rotate an API key (CP-16): issue a new key for its consumer and keep the old one working for a grace period (default 24h, at most 168h), in one identity change (CP-20). The new key gets a copy of the old key's own access-list entries, allow and deny (RL-09). The new key is in this answer only */
+        /** Rotate an API key (CP-16): issue a new key for its consumer and keep the old one working for a grace period (default 24h, at most 168h), in one identity change (CP-20). The new key gets a copy of the old key's own access-list entries, allow and deny (RL-09). The new key is in this answer only. In demo mode the new key expires 30 minutes from now and the old one at the latest then (SC-08, ADR-0095) */
         post: operations["rotateKey"];
         delete?: never;
         options?: never;
@@ -761,6 +761,23 @@ export interface paths {
         };
         /** Live data for one admin UI screen as server-sent events (UI-03, RL-21, ADR-0059): each sub names a query of the server's fixed catalogue, evaluated once per 5 s per distinct query and parameters however many streams watch it; the browser never sends PromQL. The token goes in Authorization, never in the URL. The answer is text/event-stream: a ready event first (StreamReady), then a result (StreamResult) or an error (StreamError) per subscription at each evaluation, a ": keepalive" comment every 15 s, and an end event (StreamEnd) when the server closes the stream, at the latest at the token's exp. Every parameter is validated before the stream starts (400 invalid_request, naming the parameter, never its value). At most 10 open streams per caller and 200 in all: past either, 503 unavailable with Retry-After. A client that does not take an event within 10 s is disconnected */
         get: operations["openStream"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/demo": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The demo (SC-08, ADR-0095): its tenants with their plans' limits, the Playground's routes with the policy that limits each, and the Playground's scenarios, from the latest published config version. 404 not_found, as for an unknown path, when demo mode is off */
+        get: operations["getDemo"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1575,7 +1592,7 @@ export interface components {
         KeyIssue: {
             /**
              * Format: date-time
-             * @description When the key stops working, in the future; none: never.
+             * @description When the key stops working, in the future; none: never. In demo mode at most 30 minutes ahead, and none means 30 minutes from now (SC-08, ADR-0095).
              */
             expires_at?: string | null;
         };
@@ -1642,6 +1659,34 @@ export interface components {
             /** @description The caller's Spillway roles, in the order viewer, editor, publisher, key-admin, admin. */
             roles: ("viewer" | "editor" | "publisher" | "key-admin" | "admin")[];
         };
+        Demo: {
+            /** @description Every tenant (at most 500, by ID), with its plan. */
+            tenants: components["schemas"]["DemoTenant"][];
+            /** @description The Playground's routes (orders, catalog and payments) that the latest published config version has. */
+            routes: components["schemas"]["DemoRoute"][];
+            /** @description The scenarios that the Playground runs (d1, d2 and d3). */
+            scenarios: string[];
+        };
+        DemoTenant: {
+            name: string;
+            /** @description The tenant's plan in the latest published config version; null for none. */
+            plan: string | null;
+            limit: components["schemas"]["DemoLimit"];
+        };
+        DemoRoute: {
+            name: string;
+            /** @description The first consumer- or route-level policy that matches the route; null for none. */
+            policy: string | null;
+            limit: components["schemas"]["DemoLimit"];
+        };
+        /** @description A limit with its burst filled in. For a tenant, its plan's first limit for a policy that takes its limits from plans (from_plan); for a route, its policy's first limit, null when the policy takes its limits from plans (each tenant's plan then). */
+        DemoLimit: {
+            /** Format: int64 */
+            rate: number;
+            /** Format: int64 */
+            burst: number;
+            period: string;
+        } | null;
         /**
          * @description A named query of the stream's catalogue (ADR-0059); openStream's sub parameter says what each answers.
          * @enum {string}
@@ -4053,6 +4098,28 @@ export interface operations {
                 };
             };
             400: components["responses"]["BadRequest"];
+            default: components["responses"]["Error"];
+        };
+    };
+    getDemo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The demo */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Demo"];
+                };
+            };
+            404: components["responses"]["NotFound"];
             default: components["responses"]["Error"];
         };
     };

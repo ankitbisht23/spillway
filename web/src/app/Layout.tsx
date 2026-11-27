@@ -2,15 +2,20 @@ import { Link, Outlet, useRouterState } from "@tanstack/react-router";
 
 import { can } from "../auth/permissions";
 import { useSession } from "../auth/SessionContext";
+import { useDemo } from "../screens/demo/useDemo";
 import { navigation, screenOp } from "./screens";
 
-/** The app shell: header with the user, the navigation the user's roles allow, and the current screen. */
+/**
+ * The app shell: header with the user, the navigation the user's roles
+ * allow (the Playground only in demo mode), and the current screen.
+ */
 export function Layout() {
   const { user, signOut } = useSession();
   const path = useRouterState({ select: (st) => st.location.pathname });
+  const demo = useDemo().isSuccess;
   const shown = navigation.filter((s) => {
     const op = screenOp(s);
-    return op === undefined || can(user.roles, op);
+    return (op === undefined || can(user.roles, op)) && (!("demo" in s) || demo);
   });
   return (
     <div className="shell">
