@@ -570,14 +570,14 @@ A reviewer should see the limiter earn its keep in under five minutes: `make dem
 | --- | --- | --- | --- |
 | D1 | Fair limits by plan | Free tenant gets 429 with `RateLimit` headers at its limit; pro keeps flowing | RL-03, RL-08, RL-25 |
 | D2 | Noisy neighbour | One tenant floods at 50× its limit; only it is throttled, others’ p99 stays flat | RL-05, NFR-15 |
-| D3 | Distributed accuracy | 3 replicas behind a load balancer; allowed rate tracks the limit line exactly | RL-11 – RL-14 |
+| D3 | Distributed accuracy | 3 replicas behind a round-robin load balancer (the traffic simulator's); allowed rate tracks the limit line exactly | RL-11 – RL-14 |
 | D4 | Safe rollout | Stricter policy in shadow → report shows who would be hit → promote → roll back | RL-26, UI-01, CP-04 |
 | D5 | Redis failure | Redis cut off (the full-outage case, via toxiproxy): fail-open keeps serving, fail-closed returns 503, degraded limits locally | RL-22 – RL-24 |
 | D6 | Upstream protection | Upstream slowed: breaker opens, retries stay within budget | GW-13, GW-14 |
 | D7 | Leaked key | Heavy hitters surface an abusive key; one click blocks it (an identity change, ≤ 5 s) | RL-21, RL-09, CP-20 |
 
 - **SC-01** (M8) `make demo` boots the stack in demo mode with seeded tenants, consumers, plans, routes and policies in its own database (`spillway_demo`), and demo keys are issued at run time (SC-08); `make demo-reset` restores it in one command without touching the dev database, and `make demo-down` returns to `make dev`.
-- **SC-02** (M8) Traffic simulator `cmd/demo-traffic --scenario=d1…d7` drives base load plus each scenario’s bursts.
+- **SC-02** (M8) Traffic simulator `cmd/demo-traffic --scenario=base|d1…d7` drives each tenant's base load (`base`, running while the demo runs) and, for one minute per scenario, base load plus that scenario's bursts, faults or actions (`make demo-d1` … `make demo-d7`).
 - **SC-03** (M8) Fault switches for D5 and D6 as `make` targets and Playground buttons, both through one audited control-plane endpoint, toxiproxy only: the demo gateways' Redis traffic runs through per-node toxiproxy proxies via the ADR-0004 address map, which D5 cuts, and D6's upstream latency is added in toxiproxy. Admin role only, `DEMO_MODE=true` only; no container gets the Docker socket.
 - **SC-04** (M8) Playground screen in the admin UI (UI-07).
 - **SC-05** (M8) Grafana Demo dashboard: allowed vs denied and p99 per tenant, limiter mode, replica count.
