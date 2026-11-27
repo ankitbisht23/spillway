@@ -40,6 +40,8 @@ jobs:
         run: make lint-sql
       - name: "Helm chart: helm lint, helm template, chart tests (ADR-0086)"
         run: make lint-helm
+      - name: "Workflows: actionlint (ADR-0092)"
+        run: make lint-actions
       - name: Unit tests and fuzz smoke
         run: make test-go FUZZTIME=10s
       - name: govulncheck
@@ -112,6 +114,20 @@ jobs:
           docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges spillway-loadgen:ci -h
           docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges spillway-accuracy:ci -h
           docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges spillway-chaos:ci -h
+      # The release build without publishing (ADR-0076, ADR-0092): both
+      # release images for both platforms (the dependency layers come from the
+      # cache above), their SPDX SBOMs, the source SBOM and the release notes.
+      - name: Release build and SBOMs (pushes nothing)
+        run: make release-build RELEASE_VERSION="0.0.0-ci.${GITHUB_SHA::12}"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sbom
+          path: |
+            dist/sbom
+            dist/SHA256SUMS
+            dist/release-notes.md
+          if-no-files-found: error
+          retention-days: 7
 
   # Checks the alert rules with promtool (Docker, ADR-0087), boots the dev
   # stack from a clean checkout, runs the integration tests, the stack part of
