@@ -395,3 +395,28 @@ func TestChartRequiredValues(t *testing.T) {
 	}
 	mustRender(t, "--set", "gateway.stream.fleetName=spillway")
 }
+
+// TestChartReleaseImages: without a tag, the images are the ghcr names at
+// v<appVersion>, the tag release.yml pushes (ADR-0076, ADR-0092); a tag
+// still wins, as the kind values' :kind does.
+func TestChartReleaseImages(t *testing.T) {
+	ds := mustRender(t,
+		"--set", "gateway.image.repository=ghcr.io/ankitbisht23/spillway-gateway,gateway.image.tag=",
+		"--set", "controlplane.image.repository=ghcr.io/ankitbisht23/spillway-controlplane,controlplane.image.tag=")
+	for kind, names := range map[string][]string{"Deployment": {"spillway-gateway", "spillway-controlplane"}, "Job": {"spillway-migrate"}} {
+		for _, n := range names {
+			img := containers(podSpec(find(t, ds, kind, n)))[0]["image"]
+			want := "ghcr.io/ankitbisht23/spillway-gateway:v1.0.0"
+			if n != "spillway-gateway" {
+				want = "ghcr.io/ankitbisht23/spillway-controlplane:v1.0.0"
+			}
+			if img != want {
+				t.Errorf("%s %s image %v, want %s", kind, n, img, want)
+			}
+		}
+	}
+	img := containers(podSpec(find(t, mustRender(t), "Deployment", "spillway-gateway")))[0]["image"]
+	if img != "spillway-gateway:kind" {
+		t.Errorf("kind values: gateway image %v", img)
+	}
+}

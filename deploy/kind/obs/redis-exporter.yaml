@@ -37,7 +37,7 @@ spec:
         seccompProfile: { type: RuntimeDefault }
       containers:
         - name: redis-exporter
-          image: oliver006/redis_exporter:v1.97.0
+          image: oliver006/redis_exporter:v1.97.0@sha256:f5f903fbe77571d455ede0453b084d6840bc62fc105efac001034421cab83b99
           env:
             # Its own /metrics asks one node; the redis job uses /scrape.
             - { name: REDIS_ADDR, value: "redis://redis-0.redis.spillway-deps.svc.cluster.local:6379" }

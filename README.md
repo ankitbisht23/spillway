@@ -10,7 +10,7 @@ Status: M0 (foundations) to M6 (admin UI) are done. M7 (performance and hardenin
 - [Architecture decision records](docs/adr/)
 - [Runbooks](docs/runbooks/)
 
-Contents: [Architecture](#architecture) · [Quick start](#quick-start) · [NFR status](#nfr-status) · [Benchmark report](#benchmark-report) · [Accuracy report](#accuracy-report) · [Chaos report](#chaos-report) · [Admin UI](#admin-ui) · [Observability](#observability) · [Known limits](#known-limits) · [verify-m7 results](#verify-m7-results)
+Contents: [Architecture](#architecture) · [Quick start](#quick-start) · [NFR status](#nfr-status) · [Benchmark report](#benchmark-report) · [Accuracy report](#accuracy-report) · [Chaos report](#chaos-report) · [Admin UI](#admin-ui) · [Observability](#observability) · [Verify a release](#verify-a-release) · [Known limits](#known-limits) · [verify-m7 results](#verify-m7-results)
 
 Every number below was measured by a check in this repository. Each one names its commit, date and source: a merged PR, an ADR, or a result file on the [`bench-results`](https://github.com/ankitbisht23/spillway/tree/bench-results) branch. "Laptop" means the dev machine: Apple silicon (M4 Pro), Docker Desktop with 14 CPUs and about 8.3 GB of memory. Host and Docker VM stalls on that machine are usually 4–9 ms and sometimes 100–820 ms (ADR-0027, ADR-0034). Each check's tolerance is chosen with those stalls in mind. Where a stall can still fail a check, the report says so (see [Known limits](#known-limits)). No rule re-runs a check after a FAIL; the one re-dispatch the user authorized is reported where it happened.
 
@@ -364,11 +364,31 @@ All of it is code, and compose and kind load the same files (OB-04, OB-05, OB-06
 
 To check them: `make lint-obs` runs promtool `check rules` and the rule tests, then `go test ./test/obs/`. It needs Docker, and `make lint` runs it. `make test-integration` checks that every rule loads, that an exemplar reaches Prometheus, and that all 81 dashboard queries are valid. `make kind-smoke` checks 16 of 16 rules loaded and 5 of 5 dashboards on kind.
 
+## Verify a release
+
+Releases come from `.github/workflows/release.yml` on a `v*` tag, after the owner approves the `release` environment (ADR-0076, ADR-0092). It pushes `ghcr.io/ankitbisht23/spillway-gateway` and `ghcr.io/ankitbisht23/spillway-controlplane` for linux/amd64 and linux/arm64, tagged `v<version>` and `<major>.<minor>` (no `latest`), signs each index and platform image with cosign keyless through GitHub OIDC, and attests each platform image's SPDX 2.3 SBOM. The GitHub release carries the CHANGELOG section, the SBOMs (per image and platform, plus the source) and `SHA256SUMS`. To check v1.0.0 with cosign 3.1.4 and crane (both from `make tools`, in `bin/`):
+
+```bash
+id=https://github.com/ankitbisht23/spillway/.github/workflows/release.yml@refs/tags/v1.0.0
+iss=https://token.actions.githubusercontent.com
+for image in gateway controlplane; do
+  ref=ghcr.io/ankitbisht23/spillway-$image
+  cosign verify --certificate-identity "$id" --certificate-oidc-issuer "$iss" "$ref:v1.0.0"
+  for arch in amd64 arm64; do
+    digest=$(crane digest --platform "linux/$arch" "$ref:v1.0.0")
+    cosign verify-attestation --type spdxjson --certificate-identity "$id" --certificate-oidc-issuer "$iss" "$ref@$digest"
+  done
+done
+```
+
+`make release-build` builds the same images and SBOMs locally into `dist/` and pushes nothing.
+
 ## Known limits
 
 - **NFR-02 (scaling) is open** for M7. Neither dispatch produced a valid result: the 2-vCPU gateway stays under 1.90 vCPU on both arches, and arm64's would-be S is 1.517. The user chose to leave it open rather than re-baseline it or change `GOMAXPROCS` (ADR-0084). `make verify-m7` prints its newest scaling results as KNOWN LIMIT and leaves NFR-02 out of the exit status, only because the user accepted the limit (ADR-0084 §4, ADR-0088).
 - **Boundary-pattern 503s** in the accuracy harness: 55–61% strict and 33–42% batched on the laptop. They are a known limit of the 5 ms Redis budget under synchronized bursts; the fix that was tried is ADR-0079, status Rejected. Over-admission is unaffected.
 - **`make verify-m3` fails some full runs on the laptop**, from host and Docker VM stalls in the full-outage 10 ms line and the killed-primary surviving-key rule. The user accepted this on 2026-11-13 (ADR-0027, ADR-0034): 3 of 6 full runs passed at the M4 review. In the M7 perf review (#91), 1 run failed its accuracy (sender behind schedule) and full-outage lines, while NFR-04 and the killed primary passed. No rule was loosened.
+- **NFR-04 and the other Redis-budget checks on Docker Desktop for Mac** can fail a verify run when the VM pauses longer than the 5 ms Redis budget more than once in a run; ADR-0034 excuses one burst of 1 s or less. Seen on `main` a69b856: verify-m7 run m7-20261126T233441Z had 18 errors over 20 s, and a diagnostic verify-m3 had 7 timeouts within 4 ms plus 1 lone one, 25 s apart. Not a gateway defect (no gateway errors, gateway CPU about 30%); the user recorded it as a macOS / Docker Desktop constraint on 2026-11-27 and no rule changed.
 - **NFR-05 on arm64: p99 varies between runners.** Six gated arm64 sets at 6,300 on one CPU model (Neoverse N2) and the same code gave p99 medians from 4.207 to 5.219 ms (24% apart). The gate's tolerance is the baseline's spread inside its own run set (0.111), but it compares across runners, and its confirming re-run uses the same runner. So a slow runner can confirm a regression that is not in the code: one of the three exit runs failed NFR-05 this way. The user kept the rule and recorded this as a known limit (ADR-0088); the gate's design is carried to the M7 review.
 - **NFR-05 on x64** depends on the CPU model GitHub assigns. A night on a model with no `main` baseline yet gets `first` and is not compared (ADR-0081); verify-m7 prints it as NOT DEMONSTRATED and leaves it out of the exit status (ADR-0089). arm64 has shown one model so far.
 - **NFR-01 on arm64** was re-baselined from 8,800 to 6,300 rps per vCPU on 2026-11-26 (ADR-0090). Some `ubuntu-24.04-arm` runners saturate below 8,800 (the slowest measured: 7,938), so run sets at 8,800 were invalid or had p99 spikes of 100 ms – 1.3 s on the same commit that passed elsewhere. 6,300 is 80% of that slowest runner.

@@ -11,7 +11,7 @@ FUZZTIME ?= 5s
 # Committed dev defaults first, then local overrides if present (ADR-0004).
 COMPOSE := docker compose --env-file .env.example $(if $(wildcard .env.local),--env-file .env.local)
 
-.PHONY: tools hooks certs dev kind-up kind-down kind-smoke kind-rollout kind-images kind-grafana kind-prometheus test test-go test-web test-e2e fuzz test-integration proto api sqlc web-gen web-build lint lint-go lint-web lint-proto lint-api lint-sql lint-helm lint-obs bench bench-gate verify-m0 verify-m0-stack verify-m1 verify-m1-reload verify-m2 verify-m2-shadow verify-m3 verify-m4 verify-m5 verify-m6 verify-m7 accuracy chaos-redis-outage chaos-redis-primary chaos-cp-outage nfr-keys nfr-soak nfr-noisy chaos-redis-latency chaos-gateway-kill chaos
+.PHONY: tools hooks certs dev kind-up kind-down kind-smoke kind-rollout kind-images kind-grafana kind-prometheus test test-go test-web test-e2e fuzz test-integration proto api sqlc web-gen web-build lint lint-go lint-web lint-proto lint-api lint-sql lint-helm lint-obs lint-actions release-build release-publish bench bench-gate verify-m0 verify-m0-stack verify-m1 verify-m1-reload verify-m2 verify-m2-shadow verify-m3 verify-m4 verify-m5 verify-m6 verify-m7 accuracy chaos-redis-outage chaos-redis-primary chaos-cp-outage nfr-keys nfr-soak nfr-noisy chaos-redis-latency chaos-gateway-kill chaos
 
 # Host-run processes and tests reach Redis Cluster nodes through this map
 # (ADR-0004). Set only here, never in compose or .env files.
@@ -43,6 +43,10 @@ $(eval $(call tool,oapi-codegen,github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi
 $(eval $(call tool,mkcert,filippo.io/mkcert,v1.4.4))
 $(eval $(call tool,benchstat,golang.org/x/perf/cmd/benchstat,v0.0.0-20261009192801-be2c69fb417e))
 $(eval $(call tool,kind,sigs.k8s.io/kind,v0.33.0))
+# Release tooling (ADR-0076, ADR-0092): each the newest release at least two
+# weeks old at the release task.
+$(eval $(call tool,actionlint,github.com/rhysd/actionlint/cmd/actionlint,v1.7.12))
+$(eval $(call tool,crane,github.com/google/go-containerregistry/cmd/crane,v0.22.1))
 
 # Official release binaries, downloaded into ./bin and checked against the
 # SHA-256 pinned here for each platform (ADR-0075 §D10), with the same stamp
@@ -81,6 +85,22 @@ HELM_SHA256_darwin-amd64 := 34bec4eba761ba5c16d1965ee6b8f5b0abe5993974a802274e2a
 HELM_SHA256_linux-amd64 := 0403a88ae20913d11b10a2467b50087721fea7581736da6b9d3992f5357fe54b
 HELM_SHA256_linux-arm64 := 8cf8f66ecbc252ac8f7f06cca68aba88508ddfde3a6a34feb1678ad1694b4f88
 $(eval $(call download-tool,helm,$(HELM_VERSION),https://get.helm.sh/helm-$(HELM_VERSION)-$(PLATFORM).tar.gz,$(HELM_SHA256_$(PLATFORM)),tar -xzOf "$$$$dl" $(PLATFORM)/helm > $(BIN)/helm))
+
+# Syft (SBOMs) and cosign (keyless signing) for the release (ADR-0076,
+# ADR-0092), checked against the sums their releases publish.
+SYFT_VERSION := v1.57.1
+SYFT_SHA256_darwin-arm64 := e0a74a5d2688d1254b4e17b71f068a83215e3625f846265bf6614c7ba06f3a96
+SYFT_SHA256_darwin-amd64 := 2355758c1142982a67b309604c5d75effdbe638a57c771979ea8fd1a16656abc
+SYFT_SHA256_linux-amd64 := bf52519eb57f675d47c07d43213cb6dff6449f3d6d1147ff6701ed91f44eef0c
+SYFT_SHA256_linux-arm64 := aa3d3e07344f590bcce8d31043b752daa76c8a56c2aa34ceeee63c6168152582
+$(eval $(call download-tool,syft,$(SYFT_VERSION),https://github.com/anchore/syft/releases/download/$(SYFT_VERSION)/syft_$(SYFT_VERSION:v%=%)_$(HOST_OS)_$(HOST_ARCH).tar.gz,$(SYFT_SHA256_$(PLATFORM)),tar -xzOf "$$$$dl" syft > $(BIN)/syft))
+
+COSIGN_VERSION := v3.1.4
+COSIGN_SHA256_darwin-arm64 := 9f9b8cd557cf2e5b3df3373a00baa005a86b02391e3e06dd0ce37b3a1533d3a4
+COSIGN_SHA256_darwin-amd64 := 9d1e4abe2b6be279ed0d2ff706fde1ccd738747c834e3e6d44039c238867334f
+COSIGN_SHA256_linux-amd64 := 424e2c97d0b45fd7a6b608a87f090f35633f4c23ece5f092d48bba11aaf4bbfa
+COSIGN_SHA256_linux-arm64 := ade83b7aac62e131cacfe96d958948b2150cc9efec46a570a2649b8e27dedad2
+$(eval $(call download-tool,cosign,$(COSIGN_VERSION),https://github.com/sigstore/cosign/releases/download/$(COSIGN_VERSION)/cosign-$(PLATFORM),$(COSIGN_SHA256_$(PLATFORM)),cp "$$$$dl" $(BIN)/cosign))
 
 tools: $(TOOL_STAMPS)
 
@@ -279,7 +299,7 @@ web-build:
 sqlc: tool-sqlc
 	cd internal/controlplane/store && $(BIN)/sqlc generate
 
-lint: lint-go lint-web lint-proto lint-api lint-sql lint-helm lint-obs
+lint: lint-go lint-web lint-proto lint-api lint-sql lint-helm lint-obs lint-actions
 
 # The Helm chart (ADR-0075 §D11, ADR-0086): helm lint --strict and helm
 # template with the chart's values.yaml under deploy/kind/values.yaml, then
@@ -295,12 +315,18 @@ lint-helm: tool-helm
 # promtool of compose's pinned Prometheus image, then the dashboards',
 # rules' and runbooks' Go tests (test/obs). Needs Docker, no stack; CI's
 # integration job runs it.
-PROMETHEUS_IMAGE := prom/prometheus:v3.15.1
+PROMETHEUS_IMAGE := prom/prometheus:v3.15.1@sha256:fa3302279710be2f21a8301ec17a8b4f2301fd829bd113839b3b6b02b6f191a2
 PROMTOOL := docker run --rm --entrypoint promtool -v "$(CURDIR):/src:ro" -w /src $(PROMETHEUS_IMAGE)
 lint-obs:
 	$(PROMTOOL) check rules deploy/prometheus/rules/*.yaml
 	$(PROMTOOL) test rules test/obs/rules-test.yaml
 	go test -count=1 ./test/obs/
+
+# The workflows (ADR-0092): actionlint with its shellcheck and pyflakes
+# passes off, so a machine with shellcheck installed (CI's runners) and one
+# without give the same result.
+lint-actions: tool-actionlint
+	$(BIN)/actionlint -shellcheck= -pyflakes=
 
 # Then the webui build tag's files (ADR-0057) against the real build, or an
 # empty stand-in when there is none, removed after.
@@ -521,3 +547,16 @@ nfr-soak: dev
 # About 12 minutes; config and identity go back after.
 nfr-noisy: dev
 	@test/load/noisy.sh
+
+# Release (ADR-0076, ADR-0092). release-build builds the gateway and control
+# plane images for linux/amd64 and linux/arm64 into dist/ as OCI layouts,
+# with an SPDX SBOM per image and platform, the source SBOM, the release
+# notes and SHA256SUMS; it pushes nothing (CI's image job and release.yml's
+# build job run it, and so can you). release-publish pushes those layouts to
+# ghcr, signs and attests them; only release.yml's publish job runs it.
+RELEASE_VERSION ?= 0.0.0-dev
+release-build: tool-syft
+	@BIN=$(BIN) VERSION=$(RELEASE_VERSION) deploy/release/build.sh
+
+release-publish: tool-crane tool-cosign
+	@BIN=$(BIN) VERSION=$(RELEASE_VERSION) deploy/release/publish.sh

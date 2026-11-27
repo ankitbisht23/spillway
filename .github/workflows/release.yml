@@ -1,0 +1,115 @@
+# Release (ADR-0076, ADR-0092). Runs on a v* tag push, or by hand as a dry
+# run:
+#   gh workflow run release.yml                  # dry run (the default)
+# The build job builds the gateway and control-plane images for linux/amd64
+# and linux/arm64 with their SBOMs and release notes, and uploads them as an
+# artifact; it holds no write permission, and a dry run stops there. Only
+# from a v* tag, and after the user's approval in the `release` environment,
+# the publish job pushes the built images to ghcr, signs them with cosign
+# keyless (the job's GitHub OIDC token), attests their SBOMs, verifies both
+# and creates the GitHub release. Actions are pinned to commit SHAs; syft,
+# crane and cosign are pinned in the Makefile.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run: build the images, SBOMs and notes; publish nothing"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      # A tag must be v<the chart's appVersion>, which CHANGELOG.md has a
+      # section for (make release-build fails without one). Any other ref
+      # builds a dry-run version.
+      - name: Version
+        id: version
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          app=$(awk -F'"' '/^appVersion:/ {print $2}' deploy/helm/spillway/Chart.yaml)
+          if [ "$REF_TYPE" = tag ]; then
+            version=${REF_NAME#v}
+            [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "tag $REF_NAME is not v<major>.<minor>.<patch>"; exit 1; }
+            [ "$version" = "$app" ] || { echo "tag $REF_NAME, but Chart.yaml appVersion is $app"; exit 1; }
+          else
+            version=0.0.0-dryrun.${GITHUB_SHA::12}
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Images for linux/amd64 and linux/arm64, SBOMs, release notes (pushes nothing)
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: make release-build RELEASE_VERSION="$VERSION"
+      - name: Runs as non-root with a read-only root filesystem (SEC-10)
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          for target in gateway controlplane; do
+            docker buildx build --target "$target" --build-arg VERSION="v$VERSION" --load -t "spillway-${target}:release" .
+            test "$(docker image inspect "spillway-${target}:release" --format '{{.Config.User}}')" = 65532:65532
+            docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges "spillway-${target}:release" version
+          done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: build
+    # Never a dry run: only a v* tag, pushed or dispatched with dry_run off.
+    if: github.ref_type == 'tag' && startsWith(github.ref_name, 'v') && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write # the GitHub release
+      packages: write # the ghcr push
+      id-token: write # cosign keyless: a Fulcio certificate for the job's OIDC token
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod # make tool-crane installs crane with go
+          cache: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-dist
+          path: dist
+      - name: Log in to ghcr
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: make tool-crane && bin/crane auth login ghcr.io -u "$GITHUB_ACTOR" --password-stdin <<<"$GH_TOKEN"
+      - name: Push, sign, attest and verify both images
+        run: make release-publish RELEASE_VERSION="$VERSION"
+      - name: GitHub release with the changelog section, SBOMs and SHA256SUMS
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v$VERSION" --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "Spillway v$VERSION" --notes-file dist/release-notes.md \
+            dist/sbom/*.spdx.json dist/SHA256SUMS dist/images.txt

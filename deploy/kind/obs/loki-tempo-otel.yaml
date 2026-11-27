@@ -40,7 +40,7 @@ spec:
         seccompProfile: { type: RuntimeDefault }
       containers:
         - name: loki
-          image: grafana/loki:3.7.9
+          image: grafana/loki:3.7.9@sha256:0db216b630ae1f348a1584c67f3cead8b4c1fc839169a39501db664744158e28
           args: ["-config.file=/etc/loki/loki.yaml"]
           ports:
             - { name: http, containerPort: 3100 }
@@ -100,7 +100,7 @@ spec:
         seccompProfile: { type: RuntimeDefault }
       containers:
         - name: tempo
-          image: grafana/tempo:3.0.0
+          image: grafana/tempo:3.0.0@sha256:78439f7f7cf3c97122846c13a832e060c6c7ef67dcc814dccf0a5f3f78393a93
           args: ["-config.file=/etc/tempo/tempo.yaml"]
           ports:
             - { name: http, containerPort: 3200 }
@@ -160,7 +160,7 @@ spec:
         seccompProfile: { type: RuntimeDefault }
       containers:
         - name: otel-collector
-          image: otel/opentelemetry-collector-contrib:0.164.0
+          image: otel/opentelemetry-collector-contrib:0.164.0@sha256:340c9ca6a36617084c6661bdc4f0fe92b7cda5a805d61673ec8db375fddc522b
           args: ["--config=/etc/otelcol/config.yaml"]
           ports:
             - { name: otlp-grpc, containerPort: 4317 }

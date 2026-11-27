@@ -6,8 +6,8 @@ apiVersion: v2
 name: spillway
 description: Spillway API gateway and distributed rate limiter (gateway + control plane)
 type: application
-version: 0.1.0
-appVersion: "dev"
+version: 1.0.0
+appVersion: "1.0.0"
 kubeVersion: ">=1.30.0-0"
 home: https://github.com/ankitbisht23/spillway
 sources:

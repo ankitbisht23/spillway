@@ -55,7 +55,7 @@ spec:
         seccompProfile: { type: RuntimeDefault }
       containers:
         - name: grafana
-          image: grafana/grafana:13.3.0
+          image: grafana/grafana:13.3.0@sha256:488984b716c0862639f91a698adbe2862677a5a07bad42da5f03f3030883b205
           env:
             - { name: GF_SECURITY_ADMIN_USER, value: admin }
             - name: GF_SECURITY_ADMIN_PASSWORD
