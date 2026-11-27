@@ -121,13 +121,20 @@ func startControlPlane(t *testing.T, log io.Writer) (cpClient, *testIssuer, stri
 // (SC-08).
 func startControlPlaneMode(t *testing.T, log io.Writer, demoMode bool) (cpClient, *testIssuer, string) {
 	t.Helper()
+	return startControlPlaneWith(t, log, func(s *api.Server) *api.Server { return s.WithDemo(demoMode) })
+}
+
+// startControlPlaneWith is startControlPlane with the server set up by
+// with.
+func startControlPlaneWith(t *testing.T, log io.Writer, with func(*api.Server) *api.Server) (cpClient, *testIssuer, string) {
+	t.Helper()
 	db := migratedDatabase(t)
 	allowed, err := proxy.ParseAllowlist("172.29.0.0/16")
 	if err != nil {
 		t.Fatal(err)
 	}
 	iss := newTestIssuer(t)
-	srv := httptest.NewServer(api.New(openStore(t, db), allowed, net.DefaultResolver, api.OIDC{Verifier: iss.verifier(t)}, secret.New(hitterSecret), slog.New(slog.NewJSONHandler(log, nil))).WithDemo(demoMode).Handler())
+	srv := httptest.NewServer(with(api.New(openStore(t, db), allowed, net.DefaultResolver, api.OIDC{Verifier: iss.verifier(t)}, secret.New(hitterSecret), slog.New(slog.NewJSONHandler(log, nil)))).Handler())
 	t.Cleanup(srv.Close)
 	return cpClient{t: t, base: srv.URL}, iss, db
 }

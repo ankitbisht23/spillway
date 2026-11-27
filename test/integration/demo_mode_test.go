@@ -112,7 +112,9 @@ func TestGetDemo(t *testing.T) {
 	var d apiv1.Demo
 	viewer.must(200, "GET", "/demo", nil).decode(t, &d)
 	got, _ := json.Marshal(d)
-	const want = `{"routes":[{"limit":null,"name":"orders","policy":"consumer-plan"},` +
+	// No toxiproxy here: both fault states unknown (TestDemoFaults has one).
+	const want = `{"faults":[{"active":null,"name":"redis-cut"},{"active":null,"name":"upstream-slow"}],` +
+		`"routes":[{"limit":null,"name":"orders","policy":"consumer-plan"},` +
 		`{"limit":{"burst":200,"period":"1s","rate":200},"name":"catalog","policy":"catalog-limit"},` +
 		`{"limit":{"burst":200,"period":"1s","rate":100},"name":"payments","policy":"payments-limit"}],` +
 		`"scenarios":["d1","d2","d3"],` +
