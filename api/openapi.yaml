@@ -1794,6 +1794,117 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
         default: { $ref: '#/components/responses/Error' }
+  /demo/playground/runs:
+    post:
+      operationId: startPlaygroundRun
+      tags: [demo]
+      summary: >-
+        Start a Playground run (UI-07, SC-04, ADR-0096 §3): the control plane
+        sends the traffic itself, open model, round robin over the demo
+        gateways, with its tenants' Playground keys, which never leave it.
+        custom sends one tenant's traffic on one route at a rate for a
+        duration; scenario runs D1, D2 or D3's traffic shape for 60 s. Every
+        role may start runs (CP-12); the run belongs to the caller. Capped
+        per run, per client IP (1 active, 30 starts an hour), per caller (3
+        active, 120 an hour) and in total (3 active runs, at most 1 a
+        scenario, 700 rps): past a cap 429 unavailable with Retry-After.
+        One audit record. 404 not_found, as for an unknown path, when demo
+        mode is off
+      x-spillway-roles: [viewer, editor, publisher, key-admin, admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PlaygroundRunRequest' }
+      responses:
+        '201':
+          description: The run, started
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PlaygroundRun' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '429':
+          description: >-
+            A cap is reached (unavailable); Retry-After is the whole seconds
+            until a run ends or an hour's start frees
+          headers:
+            Retry-After:
+              description: Seconds until the cap frees
+              schema: { type: integer }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '503':
+          description: >-
+            The seed's Playground consumers are missing, or no demo gateway
+            answers (unavailable)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        default: { $ref: '#/components/responses/Error' }
+  /demo/playground/runs/{id}:
+    parameters:
+      - $ref: '#/components/parameters/PlaygroundRunId'
+    delete:
+      operationId: stopPlaygroundRun
+      tags: [demo]
+      summary: >-
+        Stop one's own Playground run (UI-07, ADR-0096 §3); its stream ends
+        with reason stopped. A run that is not the caller's, or does not
+        exist, is 404. One audit record. 404 not_found, as for an unknown
+        path, when demo mode is off
+      x-spillway-roles: [viewer, editor, publisher, key-admin, admin]
+      responses:
+        '204':
+          description: Stopped (or already ended)
+        '404': { $ref: '#/components/responses/NotFound' }
+        default: { $ref: '#/components/responses/Error' }
+  /demo/playground/runs/{id}/stream:
+    parameters:
+      - $ref: '#/components/parameters/PlaygroundRunId'
+    get:
+      operationId: openPlaygroundStream
+      tags: [demo]
+      summary: >-
+        One's own Playground run's results as server-sent events (UI-07,
+        ADR-0096 §3), with the token in Authorization, never in the URL: a
+        ready event first (PlaygroundRun), a tick every second while it runs
+        (PlaygroundTick), a ": keepalive" comment every 15 s, and an end
+        event (PlaygroundEnd) when the run ends, is stopped, the token's exp
+        passes or the control plane stops. A run's results stay readable for
+        5 minutes after it ends: a late stream gets ready, then end. A run
+        that is not the caller's, or does not exist, is 404. At most 2 open
+        streams per run and 50 in all: past either, 429 unavailable with
+        Retry-After. 404 not_found, as for an unknown path, when demo mode
+        is off
+      x-spillway-roles: [viewer, editor, publisher, key-admin, admin]
+      responses:
+        '200':
+          description: >-
+            The event stream. Each event's data is one line of JSON: ready is
+            a PlaygroundRun, tick a PlaygroundTick, end a PlaygroundEnd
+          headers:
+            Cache-Control:
+              description: no-store
+              schema: { type: string }
+          content:
+            text/event-stream:
+              schema: { type: string }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429':
+          description: Too many open streams for the run or in all (unavailable), with Retry-After
+          headers:
+            Retry-After:
+              description: Seconds to wait
+              schema: { type: integer }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        default: { $ref: '#/components/responses/Error' }
 components:
   securitySchemes:
     bearer:
@@ -1812,6 +1923,12 @@ components:
       required: true
       description: The entity's ID.
       schema: { type: integer, format: int64 }
+    PlaygroundRunId:
+      name: id
+      in: path
+      required: true
+      description: The ID of a Playground run, as startPlaygroundRun answered it.
+      schema: { type: string, maxLength: 64 }
     PageLimit:
       name: limit
       in: query
@@ -2750,7 +2867,7 @@ components:
     Demo:
       type: object
       additionalProperties: false
-      required: [tenants, routes, scenarios, faults]
+      required: [tenants, routes, scenarios, faults, playground]
       properties:
         tenants:
           type: array
@@ -2768,6 +2885,116 @@ components:
           type: array
           description: The two fault switches (SC-03), redis-cut then upstream-slow, with their states read from toxiproxy (at most 1 s old).
           items: { $ref: '#/components/schemas/DemoFault' }
+        playground: { $ref: '#/components/schemas/DemoPlayground' }
+    DemoPlayground:
+      type: object
+      additionalProperties: false
+      description: The Playground's bounds and the caller's use of them (UI-07, ADR-0096 §3).
+      required: [max_rate, max_duration_s, active_runs, runs_left_this_hour]
+      properties:
+        max_rate: { type: integer, format: int32, description: 'The highest rate of a custom run, requests per second (200).' }
+        max_duration_s: { type: integer, format: int32, description: 'The longest run, in seconds (60).' }
+        active_runs: { type: integer, format: int32, description: "The caller's runs now running." }
+        runs_left_this_hour: { type: integer, format: int32, description: "Starts left in the rolling hour: the smaller of the caller's and its client IP's." }
+    PlaygroundRunRequest:
+      type: object
+      additionalProperties: false
+      description: >-
+        A Playground run (UI-07, ADR-0096 §3). kind custom needs tenant,
+        route and rate, and takes duration_s (default 30); kind scenario
+        needs scenario and takes nothing else. A value outside its range, a
+        missing field or a field the kind does not take is 422
+        validation_failed naming the field; an unknown field or kind is 400.
+      required: [kind]
+      properties:
+        kind: { type: string, enum: [custom, scenario] }
+        tenant: { type: string, enum: [free-co, pro-co, enterprise-co], description: 'custom: the tenant whose Playground key sends.' }
+        route: { type: string, enum: [orders, catalog, payments], description: 'custom: GET /v1/orders, GET /v1/catalog or POST /v1/payments.' }
+        rate: { type: integer, format: int32, minimum: 1, maximum: 200, description: 'custom: requests per second.' }
+        duration_s: { type: integer, format: int32, minimum: 5, maximum: 60, description: 'custom: seconds, 30 when not given.' }
+        scenario: { type: string, enum: [d1, d2, d3], description: "scenario: D1's, D2's or D3's traffic on the Playground consumers, 60 s." }
+    PlaygroundRun:
+      type: object
+      additionalProperties: false
+      description: A Playground run. tenant, route and rate for a custom run; scenario for a scenario run.
+      required: [id, kind, duration_s, started_at, ends_at, state]
+      properties:
+        id: { type: string, description: 'A random UUID.' }
+        kind: { type: string, enum: [custom, scenario] }
+        tenant: { type: string }
+        route: { type: string }
+        rate: { type: integer, format: int32 }
+        scenario: { type: string }
+        duration_s: { type: integer, format: int32 }
+        started_at: { type: string, format: date-time }
+        ends_at: { type: string, format: date-time, description: 'When its traffic stops, at the latest.' }
+        state: { type: string, enum: [running, ended] }
+    PlaygroundCounts:
+      type: object
+      additionalProperties: false
+      description: >-
+        One tenant's requests in a tick's second or a whole run: sent, then
+        the answers by status (ok 2xx, limited 429, forbidden 401 and 403,
+        failed 503, other: any other status or no answer within 5 s), the
+        requests dropped because 256 were in flight, and the answers' p50
+        and p99 latency from each request's due time (null without answers).
+      required: [sent, ok, limited, forbidden, failed, other, dropped, p50_ms, p99_ms]
+      properties:
+        sent: { type: integer, format: int64 }
+        ok: { type: integer, format: int64 }
+        limited: { type: integer, format: int64 }
+        forbidden: { type: integer, format: int64 }
+        failed: { type: integer, format: int64 }
+        other: { type: integer, format: int64 }
+        dropped: { type: integer, format: int64 }
+        p50_ms: { type: number, nullable: true }
+        p99_ms: { type: number, nullable: true }
+    PlaygroundLast:
+      type: object
+      additionalProperties: false
+      description: >-
+        A tenant's latest answer: its status, the replica that gave it, and
+        its RateLimit, RateLimit-Policy and Retry-After headers verbatim
+        (policy names and numbers only, ADR-0018), null when absent.
+      required: [status, replica, ratelimit, ratelimit_policy, retry_after]
+      properties:
+        status: { type: integer, format: int32 }
+        replica: { type: string }
+        ratelimit: { type: string, nullable: true }
+        ratelimit_policy: { type: string, nullable: true }
+        retry_after: { type: string, nullable: true }
+    PlaygroundTick:
+      type: object
+      additionalProperties: false
+      description: One second of a Playground run, per tenant and per replica, with each tenant's latest answer so far.
+      required: [t, elapsed_s, tenants, replicas, last]
+      properties:
+        t: { type: string, format: date-time, description: "The control plane's time." }
+        elapsed_s: { type: integer, format: int32 }
+        tenants:
+          type: object
+          additionalProperties: { $ref: '#/components/schemas/PlaygroundCounts' }
+        replicas:
+          type: object
+          description: Requests sent to each replica in the second.
+          additionalProperties: { type: integer, format: int64 }
+        last:
+          type: object
+          additionalProperties: { $ref: '#/components/schemas/PlaygroundLast' }
+    PlaygroundEnd:
+      type: object
+      additionalProperties: false
+      description: >-
+        The end of a Playground stream. done: the run ended on time; stopped:
+        its caller stopped it; token_expired: the token's exp passed (the run
+        goes on); shutdown: the control plane is stopping. totals is the
+        whole run per tenant so far.
+      required: [reason, totals]
+      properties:
+        reason: { type: string, enum: [done, stopped, token_expired, shutdown] }
+        totals:
+          type: object
+          additionalProperties: { $ref: '#/components/schemas/PlaygroundCounts' }
     DemoFaultName:
       type: string
       description: 'A demo fault (SC-03, ADR-0095 §5): redis-cut is D5''s Redis outage, upstream-slow D6''s slow upstream.'

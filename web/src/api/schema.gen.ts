@@ -806,6 +806,63 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/demo/playground/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start a Playground run (UI-07, SC-04, ADR-0096 §3): the control plane sends the traffic itself, open model, round robin over the demo gateways, with its tenants' Playground keys, which never leave it. custom sends one tenant's traffic on one route at a rate for a duration; scenario runs D1, D2 or D3's traffic shape for 60 s. Every role may start runs (CP-12); the run belongs to the caller. Capped per run, per client IP (1 active, 30 starts an hour), per caller (3 active, 120 an hour) and in total (3 active runs, at most 1 a scenario, 700 rps): past a cap 429 unavailable with Retry-After. One audit record. 404 not_found, as for an unknown path, when demo mode is off */
+        post: operations["startPlaygroundRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/demo/playground/runs/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The ID of a Playground run, as startPlaygroundRun answered it. */
+                id: components["parameters"]["PlaygroundRunId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Stop one's own Playground run (UI-07, ADR-0096 §3); its stream ends with reason stopped. A run that is not the caller's, or does not exist, is 404. One audit record. 404 not_found, as for an unknown path, when demo mode is off */
+        delete: operations["stopPlaygroundRun"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/demo/playground/runs/{id}/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The ID of a Playground run, as startPlaygroundRun answered it. */
+                id: components["parameters"]["PlaygroundRunId"];
+            };
+            cookie?: never;
+        };
+        /** One's own Playground run's results as server-sent events (UI-07, ADR-0096 §3), with the token in Authorization, never in the URL: a ready event first (PlaygroundRun), a tick every second while it runs (PlaygroundTick), a ": keepalive" comment every 15 s, and an end event (PlaygroundEnd) when the run ends, is stopped, the token's exp passes or the control plane stops. A run's results stay readable for 5 minutes after it ends: a late stream gets ready, then end. A run that is not the caller's, or does not exist, is 404. At most 2 open streams per run and 50 in all: past either, 429 unavailable with Retry-After. 404 not_found, as for an unknown path, when demo mode is off */
+        get: operations["openPlaygroundStream"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1688,6 +1745,139 @@ export interface components {
             scenarios: string[];
             /** @description The two fault switches (SC-03), redis-cut then upstream-slow, with their states read from toxiproxy (at most 1 s old). */
             faults: components["schemas"]["DemoFault"][];
+            playground: components["schemas"]["DemoPlayground"];
+        };
+        /** @description The Playground's bounds and the caller's use of them (UI-07, ADR-0096 §3). */
+        DemoPlayground: {
+            /**
+             * Format: int32
+             * @description The highest rate of a custom run, requests per second (200).
+             */
+            max_rate: number;
+            /**
+             * Format: int32
+             * @description The longest run, in seconds (60).
+             */
+            max_duration_s: number;
+            /**
+             * Format: int32
+             * @description The caller's runs now running.
+             */
+            active_runs: number;
+            /**
+             * Format: int32
+             * @description Starts left in the rolling hour: the smaller of the caller's and its client IP's.
+             */
+            runs_left_this_hour: number;
+        };
+        /** @description A Playground run (UI-07, ADR-0096 §3). kind custom needs tenant, route and rate, and takes duration_s (default 30); kind scenario needs scenario and takes nothing else. A value outside its range, a missing field or a field the kind does not take is 422 validation_failed naming the field; an unknown field or kind is 400. */
+        PlaygroundRunRequest: {
+            /** @enum {string} */
+            kind: "custom" | "scenario";
+            /**
+             * @description custom: the tenant whose Playground key sends.
+             * @enum {string}
+             */
+            tenant?: "free-co" | "pro-co" | "enterprise-co";
+            /**
+             * @description custom: GET /v1/orders, GET /v1/catalog or POST /v1/payments.
+             * @enum {string}
+             */
+            route?: "orders" | "catalog" | "payments";
+            /**
+             * Format: int32
+             * @description custom: requests per second.
+             */
+            rate?: number;
+            /**
+             * Format: int32
+             * @description custom: seconds, 30 when not given.
+             */
+            duration_s?: number;
+            /**
+             * @description scenario: D1's, D2's or D3's traffic on the Playground consumers, 60 s.
+             * @enum {string}
+             */
+            scenario?: "d1" | "d2" | "d3";
+        };
+        /** @description A Playground run. tenant, route and rate for a custom run; scenario for a scenario run. */
+        PlaygroundRun: {
+            /** @description A random UUID. */
+            id: string;
+            /** @enum {string} */
+            kind: "custom" | "scenario";
+            tenant?: string;
+            route?: string;
+            /** Format: int32 */
+            rate?: number;
+            scenario?: string;
+            /** Format: int32 */
+            duration_s: number;
+            /** Format: date-time */
+            started_at: string;
+            /**
+             * Format: date-time
+             * @description When its traffic stops, at the latest.
+             */
+            ends_at: string;
+            /** @enum {string} */
+            state: "running" | "ended";
+        };
+        /** @description One tenant's requests in a tick's second or a whole run: sent, then the answers by status (ok 2xx, limited 429, forbidden 401 and 403, failed 503, other: any other status or no answer within 5 s), the requests dropped because 256 were in flight, and the answers' p50 and p99 latency from each request's due time (null without answers). */
+        PlaygroundCounts: {
+            /** Format: int64 */
+            sent: number;
+            /** Format: int64 */
+            ok: number;
+            /** Format: int64 */
+            limited: number;
+            /** Format: int64 */
+            forbidden: number;
+            /** Format: int64 */
+            failed: number;
+            /** Format: int64 */
+            other: number;
+            /** Format: int64 */
+            dropped: number;
+            p50_ms: number | null;
+            p99_ms: number | null;
+        };
+        /** @description A tenant's latest answer: its status, the replica that gave it, and its RateLimit, RateLimit-Policy and Retry-After headers verbatim (policy names and numbers only, ADR-0018), null when absent. */
+        PlaygroundLast: {
+            /** Format: int32 */
+            status: number;
+            replica: string;
+            ratelimit: string | null;
+            ratelimit_policy: string | null;
+            retry_after: string | null;
+        };
+        /** @description One second of a Playground run, per tenant and per replica, with each tenant's latest answer so far. */
+        PlaygroundTick: {
+            /**
+             * Format: date-time
+             * @description The control plane's time.
+             */
+            t: string;
+            /** Format: int32 */
+            elapsed_s: number;
+            tenants: {
+                [key: string]: components["schemas"]["PlaygroundCounts"];
+            };
+            /** @description Requests sent to each replica in the second. */
+            replicas: {
+                [key: string]: number;
+            };
+            last: {
+                [key: string]: components["schemas"]["PlaygroundLast"];
+            };
+        };
+        /** @description The end of a Playground stream. done: the run ended on time; stopped: its caller stopped it; token_expired: the token's exp passed (the run goes on); shutdown: the control plane is stopping. totals is the whole run per tenant so far. */
+        PlaygroundEnd: {
+            /** @enum {string} */
+            reason: "done" | "stopped" | "token_expired" | "shutdown";
+            totals: {
+                [key: string]: components["schemas"]["PlaygroundCounts"];
+            };
         };
         /**
          * @description A demo fault (SC-03, ADR-0095 §5): redis-cut is D5's Redis outage, upstream-slow D6's slow upstream.
@@ -1915,6 +2105,8 @@ export interface components {
     parameters: {
         /** @description The entity's ID. */
         Id: number;
+        /** @description The ID of a Playground run, as startPlaygroundRun answered it. */
+        PlaygroundRunId: string;
         /** @description Page size. */
         PageLimit: number;
         /** @description The next_cursor of the previous page; opaque. */
@@ -4194,6 +4386,117 @@ export interface operations {
             /** @description Toxiproxy failed or lacks a demo proxy, which the message names (unavailable); the toxics already changed stay as they are, so the same call again completes the change */
             503: {
                 headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    startPlaygroundRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlaygroundRunRequest"];
+            };
+        };
+        responses: {
+            /** @description The run, started */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlaygroundRun"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            404: components["responses"]["NotFound"];
+            413: components["responses"]["PayloadTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            422: components["responses"]["ValidationFailed"];
+            /** @description A cap is reached (unavailable); Retry-After is the whole seconds until a run ends or an hour's start frees */
+            429: {
+                headers: {
+                    /** @description Seconds until the cap frees */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The seed's Playground consumers are missing, or no demo gateway answers (unavailable) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    stopPlaygroundRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The ID of a Playground run, as startPlaygroundRun answered it. */
+                id: components["parameters"]["PlaygroundRunId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Stopped (or already ended) */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Error"];
+        };
+    };
+    openPlaygroundStream: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The ID of a Playground run, as startPlaygroundRun answered it. */
+                id: components["parameters"]["PlaygroundRunId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The event stream. Each event's data is one line of JSON: ready is a PlaygroundRun, tick a PlaygroundTick, end a PlaygroundEnd */
+            200: {
+                headers: {
+                    /** @description no-store */
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": string;
+                };
+            };
+            404: components["responses"]["NotFound"];
+            /** @description Too many open streams for the run or in all (unavailable), with Retry-After */
+            429: {
+                headers: {
+                    /** @description Seconds to wait */
+                    "Retry-After"?: number;
                     [name: string]: unknown;
                 };
                 content: {
