@@ -79,8 +79,10 @@ func insertKey(ctx context.Context, q *db.Queries, gen KeyGen, p db.InsertAPIKey
 // access-list entries, allow and deny (RL-09, ADR-0054); the old key keeps
 // its own. One identity change, one audit record, whose diff lists the
 // copies under "new_access_lists" when there are any. A revoked or expired
-// key is a ConflictError.
-func (s *Store) RotateKey(ctx context.Context, a Audit, gen KeyGen, id int64, grace time.Duration, note *string) (old, rotated Key, key apikey.Key, err error) {
+// key is a ConflictError. A non-nil latest is the new key's expiry and
+// ends the old key's grace at the latest then (demo mode's 30-minute rule,
+// ADR-0095 §3).
+func (s *Store) RotateKey(ctx context.Context, a Audit, gen KeyGen, id int64, grace time.Duration, latest *time.Time, note *string) (old, rotated Key, key apikey.Key, err error) {
 	if grace < 0 || grace > MaxGrace {
 		return Key{}, Key{}, apikey.Key{}, &InvalidError{Path: "grace", Msg: "grace: want 0s to 168h"}
 	}
@@ -92,10 +94,10 @@ func (s *Store) RotateKey(ctx context.Context, a Audit, gen KeyGen, id int64, gr
 		if cur.RevokedAt != nil || cur.Expired {
 			return &ConflictError{Msg: "the key is revoked or expired; issue a new key instead"}
 		}
-		if rotated, key, err = insertKey(ctx, q, gen, db.InsertAPIKeyParams{ConsumerID: cur.ConsumerID, RotatedFrom: &id, Version: v}); err != nil {
+		if rotated, key, err = insertKey(ctx, q, gen, db.InsertAPIKeyParams{ConsumerID: cur.ConsumerID, ExpiresAt: latest, RotatedFrom: &id, Version: v}); err != nil {
 			return err
 		}
-		after, err := q.ExpireAPIKey(ctx, db.ExpireAPIKeyParams{ID: id, GraceSeconds: grace.Seconds(), Version: v})
+		after, err := q.ExpireAPIKey(ctx, db.ExpireAPIKeyParams{ID: id, GraceSeconds: grace.Seconds(), Latest: latest, Version: v})
 		if err != nil {
 			return err
 		}
@@ -149,6 +151,55 @@ func (s *Store) RevokeKey(ctx context.Context, a Audit, id int64, note *string) 
 		err = nil
 	}
 	return out, err
+}
+
+// DeleteExpiredKeys deletes up to limit keys that expired more than age ago
+// on Postgres's clock and that no key was rotated from, with the
+// access-list entries that name them (demo mode's janitor, ADR-0095 §4).
+// One identity change for the lot, with one audit record per key whose
+// removed lists its access-list entries; with nothing to delete, no
+// identity version and no record. It returns how many keys it deleted.
+func (s *Store) DeleteExpiredKeys(ctx context.Context, a Audit, age time.Duration, limit int32) (int, error) {
+	var n int
+	err := s.inIdentityTx(ctx, func(q *db.Queries, v int64) error {
+		rows, err := q.ExpiredAPIKeys(ctx, db.ExpiredAPIKeysParams{AgeSeconds: age.Seconds(), Lim: limit})
+		if err != nil {
+			return err
+		}
+		if len(rows) == 0 {
+			return errUnchanged // rolls back the version bump (import.go)
+		}
+		ids := make([]int64, len(rows))
+		for i, r := range rows {
+			ids[i] = r.ID
+		}
+		entries, err := q.KeysAccessLists(ctx, ids)
+		if err != nil {
+			return err
+		}
+		lists := map[int64][]int64{}
+		for _, e := range entries {
+			lists[*e.ApiKeyID] = append(lists[*e.ApiKeyID], e.ID)
+		}
+		if err := q.DeleteAPIKeys(ctx, ids); err != nil {
+			return err
+		}
+		for _, r := range rows {
+			c := change{action: "key.delete", entity: "key", id: r.ID, before: Key(r), identity: v}
+			if l := lists[r.ID]; len(l) > 0 {
+				c.removed = map[string][]int64{"access_list_ids": l}
+			}
+			if err := a.write(ctx, q, c); err != nil {
+				return err
+			}
+		}
+		n = len(rows)
+		return nil
+	})
+	if errors.Is(err, errUnchanged) {
+		err = nil
+	}
+	return n, err
 }
 
 // listed is a key row as listed.

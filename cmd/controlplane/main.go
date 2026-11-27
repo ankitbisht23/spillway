@@ -149,7 +149,10 @@ func serve(log *slog.Logger, getenv func(string) string) error {
 	} else {
 		log.Warn("SPILLWAY_CP_PROMETHEUS_URL is not set: the stream's Prometheus queries and the shadow report's counts answer prometheus_not_configured")
 	}
-	apiServer := api.New(st, s.allow, net.DefaultResolver, api.OIDC{Verifier: verifier}, s.hitterSecret, log).WithPrometheus(prom)
+	apiServer := api.New(st, s.allow, net.DefaultResolver, api.OIDC{Verifier: verifier}, s.hitterSecret, log).WithPrometheus(prom).WithDemo(s.demoMode)
+	if s.demoMode {
+		log.Info("demo mode is on: the /api/v1/demo operations answer and every key issued or rotated expires within 30 minutes")
+	}
 	hub := live.NewHub(live.Config{Prometheus: prom, Postgres: apiServer.LiveSource(), Registerer: reg, Log: log})
 	// The REST API and the admin UI share the listener, same origin (UI-09,
 	// ADR-0057).
@@ -216,6 +219,12 @@ func serve(log *slog.Logger, getenv func(string) string) error {
 					defer func() { stopFlusher(); flushing.Wait() }()
 					flushing.Go(func() { flusher.Run(fctx) })
 				}
+				// The demo's expired-key janitor (ADR-0095 §4): returns at
+				// once unless demo mode is on.
+				jctx, stopJanitor := context.WithCancel(ctx)
+				var sweeping sync.WaitGroup
+				defer func() { stopJanitor(); sweeping.Wait() }()
+				sweeping.Go(func() { apiServer.RunDemoJanitor(jctx) })
 				if err := stream.Serve(ctx, s.grpcAddr, streamCerts.ServerConfig(), st, st, log, func(d int) { streams.Add(float64(d)) }, s.fleet); err != nil {
 					log.Error("config stream failed", "err", err)
 				}

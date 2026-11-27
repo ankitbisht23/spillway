@@ -4,7 +4,8 @@
 // navigates to or puts in history, and the console; after the test it
 // asserts that no token, JWT or key is in Web Storage, a cookie or a URL,
 // that the app set no cookie and left sessionStorage empty, and that the
-// control plane's pages logged no error. With the option leakReport set
+// control plane's pages logged no error but the demo probe's 404 (below).
+// With the option leakReport set
 // to a path, it also writes what it checked and found there (make
 // verify-m6 prints it, ADR-0061), before it asserts.
 import { writeFileSync } from "node:fs";
@@ -19,6 +20,13 @@ const JWT_ALL = new RegExp(JWT.source, "g");
 const API_KEY_ALL = new RegExp(API_KEY.source, "g");
 const KEYCLOAK_COOKIE_PATH = "/auth/realms/spillway/";
 const appOrigin = new URL(APP).origin;
+/**
+ * The demo probe (SC-08, ADR-0095 §2): each session start asks GET
+ * /api/v1/demo, which answers 404 by design while demo mode is off, as on
+ * the compose stack; Chromium logs that load as a console error. Only that
+ * status at that URL is excused; demo.spec.ts checks the probe itself.
+ */
+export const DEMO_PROBE = new URL("/api/v1/demo", APP).href;
 
 function onApp(url: string): boolean {
   try {
@@ -40,7 +48,7 @@ export const test = base.extend<{ leakGuard: LeakGuard; leakReport: string }>({
     const secrets = new Set<string>();
     const urls: { where: "request" | "navigation" | "history"; url: string }[] = [];
     const errors: string[] = [];
-    const excused: { status: number; url: string }[] = [];
+    const excused: { status: number; url: string }[] = [{ status: 404, url: DEMO_PROBE }];
     const reading: Promise<void>[] = [];
 
     await context.exposeBinding("__spillwayHistoryUrl", (_src, url: string) => void urls.push({ where: "history", url }));

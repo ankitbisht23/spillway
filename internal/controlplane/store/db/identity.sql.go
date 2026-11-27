@@ -374,6 +374,16 @@ func (q *Queries) CreateTenant(ctx context.Context, arg CreateTenantParams) (Ten
 	return i, err
 }
 
+const deleteAPIKeys = `-- name: DeleteAPIKeys :exec
+DELETE FROM api_keys WHERE id = ANY($1::bigint[])
+`
+
+// api_keys_pkey; cascades through access_lists_key.
+func (q *Queries) DeleteAPIKeys(ctx context.Context, ids []int64) error {
+	_, err := q.db.Exec(ctx, deleteAPIKeys, ids)
+	return err
+}
+
 const deleteAccessList = `-- name: DeleteAccessList :execrows
 DELETE FROM access_lists WHERE id = $1
 `
@@ -429,14 +439,15 @@ func (q *Queries) DeleteTenant(ctx context.Context, id int64) (int64, error) {
 
 const expireAPIKey = `-- name: ExpireAPIKey :one
 UPDATE api_keys
-SET expires_at = LEAST(coalesce(expires_at, 'infinity'), clock_timestamp() + make_interval(secs => $1::float8)),
-    version = $2, updated_at = clock_timestamp()
-WHERE id = $3
+SET expires_at = LEAST(coalesce(expires_at, 'infinity'), clock_timestamp() + make_interval(secs => $1::float8), $2::timestamptz),
+    version = $3, updated_at = clock_timestamp()
+WHERE id = $4
 RETURNING id, consumer_id, prefix, expires_at, revoked_at, rotated_from, version, created_at, updated_at
 `
 
 type ExpireAPIKeyParams struct {
 	GraceSeconds float64
+	Latest       *time.Time
 	Version      int64
 	ID           int64
 }
@@ -453,10 +464,16 @@ type ExpireAPIKeyRow struct {
 	UpdatedAt   time.Time
 }
 
-// api_keys_pkey. A rotated key's expiry: the earlier of its own and now
-// plus the grace period, on Postgres's clock (D2, ADR-0039).
+// api_keys_pkey. A rotated key's expiry: the earliest of its own, now plus
+// the grace period on Postgres's clock (D2, ADR-0039) and latest when given
+// (demo mode's 30-minute rule, ADR-0095; LEAST skips a NULL).
 func (q *Queries) ExpireAPIKey(ctx context.Context, arg ExpireAPIKeyParams) (ExpireAPIKeyRow, error) {
-	row := q.db.QueryRow(ctx, expireAPIKey, arg.GraceSeconds, arg.Version, arg.ID)
+	row := q.db.QueryRow(ctx, expireAPIKey,
+		arg.GraceSeconds,
+		arg.Latest,
+		arg.Version,
+		arg.ID,
+	)
 	var i ExpireAPIKeyRow
 	err := row.Scan(
 		&i.ID,
@@ -470,6 +487,67 @@ func (q *Queries) ExpireAPIKey(ctx context.Context, arg ExpireAPIKeyParams) (Exp
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const expiredAPIKeys = `-- name: ExpiredAPIKeys :many
+SELECT k.id, k.consumer_id, k.prefix, k.expires_at, k.revoked_at, k.rotated_from, k.version, k.created_at, k.updated_at
+FROM api_keys k
+WHERE k.expires_at < clock_timestamp() - make_interval(secs => $1::float8)
+  AND NOT EXISTS (SELECT 1 FROM api_keys r WHERE r.rotated_from = k.id)
+ORDER BY k.id LIMIT $2
+`
+
+type ExpiredAPIKeysParams struct {
+	AgeSeconds float64
+	Lim        int32
+}
+
+type ExpiredAPIKeysRow struct {
+	ID          int64
+	ConsumerID  int64
+	Prefix      string
+	ExpiresAt   *time.Time
+	RevokedAt   *time.Time
+	RotatedFrom *int64
+	Version     int64
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+// The demo janitor's sweep (ADR-0095 §4): keys that expired over
+// @age_seconds ago on Postgres's clock and that no key was rotated from
+// (api_keys_rotated_from), read under the identity version's row lock as
+// every writer of api_keys does. Never the hash. It reads the whole of
+// api_keys: demo mode only, every 10 minutes, on the demo database, whose
+// keys it keeps few.
+func (q *Queries) ExpiredAPIKeys(ctx context.Context, arg ExpiredAPIKeysParams) ([]ExpiredAPIKeysRow, error) {
+	rows, err := q.db.Query(ctx, expiredAPIKeys, arg.AgeSeconds, arg.Lim)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ExpiredAPIKeysRow
+	for rows.Next() {
+		var i ExpiredAPIKeysRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ConsumerID,
+			&i.Prefix,
+			&i.ExpiresAt,
+			&i.RevokedAt,
+			&i.RotatedFrom,
+			&i.Version,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const getAPIKey = `-- name: GetAPIKey :one
@@ -676,6 +754,39 @@ func (q *Queries) InsertAPIKey(ctx context.Context, arg InsertAPIKeyParams) (Ins
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const keysAccessLists = `-- name: KeysAccessLists :many
+SELECT id, api_key_id FROM access_lists
+WHERE api_key_id = ANY($1::bigint[])
+ORDER BY id
+`
+
+type KeysAccessListsRow struct {
+	ID       int64
+	ApiKeyID *int64
+}
+
+// The access-list entries of keys, which their delete cascades to:
+// access_lists_key (a skip scan past its leading action column).
+func (q *Queries) KeysAccessLists(ctx context.Context, keyIds []int64) ([]KeysAccessListsRow, error) {
+	rows, err := q.db.Query(ctx, keysAccessLists, keyIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []KeysAccessListsRow
+	for rows.Next() {
+		var i KeysAccessListsRow
+		if err := rows.Scan(&i.ID, &i.ApiKeyID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listAccessLists = `-- name: ListAccessLists :many

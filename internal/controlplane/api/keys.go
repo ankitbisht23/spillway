@@ -71,13 +71,19 @@ func keyNote(note *string) error {
 	return nil
 }
 
+// IssueKey issues a key; in demo mode it expires within 30 minutes
+// (ADR-0095 §3).
 func (s *Server) IssueKey(ctx context.Context, req apiv1.IssueKeyRequestObject) (apiv1.IssueKeyResponseObject, error) {
-	var expires *time.Time
+	var requested *time.Time
 	if req.Body != nil && req.Body.ExpiresAt != nil {
 		if !req.Body.ExpiresAt.After(time.Now()) {
 			return nil, validation("key", "expires_at", "expires_at: want a time in the future")
 		}
-		expires = req.Body.ExpiresAt
+		requested = req.Body.ExpiresAt
+	}
+	expires, err := s.demoKeys.Expiry(requested)
+	if err != nil {
+		return nil, validation("key", "expires_at", err.Error())
 	}
 	k, key, err := s.store.IssueKey(ctx, audit(ctx, showKey), s.newKey, req.Id, expires)
 	if err != nil {
@@ -86,6 +92,8 @@ func (s *Server) IssueKey(ctx context.Context, req apiv1.IssueKeyRequestObject) 
 	return apiv1.IssueKey201JSONResponse{Body: issuedOut(k, key), Headers: apiv1.IssueKey201ResponseHeaders{CacheControl: &noStore}}, nil
 }
 
+// RotateKey rotates a key; in demo mode the new key expires 30 minutes from
+// now and the old one at the latest then (ADR-0095 §3).
 func (s *Server) RotateKey(ctx context.Context, req apiv1.RotateKeyRequestObject) (apiv1.RotateKeyResponseObject, error) {
 	grace, note := defaultGrace, (*string)(nil)
 	if req.Body != nil {
@@ -101,7 +109,8 @@ func (s *Server) RotateKey(ctx context.Context, req apiv1.RotateKeyRequestObject
 		}
 		note = req.Body.Note
 	}
-	old, rotated, key, err := s.store.RotateKey(ctx, audit(ctx, showRotation), s.newKey, req.Id, grace, note)
+	latest, _ := s.demoKeys.Expiry(nil) // no requested expiry never fails; nil with demo mode off
+	old, rotated, key, err := s.store.RotateKey(ctx, audit(ctx, showRotation), s.newKey, req.Id, grace, latest, note)
 	if err != nil {
 		return nil, err
 	}

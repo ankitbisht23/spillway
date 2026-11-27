@@ -103,12 +103,15 @@ services:
   # The control plane on spillway_demo. No Redis seeds, so the quota
   # flusher is off (an override cannot unset a variable; empty means none):
   # the demo has no quotas, and the demo control plane never writes quota
-  # state for tenant IDs the dev database also uses (D29).
+  # state for tenant IDs the dev database also uses (D29). Demo mode
+  # (SC-08, ADR-0095 §1) comes from DEMO_MODE, which make demo sets true;
+  # only this file maps it, so make dev's control plane never has it.
   controlplane:
     labels: { spillway.demo: "true" }
     environment:
       SPILLWAY_CP_DATABASE_URL: postgres://spillway_app@postgres:5432/spillway_demo?sslmode=disable
       SPILLWAY_CP_REDIS_ADDRS: ""
+      SPILLWAY_CP_DEMO_MODE: ${DEMO_MODE:-false}
     depends_on:
       demo-migrate: { condition: service_completed_successfully }
 

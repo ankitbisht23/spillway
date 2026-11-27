@@ -73,6 +73,7 @@ var matrix = map[string][]string{
 	"getMe":              all,       // the caller's own roles (ADR-0058)
 	"openStream":         all,       // live data, every role (ADR-0059)
 	"getShadowReport":    all,       // a read, every role (ADR-0060)
+	"getDemo":            all,       // a read, every role; 404 when demo mode is off (ADR-0095)
 }
 
 // specOp is one operation of the spec as a request.

@@ -11,6 +11,7 @@ import { ConsumerList } from "../screens/consumers/ConsumerList";
 import { ConsumerScreen, NewConsumer } from "../screens/consumers/ConsumerScreen";
 import { PlanList } from "../screens/consumers/PlanList";
 import { NewTenant, TenantList, TenantScreen } from "../screens/consumers/Tenants";
+import { Playground } from "../screens/demo/Playground";
 import { Audit } from "../screens/history/Audit";
 import { HistoryList } from "../screens/history/HistoryList";
 import { VersionScreen } from "../screens/history/VersionScreen";
@@ -175,6 +176,9 @@ const auditRoute = createRoute({
   component: () => <Hidden op="listAudit"><Audit /></Hidden>,
 });
 
+/** The Playground: Not found unless demo mode is on (SC-08, ADR-0095). */
+const playgroundRoute = createRoute({ getParentRoute: () => rootRoute, path: "/playground", component: Playground });
+
 export const routeTree = rootRoute.addChildren([
   indexRoute,
   overviewRoute,
@@ -201,6 +205,7 @@ export const routeTree = rootRoute.addChildren([
   replicasRoute,
   historyRoute,
   versionRoute,
+  playgroundRoute,
   auditRoute,
 ]);
 

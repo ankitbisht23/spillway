@@ -29,6 +29,7 @@ export const operationRoles = {
   getConfigSettings: ["viewer", "editor", "publisher", "key-admin", "admin"],
   getConfigVersion: ["viewer", "editor", "publisher", "key-admin", "admin"],
   getConsumer: ["viewer", "editor", "publisher", "key-admin", "admin"],
+  getDemo: ["viewer", "editor", "publisher", "key-admin", "admin"],
   getMe: ["viewer", "editor", "publisher", "key-admin", "admin"],
   getOverride: ["viewer", "editor", "publisher", "key-admin", "admin"],
   getPlan: ["viewer", "editor", "publisher", "key-admin", "admin"],

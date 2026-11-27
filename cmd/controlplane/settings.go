@@ -46,6 +46,11 @@ type settings struct {
 	oidcCA       string // SPILLWAY_CP_OIDC_CA: PEM certificates trusted for the JWKS URL besides the system roots, optional (SEC-04)
 	devMode      bool   // SPILLWAY_CP_DEV_MODE: accept http:// issuer and JWKS URLs (SEC-04), default false
 
+	// SPILLWAY_CP_DEMO_MODE: demo mode (SC-08, ADR-0095), default false;
+	// only the demo stack sets it, from DEMO_MODE. Off, everything under
+	// /api/v1/demo is 404.
+	demoMode bool
+
 	// SPILLWAY_CP_PROMETHEUS_URL: the Prometheus the live-data stream's
 	// named queries and the shadow report's counts run against (UI-01,
 	// UI-03, ADR-0059, ADR-0060), http or https, no user info; not a
@@ -111,6 +116,11 @@ func loadSettings(getenv func(string) string) (settings, error) {
 	if v := getenv("SPILLWAY_CP_DEV_MODE"); v != "" {
 		if s.devMode, err = strconv.ParseBool(v); err != nil {
 			return s, fmt.Errorf("SPILLWAY_CP_DEV_MODE: %q is not true or false", v)
+		}
+	}
+	if v := getenv("SPILLWAY_CP_DEMO_MODE"); v != "" {
+		if s.demoMode, err = strconv.ParseBool(v); err != nil {
+			return s, errors.New("SPILLWAY_CP_DEMO_MODE: want true or false")
 		}
 	}
 	s.oidcIssuer, s.oidcJWKSURL = getenv("SPILLWAY_CP_OIDC_ISSUER"), getenv("SPILLWAY_CP_OIDC_JWKS_URL")

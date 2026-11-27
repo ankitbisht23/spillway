@@ -108,3 +108,4 @@ Decisions that shape Spillway and are not obvious from the code or from docs/des
 | [0097](0097-public-demo-caddy-tunnel-and-demo-share.md) | Public demo: Caddy, the tunnel, make demo-share and its stand-in test | Accepted | 2026-11-27 |
 | [0098](0098-make-verify-m8.md) | make verify-m8 | Accepted | 2026-11-27 |
 | [0099](0099-readme-gifs-and-recording.md) | README GIFs and recording | Accepted | 2026-11-27 |
+| [0100](0100-demo-guards-implementation-details.md) | Demo guards: implementation details | Accepted | 2026-11-27 |
