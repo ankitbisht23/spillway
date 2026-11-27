@@ -751,7 +751,7 @@ func budgetRule(ms []scrape) budgetResult {
 func scenarioD6() *scenario {
 	const c = "pro-co-mobile"
 	var mu sync.Mutex
-	var ts, te time.Duration
+	var tsSent, ts, te time.Duration
 	var scr *scraper
 	times := func() (time.Duration, time.Duration) {
 		mu.Lock()
@@ -819,6 +819,9 @@ func scenarioD6() *scenario {
 			if !r.e.sleepUntil(ctx, 10*time.Second) {
 				return ctx.Err()
 			}
+			mu.Lock()
+			tsSent = r.e.since()
+			mu.Unlock()
 			if err := r.setFault(ctx, "upstream-slow", true); err != nil {
 				return err
 			}
@@ -864,7 +867,10 @@ func scenarioD6() *scenario {
 				return
 			}
 			as := allOrders(r)
-			pre := within(as, 0, a)
+			mu.Lock()
+			sent := tsSent
+			mu.Unlock()
+			pre, inFlight := beforeFault(as, sent, a)
 			okClosed := true
 			for i := range r.e.gws {
 				for _, m := range sc.series(i) {
@@ -874,7 +880,7 @@ func scenarioD6() *scenario {
 				}
 			}
 			r.judge("d6.1", "before the fault: every orders answer 2xx, circuits closed", len(pre) > 0 && count(pre, is2xx) == len(pre) && okClosed, "only 2xx; gw_circuit_state 0 on every replica",
-				"%s; circuits closed: %v", statusMix(pre), okClosed)
+				"%s; circuits closed: %v; %d left out, not completed before the switch-on was sent (%s)", statusMix(pre), okClosed, len(inFlight), statusMix(inFlight))
 			okOpen := true
 			var open []string
 			for i, g := range r.e.gws {
@@ -908,6 +914,21 @@ func scenarioD6() *scenario {
 				"%s; %s of %d answers 2xx", strings.Join(rec, ", "), pct(share(late, is2xx)), len(late))
 		},
 	}
+}
+
+// beforeFault splits the answers due before ts (when the upstream-slow
+// switch-on returned) for d6.1 (ADR-0102, amending ADR-0098): judged are
+// those completed before sent (when the switch-on request was sent);
+// leftOut are the rest, in flight at sent or due after it.
+func beforeFault(as []answer, sent, ts time.Duration) (judged, leftOut []answer) {
+	for _, a := range within(as, 0, ts) {
+		if a.done < sent {
+			judged = append(judged, a)
+		} else {
+			leftOut = append(leftOut, a)
+		}
+	}
+	return judged, leftOut
 }
 
 // firstState is the receive time of the first answered scrape sent at or

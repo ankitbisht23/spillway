@@ -261,6 +261,33 @@ func TestBudgetRule(t *testing.T) {
 	}
 }
 
+// TestBeforeFault: d6.1 judges only the orders answers completed before
+// the switch-on request was sent (ADR-0102, amending ADR-0098); those
+// still in flight then, or due after it, are left out, wherever they end.
+func TestBeforeFault(t *testing.T) {
+	ms := time.Millisecond
+	sent, ts := 10_000*ms, 10_030*ms
+	as := []answer{
+		{due: 9_000 * ms, done: 9_005 * ms, status: 200},   // judged
+		{due: 9_990 * ms, done: 9_999 * ms, status: 200},   // judged
+		{due: 9_995 * ms, done: 12_500 * ms, status: 504},  // in flight at sent
+		{due: 9_998 * ms, done: 10_002 * ms, status: 200},  // in flight at sent
+		{due: 10_010 * ms, done: 12_510 * ms, status: 504}, // due after sent, before Ts
+		{due: 10_030 * ms, done: 12_530 * ms, status: 504}, // due at Ts: the fault
+		{due: 9_999 * ms, done: 15_000 * ms},               // no answer, ended after sent
+	}
+	judged, out := beforeFault(as, sent, ts)
+	if len(judged) != 2 || count(judged, is2xx) != 2 {
+		t.Errorf("judged %v", judged)
+	}
+	if len(out) != 4 || statusMix(out) != "200 × 1, 504 × 2, no answer () × 1" {
+		t.Errorf("left out %d: %s", len(out), statusMix(out))
+	}
+	if j, o := beforeFault(nil, sent, ts); j != nil || o != nil {
+		t.Errorf("none: %v %v", j, o)
+	}
+}
+
 func TestParseMetrics(t *testing.T) {
 	m := scrape{ok: true, samples: parseMetrics(`# HELP x
 gw_circuit_state{upstream="orders"} 1
