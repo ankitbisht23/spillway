@@ -1,0 +1,117 @@
+# The demo's config, "Acme API" (SC-01, ADR-0094 §3): a mock orders API over
+# the three mock upstreams (go-httpbin paths that never echo a request).
+# demo-traffic seed imports and publishes it into the demo database
+# spillway_demo; the demo gateways gateway-1 … gateway-3 serve it in managed
+# mode. Every limit has a period of 1 s and no plan has a quota, so limiter
+# state from before make demo-reset expires within seconds (D29). Every
+# GCRA burst covers at least one second of its rate (ADR-0098). All
+# policies are strict (no lease_k).
+upstreams:
+  # Through toxiproxy's demo-upstream-1 … 3 (→ upstream-1 … 3:8080), where
+  # D6 adds its latency (ADR-0095 §5). No health check; breaker, outlier
+  # detection and retry budget at their defaults (ADR-0030).
+  - name: orders
+    lb: p2c
+    endpoints:
+      - address: toxiproxy:26391
+      - address: toxiproxy:26392
+      - address: toxiproxy:26393
+  - name: catalog
+    lb: p2c
+    endpoints:
+      - address: upstream-1:8080
+      - address: upstream-2:8080
+      - address: upstream-3:8080
+  - name: payments
+    lb: p2c
+    endpoints:
+      - address: upstream-1:8080
+      - address: upstream-2:8080
+      - address: upstream-3:8080
+routes:
+  - name: orders
+    match: { path: /v1/orders, methods: [GET] }
+    upstream: orders
+    strip_prefix: /v1/orders
+    add_prefix: /bytes/512
+    request_headers: { remove: [X-API-Key] }
+    timeouts: { connect: 1s, per_try: 2500ms, total: 6s }
+    retry: { attempts: 2 }
+    auth_mode: api_key
+  - name: catalog
+    match: { path: /v1/catalog, methods: [GET] }
+    upstream: catalog
+    strip_prefix: /v1/catalog
+    add_prefix: /bytes/256
+    request_headers: { remove: [X-API-Key] }
+    timeouts: { connect: 1s, per_try: 2500ms, total: 6s }
+    auth_mode: api_key
+  - name: payments
+    match: { path: /v1/payments, methods: [POST] }
+    upstream: payments
+    strip_prefix: /v1/payments
+    add_prefix: /status/201
+    request_headers: { remove: [X-API-Key] }
+    timeouts: { connect: 1s, per_try: 2500ms, total: 6s }
+    auth_mode: api_key
+  # Bearer tokens only, for make demo-share-test's issuer check of the
+  # gateways (ADR-0097 §3): gateway-tests' token resolves to consumer
+  # pro-co-service.
+  - name: service
+    match: { path: /v1/service, methods: [GET] }
+    upstream: catalog
+    strip_prefix: /v1/service
+    add_prefix: /status/204
+    request_headers: { remove: [X-API-Key] }
+    timeouts: { connect: 1s, per_try: 2500ms, total: 6s }
+    auth_mode: jwt
+# During D5's Redis cut, catalog fails open, payments fails closed and
+# orders is limited by consumer-plan's degraded per-replica limiters;
+# tenant-ceiling fails open everywhere (ADR-0021's precedence).
+policies:
+  - name: tenant-ceiling
+    level: tenant
+    match: { routes: [orders, catalog, payments, service] }
+    key_template: '{tenant}'
+    algorithm: gcra
+    limits: [{ rate: 1500, period: 1s, burst: 1500 }]
+    mode: enforce
+    failure_mode: fail_open
+  - name: consumer-plan
+    level: consumer
+    match: { routes: [orders] }
+    key_template: '{consumer}'
+    algorithm: gcra
+    from_plan: true
+    mode: enforce
+    failure_mode: degraded
+  - name: catalog-limit
+    level: route
+    match: { routes: [catalog] }
+    key_template: '{consumer}'
+    algorithm: gcra
+    limits: [{ rate: 200, period: 1s, burst: 200 }]
+    mode: enforce
+    failure_mode: fail_open
+  - name: payments-limit
+    level: route
+    match: { routes: [payments] }
+    key_template: '{consumer}'
+    algorithm: gcra
+    limits: [{ rate: 100, period: 1s, burst: 200 }]
+    mode: enforce
+    failure_mode: fail_closed
+# consumer-plan's limit per plan; no quotas.
+plans:
+  - name: free
+    default_limits:
+      - policy: consumer-plan
+        limits: [{ rate: 10, period: 1s, burst: 20 }]
+  - name: pro
+    default_limits:
+      - policy: consumer-plan
+        limits: [{ rate: 100, period: 1s, burst: 200 }]
+  - name: enterprise
+    default_limits:
+      - policy: consumer-plan
+        limits: [{ rate: 1000, period: 1s, burst: 1000 }]

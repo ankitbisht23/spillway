@@ -25,11 +25,11 @@
       "implicitFlowEnabled": false,
       "serviceAccountsEnabled": false,
       "consentRequired": false,
-      "redirectUris": ["http://localhost:8080/oidc/callback", "http://localhost:5173/oidc/callback"],
-      "webOrigins": ["http://localhost:8080", "http://localhost:5173"],
+      "redirectUris": ["http://localhost:8080/oidc/callback", "http://localhost:5173/oidc/callback", "http://localhost:8888/oidc/callback"],
+      "webOrigins": ["http://localhost:8080", "http://localhost:5173", "http://localhost:8888"],
       "attributes": {
         "pkce.code.challenge.method": "S256",
-        "post.logout.redirect.uris": "http://localhost:8080/signed-out##http://localhost:5173/signed-out"
+        "post.logout.redirect.uris": "http://localhost:8080/signed-out##http://localhost:5173/signed-out##http://localhost:8888/signed-out"
       },
       "protocolMappers": [
         {
