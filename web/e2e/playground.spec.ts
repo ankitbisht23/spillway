@@ -91,18 +91,22 @@ test("test-admin switches D6's fault on and off from the Playground", async ({ p
   const faults = page.locator(".card").filter({ has: page.getByRole("heading", { name: "Faults" }) });
   await expect(faults).toBeVisible();
   const slow = faults.getByRole("listitem").filter({ hasText: "Upstream slow (D6)" });
-  await expect(slow).toContainText("off");
+  // The state alone: the switch's own label also says "on" or "off".
+  const state = slow.locator("strong");
+  await expect(state).toHaveText("off");
 
   await slow.getByRole("button", { name: "Switch on" }).click();
   const on = page.getByRole("dialog", { name: "Switch Upstream slow (D6) on" });
   await on.getByLabel("Note (optional)").fill("playwright: D6 on");
   await on.getByRole("button", { name: "Switch on" }).click();
   await expect(on).toHaveCount(0);
-  await expect(slow).toContainText("on");
+  await expect(state).toHaveText("on");
 
   await slow.getByRole("button", { name: "Switch off" }).click();
-  await page.getByRole("dialog", { name: "Switch Upstream slow (D6) off" }).getByRole("button", { name: "Switch off" }).click();
-  await expect(slow).toContainText("off");
+  const off = page.getByRole("dialog", { name: "Switch Upstream slow (D6) off" });
+  await off.getByRole("button", { name: "Switch off" }).click();
+  await expect(off).toHaveCount(0);
+  await expect(state).toHaveText("off");
 
   const offOrigin = seen.requests.filter((u) => new URL(u).origin !== new URL(APP).origin && u !== TOKEN_ENDPOINT);
   expect(offOrigin, "requests to another origin").toEqual([]);
