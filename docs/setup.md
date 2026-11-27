@@ -230,8 +230,17 @@ The local repo already exists with no commits yet; this step secures the account
    This is the one direct commit to `main`; the ruleset comes next, and everything after it is a PR.
 7. **Protect `main`.** Settings → Rules → Rulesets → New branch ruleset targeting `main`, enforcement Active, bypass list empty. Turn on: require a pull request, require status checks, block force pushes, restrict deletions. The only required check is `ci-ok`, the single aggregate CI job that passes only when every other CI job does; GitHub lists it once it has run, so add it after M0’s first workflow run. Solo repo: don’t require approvals, since you can’t approve your own PR. The agent still can’t merge without asking: `gh pr merge` is an ask rule (Step 9).
 8. **Turn on free security features.** Settings → Code security: Dependabot alerts, secret scanning and push protection. Dependabot version updates come from `.github/dependabot.yml`, which the agent adds in M0.
-9. **After the first image push (the v1.0.0 release in M7, or earlier if CI starts publishing images):** open your profile → Packages → `spillway-gateway` and `spillway-controlplane` → Package settings → Change visibility → Public, so anyone can pull `ghcr.io/ankitbisht23/spillway-gateway` and `ghcr.io/ankitbisht23/spillway-controlplane` without credentials.
-10. **Note:** the bench workflow creates and pushes the unprotected `bench-results` branch itself (ADR-0003); keep it out of the ruleset.
+9. **Release environment (once, before the first `v*` tag; ADR-0076, ADR-0092).** Settings → Environments → New environment `release` → tick Required reviewers and add yourself; under Deployment branches and tags choose Selected branches and tags and add the tag rule `v*`. `release.yml`'s publish job (the ghcr push, the cosign signatures, the GitHub release) waits for your approval there. Create it before tagging: a job that names a missing environment makes it without protection. Then a release is:
+
+   ```bash
+   git switch main && git pull --ff-only
+   git tag -a v1.0.0 -m "Spillway v1.0.0" && git push origin v1.0.0   # starts release.yml
+   gh run watch                                                       # approve the publish job when asked
+   ```
+
+   `gh workflow run release.yml` without inputs is a dry run (images, SBOMs and notes as an artifact, nothing published).
+10. **After the first image push (the v1.0.0 release in M7, or earlier if CI starts publishing images):** open your profile → Packages → `spillway-gateway` and `spillway-controlplane` → Package settings → Change visibility → Public, so anyone can pull `ghcr.io/ankitbisht23/spillway-gateway` and `ghcr.io/ankitbisht23/spillway-controlplane` without credentials.
+11. **Note:** the bench workflow creates and pushes the unprotected `bench-results` branch itself (ADR-0003); keep it out of the ruleset.
 
 The agent can create branches, commits, PRs and workflow files through `gh` once you’ve logged in; the SSH key, `gh` login, bootstrap push, account security, rulesets and package visibility need you.
 
