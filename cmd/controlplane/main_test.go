@@ -71,6 +71,22 @@ func TestLoadSettings(t *testing.T) {
 	}
 }
 
+// TestDemoModeSetting: SPILLWAY_CP_DEMO_MODE is off unless set to a value
+// strconv.ParseBool reads as true (SC-08, ADR-0095 §1).
+func TestDemoModeSetting(t *testing.T) {
+	for v, want := range map[string]bool{"": false, "false": false, "0": false, "true": true, "1": true, "TRUE": true} {
+		s, err := loadSettings(env(withOIDC(map[string]string{
+			"SPILLWAY_CP_DATABASE_URL":      "postgres://spillway_app@db:5432/spillway",
+			"SPILLWAY_CP_DATABASE_PASSWORD": secretValue,
+			"SPILLWAY_CP_ALLOWED_NETWORKS":  "172.29.0.0/16",
+			"SPILLWAY_CP_DEMO_MODE":         v,
+		})))
+		if err != nil || s.demoMode != want {
+			t.Errorf("SPILLWAY_CP_DEMO_MODE=%q: demo mode %v, %v; want %v", v, s.demoMode, err, want)
+		}
+	}
+}
+
 // TestFleetAndOIDCCA: SPILLWAY_CP_GRPC_FLEET_IDENTITIES lists the fleet
 // certificates' names, none by default (ADR-0075 §D11);
 // SPILLWAY_CP_OIDC_CA names the CA file the JWKS URL is trusted with, none
@@ -179,6 +195,7 @@ func TestSettingsErrors(t *testing.T) {
 		{"no JWKS URL", with("SPILLWAY_CP_OIDC_JWKS_URL", ""), "SPILLWAY_CP_OIDC_JWKS_URL: required"},
 		{"http:// without dev mode", with("SPILLWAY_CP_DEV_MODE", ""), "accepted only in dev mode (SEC-04)"},
 		{"dev mode not a bool", with("SPILLWAY_CP_DEV_MODE", "yes"), `SPILLWAY_CP_DEV_MODE: "yes" is not true or false`},
+		{"demo mode not a bool", with("SPILLWAY_CP_DEMO_MODE", "yes"), "SPILLWAY_CP_DEMO_MODE: want true or false"},
 		{"fleet name not a DNS label", with("SPILLWAY_CP_GRPC_FLEET_IDENTITIES", "spillway-gateway,Fleet.1"), `SPILLWAY_CP_GRPC_FLEET_IDENTITIES: "Fleet.1" is not a DNS label`},
 		{"bad Redis address", with("SPILLWAY_CP_REDIS_ADDRS", "redis-0"), `SPILLWAY_CP_REDIS_ADDRS: "redis-0" is not host:port`},
 		{"Redis username without a password", with("SPILLWAY_CP_REDIS_USERNAME", "flusher"), "SPILLWAY_CP_REDIS_USERNAME: set with SPILLWAY_CP_REDIS_PASSWORD"},

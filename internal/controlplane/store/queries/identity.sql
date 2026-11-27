@@ -81,10 +81,11 @@ ON CONFLICT (prefix) DO NOTHING
 RETURNING id, consumer_id, prefix, expires_at, revoked_at, rotated_from, version, created_at, updated_at;
 
 -- name: ExpireAPIKey :one
--- api_keys_pkey. A rotated key's expiry: the earlier of its own and now
--- plus the grace period, on Postgres's clock (D2, ADR-0039).
+-- api_keys_pkey. A rotated key's expiry: the earliest of its own, now plus
+-- the grace period on Postgres's clock (D2, ADR-0039) and latest when given
+-- (demo mode's 30-minute rule, ADR-0095; LEAST skips a NULL).
 UPDATE api_keys
-SET expires_at = LEAST(coalesce(expires_at, 'infinity'), clock_timestamp() + make_interval(secs => @grace_seconds::float8)),
+SET expires_at = LEAST(coalesce(expires_at, 'infinity'), clock_timestamp() + make_interval(secs => @grace_seconds::float8), sqlc.narg(latest)::timestamptz),
     version = @version, updated_at = clock_timestamp()
 WHERE id = @id
 RETURNING id, consumer_id, prefix, expires_at, revoked_at, rotated_from, version, created_at, updated_at;
@@ -94,6 +95,30 @@ RETURNING id, consumer_id, prefix, expires_at, revoked_at, rotated_from, version
 UPDATE api_keys SET revoked_at = clock_timestamp(), version = @version, updated_at = clock_timestamp()
 WHERE id = @id
 RETURNING id, consumer_id, prefix, expires_at, revoked_at, rotated_from, version, created_at, updated_at;
+
+-- name: ExpiredAPIKeys :many
+-- The demo janitor's sweep (ADR-0095 §4): keys that expired over
+-- @age_seconds ago on Postgres's clock and that no key was rotated from
+-- (api_keys_rotated_from), read under the identity version's row lock as
+-- every writer of api_keys does. Never the hash. It reads the whole of
+-- api_keys: demo mode only, every 10 minutes, on the demo database, whose
+-- keys it keeps few.
+SELECT k.id, k.consumer_id, k.prefix, k.expires_at, k.revoked_at, k.rotated_from, k.version, k.created_at, k.updated_at
+FROM api_keys k
+WHERE k.expires_at < clock_timestamp() - make_interval(secs => @age_seconds::float8)
+  AND NOT EXISTS (SELECT 1 FROM api_keys r WHERE r.rotated_from = k.id)
+ORDER BY k.id LIMIT @lim;
+
+-- name: KeysAccessLists :many
+-- The access-list entries of keys, which their delete cascades to:
+-- access_lists_key (a skip scan past its leading action column).
+SELECT id, api_key_id FROM access_lists
+WHERE api_key_id = ANY(@key_ids::bigint[])
+ORDER BY id;
+
+-- name: DeleteAPIKeys :exec
+-- api_keys_pkey; cascades through access_lists_key.
+DELETE FROM api_keys WHERE id = ANY(@ids::bigint[]);
 
 -- name: ListAccessLists :many
 -- access_lists_pkey keyset scan.

@@ -26,6 +26,7 @@ import (
 	"strings"
 
 	"github.com/ankitbisht23/spillway/internal/apikey"
+	"github.com/ankitbisht23/spillway/internal/controlplane/demo"
 	"github.com/ankitbisht23/spillway/internal/controlplane/live"
 	"github.com/ankitbisht23/spillway/internal/controlplane/store"
 	"github.com/ankitbisht23/spillway/internal/gen/apiv1"
@@ -60,7 +61,10 @@ type Server struct {
 	prometheus *live.Prometheus
 	// shadowSlots bounds the shadow reports evaluating at once.
 	shadowSlots chan struct{}
-	log         *slog.Logger
+	// demoKeys is demo mode and its 30-minute key rule (SC-08, ADR-0095);
+	// the zero value is off.
+	demoKeys demo.Keys
+	log      *slog.Logger
 }
 
 // Allowlist is the upstream allow-list of SEC-06, the same networks as the
@@ -82,7 +86,8 @@ func New(st *store.Store, allowed Allowlist, resolver Resolver, authn Authentica
 // elsewhere. Each operation's path and method go through guard first
 // (ADR-0040); other requests reach only the 404, never the body reader or
 // the generated server. The stream goes from the guard to its own handler
-// (ADR-0059).
+// (ADR-0059). With demo mode off, paths under /api/v1/demo answer that same
+// 404 before the guard (ADR-0095).
 func (s *Server) Handler() http.Handler {
 	notFound := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, &apiError{http.StatusNotFound, apiv1.ErrorCodeNotFound, "no such path", nil})
@@ -106,7 +111,7 @@ func (s *Server) Handler() http.Handler {
 		}
 		guarded.Handle(pattern, s.guard(op, next))
 	}
-	return requestID(guarded)
+	return requestID(s.demoGuard(guarded, notFound))
 }
 
 type requestIDKey struct{}
