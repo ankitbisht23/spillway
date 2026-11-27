@@ -1,22 +1,28 @@
 // Command demo-traffic is the demo's tool (SC-01, ADR-0094, ADR-0096 §1),
 // run in the compose network by the demo's one-shot services and make
-// targets. Two subcommands so far:
+// targets. Three subcommands so far:
 //
 //	demo-traffic seed [-config file] [-seed file] [-wait 3m]
 //	demo-traffic proxies [-delete]
+//	demo-traffic fault [-note text] <redis-cut|upstream-slow> <on|off>
+//	demo-traffic fault [-note text] clear
 //
 // "seed" (the demo-seed one-shot) imports and publishes the demo config and
 // creates the demo's tenants and consumers through the control plane's REST
 // API, idempotently (ADR-0094 §3); it seeds no API key. "proxies" (the
 // demo-init one-shot) creates the toxiproxy proxies of the demo gateways'
 // Redis and orders upstream paths, and with -delete (make demo-down)
-// removes every demo proxy (ADR-0094 §5).
+// removes every demo proxy (ADR-0094 §5). "fault" (make demo-fault-redis,
+// make demo-fault-upstream, make demo-fault-clear) switches a demo fault on
+// or off, or both off with clear, through the control plane's setDemoFault
+// with the service token, so the switch has the API's RBAC (admin), audit
+// record and demo-mode check (SC-03, ADR-0095 §5).
 //
 // Settings come from the environment: SPILLWAY_DEMO_CP_URL (the control
 // plane, default http://controlplane:8080), SPILLWAY_DEMO_TOKEN_URL
 // (Keycloak's token endpoint in the network), SPILLWAY_DEMO_CLIENT_ID
 // (default spillway-ci), SPILLWAY_DEMO_CLIENT_SECRET or its _FILE (seed
-// only; never printed, SEC-09) and SPILLWAY_DEMO_TOXIPROXY_URL (default
+// and fault; never printed, SEC-09) and SPILLWAY_DEMO_TOXIPROXY_URL (default
 // http://toxiproxy:8474). It exits 0 on success, 1 on failure and 2 on bad
 // arguments or settings.
 package main
@@ -41,7 +47,8 @@ const usage = `usage: demo-traffic <command> [flags]
 
 commands:
   seed      import and publish the demo config, create the demo's tenants and consumers
-  proxies   create the demo's toxiproxy proxies (-delete removes them)`
+  proxies   create the demo's toxiproxy proxies (-delete removes them)
+  fault     switch a demo fault: fault <redis-cut|upstream-slow> <on|off>, or fault clear (both off)`
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -63,6 +70,8 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		return runSeed(ctx, args[1:], getenv, stdout, stderr)
 	case "proxies":
 		return runProxies(ctx, args[1:], getenv, stdout, stderr)
+	case "fault":
+		return runFault(ctx, args[1:], getenv, stdout, stderr)
 	}
 	_, _ = fmt.Fprintf(stderr, "demo-traffic: unknown command %q\n%s\n", args[0], usage)
 	return 2
@@ -189,6 +198,80 @@ func runProxies(ctx context.Context, args []string, getenv func(string) string, 
 			return 1
 		}
 		_, _ = fmt.Fprintf(stdout, "demo-proxies: %s %s -> %s\n", p.Name, p.Listen, p.Upstream)
+	}
+	return 0
+}
+
+// runFault is "demo-traffic fault [-note text] <redis-cut|upstream-slow>
+// <on|off>" and "demo-traffic fault [-note text] clear". It first asks GET
+// /api/v1/demo, so with demo mode off it stops with the demo-mode-off
+// message (ADR-0095 §1), then sends one setDemoFault per fault and prints
+// each new state.
+func runFault(ctx context.Context, args []string, getenv func(string) string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("demo-traffic fault", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	note := fs.String("note", "", "the audit record's note (default: the command)")
+	timeout := fs.Duration("timeout", 10*time.Second, "per-call timeout of the REST API and Keycloak")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
+		return 2
+	}
+	type change struct {
+		name string
+		on   bool
+	}
+	var changes []change
+	switch a := fs.Args(); {
+	case len(a) == 1 && a[0] == "clear":
+		changes = []change{{"redis-cut", false}, {"upstream-slow", false}}
+	case len(a) == 2 && (a[0] == "redis-cut" || a[0] == "upstream-slow") && (a[1] == "on" || a[1] == "off"):
+		changes = []change{{a[0], a[1] == "on"}}
+	default:
+		_, _ = fmt.Fprintln(stderr, "usage: demo-traffic fault [-note text] <redis-cut|upstream-slow> <on|off>, or demo-traffic fault [-note text] clear")
+		return 2
+	}
+	if *note == "" {
+		*note = "demo-traffic fault " + strings.Join(fs.Args(), " ")
+	}
+	sec, err := secret.Required(getenv, "SPILLWAY_DEMO_CLIENT_SECRET")
+	if err != nil {
+		_, _ = fmt.Fprintln(stderr, "demo-traffic fault:", err)
+		return 2
+	}
+	c := demo.NewClient(setting(getenv, "SPILLWAY_DEMO_CP_URL", "http://controlplane:8080")+"/api/v1",
+		setting(getenv, "SPILLWAY_DEMO_TOKEN_URL", "http://keycloak:8080/auth/realms/spillway/protocol/openid-connect/token"),
+		setting(getenv, "SPILLWAY_DEMO_CLIENT_ID", "spillway-ci"), sec, *timeout)
+	a, err := c.Call(ctx, "GET", "/demo", nil)
+	switch {
+	case err != nil:
+		_, _ = fmt.Fprintln(stderr, "demo-traffic fault: FAIL:", err)
+		return 1
+	case a.Status == 404:
+		_, _ = fmt.Fprintln(stderr, "demo-traffic fault: demo mode is off (GET /api/v1/demo answered 404)")
+		return 1
+	case a.Status != 200:
+		_, _ = fmt.Fprintf(stderr, "demo-traffic fault: FAIL: GET /api/v1/demo: status %d: %s\n", a.Status, demo.ErrorMessage(a.Body))
+		return 1
+	}
+	for _, ch := range changes {
+		var out struct {
+			Active *bool `json:"active"`
+		}
+		if _, err := c.Must(ctx, 200, "PUT", "/demo/faults/"+ch.name, map[string]any{"active": ch.on, "note": *note}, &out); err != nil {
+			_, _ = fmt.Fprintln(stderr, "demo-traffic fault: FAIL:", err)
+			return 1
+		}
+		if out.Active == nil || *out.Active != ch.on {
+			_, _ = fmt.Fprintf(stderr, "demo-traffic fault: FAIL: %s: the control plane answered another state\n", ch.name)
+			return 1
+		}
+		state := "off"
+		if ch.on {
+			state = "on"
+		}
+		_, _ = fmt.Fprintf(stdout, "%s: %s\n", ch.name, state)
 	}
 	return 0
 }
