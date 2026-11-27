@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/HdrHistogram/hdrhistogram-go"
+
+	"github.com/ankitbisht23/spillway/internal/loadgen"
 )
 
 // The per-tenant mode (NFR-15, ADR-0074 §D9): each -tenant sends its own
@@ -108,17 +110,17 @@ func readKey(path string) (string, error) {
 // for a toggle tenant), and the tenant is valid when that is at least 99%
 // of its rate.
 type tenantResult struct {
-	TargetRPS   int              `json:"target_rps"`
-	Toggle      bool             `json:"toggle"`
-	AchievedRPS float64          `json:"achieved_rps"`
-	Valid       bool             `json:"valid"`
-	Requests    requestCounts    `json:"requests"`
-	Status      map[string]int64 `json:"status"`
-	Errors      map[string]int64 `json:"errors"`
-	Failures    *failures        `json:"failures,omitempty"`
-	LatencyUS   latencies        `json:"latency_us"`
-	PooledP99   *pooledP99       `json:"pooled_p99"`
-	Slots       []slotResult     `json:"slots"`
+	TargetRPS   int                   `json:"target_rps"`
+	Toggle      bool                  `json:"toggle"`
+	AchievedRPS float64               `json:"achieved_rps"`
+	Valid       bool                  `json:"valid"`
+	Requests    loadgen.RequestCounts `json:"requests"`
+	Status      map[string]int64      `json:"status"`
+	Errors      map[string]int64      `json:"errors"`
+	Failures    *loadgen.Failures     `json:"failures,omitempty"`
+	LatencyUS   loadgen.Latencies     `json:"latency_us"`
+	PooledP99   *loadgen.PooledP99    `json:"pooled_p99"`
+	Slots       []loadgen.SlotResult  `json:"slots"`
 }
 
 // runTenants makes one per-tenant run: a generator per tenant, all on one
@@ -126,7 +128,7 @@ type tenantResult struct {
 // result are the tenants' together: target is the sum of their rates,
 // latencies come from all their answers, and the run is valid when every
 // tenant is.
-func runTenants(ctx context.Context, o options, clk clock, do func(apiKey string) func(context.Context) (int, string, error)) (result, error) {
+func runTenants(ctx context.Context, o options, clk loadgen.Clock, do func(apiKey string) func(context.Context, time.Time) (int, string, error)) (result, error) {
 	keys := make([]string, len(o.tenants))
 	for i, t := range o.tenants {
 		k, err := readKey(t.keyFile)
@@ -137,21 +139,21 @@ func runTenants(ctx context.Context, o options, clk clock, do func(apiKey string
 	}
 	// A shared start a little ahead, so every tenant's slots line up.
 	start := clk.Now().Add(100 * time.Millisecond)
-	results := make([]result, len(o.tenants))
-	all := make([]*stats, len(o.tenants))
+	results := make([]loadgen.Result, len(o.tenants))
+	all := make([]*loadgen.Stats, len(o.tenants))
 	var wg sync.WaitGroup
 	for i, t := range o.tenants {
-		g := generator{clock: clk, rate: t.rate, warmup: o.warmup, duration: o.duration, maxInFlight: o.maxInFlight,
-			do: do(keys[i]), start: start, slot: o.slot, settle: min(slotSettle, o.slot/2), toggle: t.toggle}
-		wg.Go(func() { results[i], all[i] = g.runStats(ctx) })
+		g := loadgen.Generator{Clock: clk, Rate: t.rate, Warmup: o.warmup, Duration: o.duration, MaxInFlight: o.maxInFlight,
+			Do: do(keys[i]), Start: start, Slot: o.slot, Settle: min(slotSettle, o.slot/2), Toggle: t.toggle}
+		wg.Go(func() { results[i], all[i] = g.RunStats(ctx) })
 	}
 	wg.Wait()
 
-	r := result{
+	r := result{Result: loadgen.Result{
 		TargetRPS: 0, Valid: true, WarmupS: o.warmup.Seconds(), DurationS: o.duration.Seconds(),
-		Status: map[string]int64{}, Errors: map[string]int64{}, Tenants: map[string]tenantResult{},
-	}
-	latency := hdrhistogram.New(1, maxLatency.Microseconds(), 3)
+		Status: map[string]int64{}, Errors: map[string]int64{},
+	}, Tenants: map[string]tenantResult{}}
+	latency := hdrhistogram.New(1, loadgen.MaxLatency.Microseconds(), 3)
 	for i, t := range o.tenants {
 		tr := results[i]
 		r.Tenants[t.name] = tenantResult{
@@ -174,10 +176,10 @@ func runTenants(ctx context.Context, o options, clk clock, do func(apiKey string
 			r.Protocol = tr.Protocol
 		}
 		r.Failures = mergeFailures(r.Failures, tr.Failures)
-		latency.Merge(all[i].latency)
+		latency.Merge(all[i].Latency)
 	}
 	r.AchievedRPS = float64(r.Requests.Sent) / o.duration.Seconds()
-	r.LatencyUS = latencies{
+	r.LatencyUS = loadgen.Latencies{
 		P50:  latency.ValueAtQuantile(50),
 		P99:  latency.ValueAtQuantile(99),
 		P999: latency.ValueAtQuantile(99.9),
@@ -187,7 +189,7 @@ func runTenants(ctx context.Context, o options, clk clock, do func(apiKey string
 }
 
 // mergeFailures combines two tenants' failures.
-func mergeFailures(a, b *failures) *failures {
+func mergeFailures(a, b *loadgen.Failures) *loadgen.Failures {
 	switch {
 	case a == nil && b == nil:
 		return nil

@@ -37,7 +37,19 @@ import (
 	"time"
 
 	"github.com/ankitbisht23/spillway/internal/hardware"
+	"github.com/ankitbisht23/spillway/internal/loadgen"
 )
+
+// result is the JSON a run prints (ADR-0014): the generator's result with
+// the URL, the hardware and, in the per-tenant mode, each tenant's part
+// (ADR-0074 §D9; the top-level numbers are then the tenants' together).
+// Latencies are in microseconds.
+type result struct {
+	URL string `json:"url"`
+	loadgen.Result
+	Hardware hardware.Info           `json:"hardware"`
+	Tenants  map[string]tenantResult `json:"tenants,omitempty"`
+}
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -64,7 +76,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	var r result
 	if len(o.tenants) > 0 {
 		var newErr error
-		r, err = runTenants(ctx, o, realClock{}, func(apiKey string) func(context.Context) (int, string, error) {
+		r, err = runTenants(ctx, o, loadgen.RealClock{}, func(apiKey string) func(context.Context, time.Time) (int, string, error) {
 			send, err := newSender(o, apiKey)
 			if err != nil && newErr == nil {
 				newErr = err
@@ -84,8 +96,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			_, _ = fmt.Fprintln(stderr, "loadgen:", err)
 			return 2
 		}
-		g := generator{clock: realClock{}, rate: o.rate, warmup: o.warmup, duration: o.duration, maxInFlight: o.maxInFlight, do: send}
-		r = g.run(ctx)
+		g := loadgen.Generator{Clock: loadgen.RealClock{}, Rate: o.rate, Warmup: o.warmup, Duration: o.duration, MaxInFlight: o.maxInFlight, Do: send}
+		r = result{Result: g.Run(ctx)}
 	}
 	r.URL, r.Hardware = o.url, hardware.Read()
 	enc := json.NewEncoder(stdout)
@@ -176,7 +188,7 @@ func checkOptions(o options, rest []string) error {
 // response, with apiKey in X-API-Key unless it is empty. Connections are kept
 // alive and capped at conns, per sender; redirects are not followed, and no
 // proxy is used.
-func newSender(o options, apiKey string) (func(ctx context.Context) (int, string, error), error) {
+func newSender(o options, apiKey string) (func(ctx context.Context, _ time.Time) (int, string, error), error) {
 	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
 	if o.caCert != "" {
 		pem, err := os.ReadFile(o.caCert)
@@ -198,7 +210,7 @@ func newSender(o options, apiKey string) (func(ctx context.Context) (int, string
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		Timeout:       o.timeout,
 	}
-	return func(ctx context.Context) (int, string, error) {
+	return func(ctx context.Context, _ time.Time) (int, string, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, o.url, nil) //nolint:gosec // G704: requesting the operator's -url is the point
 		if err != nil {
 			return 0, "", err

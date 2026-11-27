@@ -16,6 +16,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/ankitbisht23/spillway/internal/loadgen"
 )
 
 func TestParseFlags(t *testing.T) {
@@ -60,8 +62,8 @@ func TestParseFlags(t *testing.T) {
 	}
 }
 
-// loadgen runs the command and decodes its JSON result.
-func loadgen(t *testing.T, args ...string) (r result, out map[string]any, code int, stderr string) {
+// runLoadgen runs the command and decodes its JSON result.
+func runLoadgen(t *testing.T, args ...string) (r result, out map[string]any, code int, stderr string) {
 	t.Helper()
 	var stdout, errb bytes.Buffer
 	code = run(t.Context(), args, &stdout, &errb)
@@ -103,14 +105,14 @@ func TestResult(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			got.Store(0)
-			r, out, code, stderr := loadgen(t, append(tt.args, "-rate", "50", "-warmup", "200ms", "-duration", "500ms")...)
+			r, out, code, stderr := runLoadgen(t, append(tt.args, "-rate", "50", "-warmup", "200ms", "-duration", "500ms")...)
 			if code != 0 {
 				t.Errorf("exit code %d: %s", code, stderr)
 			}
 			if r.Protocol != tt.proto || r.URL != tt.args[1] || r.TargetRPS != 50 || r.AchievedRPS != 50 || !r.Valid || r.WarmupS != 0.2 || r.DurationS != 0.5 {
 				t.Errorf("result = %+v, want %s, 50 rps target and achieved, valid", r, tt.proto)
 			}
-			if r.Requests != (requestCounts{Scheduled: 25, Sent: 25}) || r.Status["2xx"] != 25 || len(r.Errors) != 0 {
+			if r.Requests != (loadgen.RequestCounts{Scheduled: 25, Sent: 25}) || r.Status["2xx"] != 25 || len(r.Errors) != 0 {
 				t.Errorf("requests = %+v, status = %v, errors = %v; want 25 sent and 2xx", r.Requests, r.Status, r.Errors)
 			}
 			if n := got.Load(); n != 35 {
@@ -153,7 +155,7 @@ func TestStalledServer(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	r, _, code, stderr := loadgen(t, "-url", srv.URL, "-rate", "100", "-warmup", "0s", "-duration", "1s")
+	r, _, code, stderr := runLoadgen(t, "-url", srv.URL, "-rate", "100", "-warmup", "0s", "-duration", "1s")
 	// Valid allows the last due request to be dropped if the timer fires late.
 	if code != 0 || !r.Valid || r.Status["2xx"] != r.Requests.Sent {
 		t.Fatalf("exit code %d, result %+v: %s", code, r, stderr)
@@ -174,8 +176,8 @@ func TestSaturated(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	r, _, code, stderr := loadgen(t, "-url", srv.URL, "-rate", "200", "-warmup", "0s", "-duration", "1s", "-max-in-flight", "50")
-	if code != 1 || r.Valid || r.Requests != (requestCounts{Scheduled: 200, Sent: 50, Dropped: 150}) || r.AchievedRPS != 50 {
+	r, _, code, stderr := runLoadgen(t, "-url", srv.URL, "-rate", "200", "-warmup", "0s", "-duration", "1s", "-max-in-flight", "50")
+	if code != 1 || r.Valid || r.Requests != (loadgen.RequestCounts{Scheduled: 200, Sent: 50, Dropped: 150}) || r.AchievedRPS != 50 {
 		t.Errorf("exit code %d, result %+v; want 1, invalid, 50 of 200 sent", code, r)
 	}
 	if !strings.Contains(stderr, "below 99% of the target 200 rps") {
