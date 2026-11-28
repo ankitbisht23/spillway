@@ -612,3 +612,200 @@ func TestCrossModelInfo(t *testing.T) {
 		})
 	}
 }
+
+// writeFile writes data to a new file in a temporary directory and returns
+// its path.
+func writeFile(t *testing.T, name, data string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil { //nolint:gosec // G703: a file in the test's own temp directory
+		t.Fatal(err)
+	}
+	return path
+}
+
+// The committed exclusion list (ADR-0107): testdata/exclusions.json lists
+// the x64 result stored at t2 (and an arm64 entry, which an x64 gate only
+// checks for form).
+func TestExclusions(t *testing.T) {
+	const relCommit = "2222222222222222222222222222222222222222"
+	list := filepath.Join("testdata", "exclusions.json")
+	// t1 and t2 are passing main results of the release commit; t2's p99
+	// (1.5 ms) is the outlier, so a 2.6 ms candidate is flagged against it.
+	history := func(t *testing.T) (dir, older, outlier string) {
+		dir = t.TempDir()
+		older = store(t, dir, fixture(t, "result.json", edits(at(t1, mainRef, "pass"), with("commit", relCommit))))
+		outlier = store(t, dir, fixture(t, "result.json", edits(at(t2, mainRef, "pass"), with("commit", relCommit), with("latency_us.p99.median", 1500.0))))
+		return dir, older, outlier
+	}
+	cand := fixture(t, "result.json", edits(at(t3, mainRef, ""), with("latency_us.p99.median", 2600.0)))
+	rel := []string{"-release-tag", "v1.0.0", "-release-commit", relCommit}
+
+	t.Run("without the list the outlier is the baseline", func(t *testing.T) {
+		dir, _, outlier := history(t)
+		code, g, md := gateRun(t, append([]string{"-results", dir, "-candidate", candidate(t, cand)}, rel...)...)
+		if code != 1 || g.Verdict != verdictFlagged || *g.Baseline != outlier || *g.ReleaseBaseline != outlier || g.Excluded != nil {
+			t.Fatalf("code %d, gate %+v, want 1 flagged against %s\n%s", code, g, outlier, md)
+		}
+		if strings.Contains(md, "exclusion list") {
+			t.Errorf("summary mentions the exclusion list:\n%s", md)
+		}
+	})
+
+	t.Run("an excluded newest baseline is skipped and named", func(t *testing.T) {
+		dir, older, outlier := history(t)
+		c := candidate(t, cand)
+		code, g, md := gateRun(t, append([]string{"-results", dir, "-candidate", c, "-out", c, "-exclusions", list}, rel...)...)
+		if code != 0 || g.Verdict != verdictPass {
+			t.Fatalf("code %d, verdict %q, want 0 pass\n%s", code, g.Verdict, md)
+		}
+		if *g.Baseline != older || *g.ReleaseBaseline != older {
+			t.Errorf("baselines %s and %s, want both %s", *g.Baseline, *g.ReleaseBaseline, older)
+		}
+		if len(g.Excluded) != 1 || g.Excluded[0] != outlier {
+			t.Errorf("excluded = %v, want [%s]", g.Excluded, outlier)
+		}
+		for _, want := range []string{
+			"Nightly baseline: `" + older + "`",
+			"Release baseline (v1.0.0): `" + older + "`",
+			"- Skipped excluded run set `" + outlier + "`, commit 2222222, " + t2 + ": on the committed exclusion list (ADR-0107), so never a baseline. Reason: p99 median 1.500 ms is an outlier against every run set around it",
+			"| nightly | p99_us_median | 2.500 ms | 2.600 ms | +4.0% | 24.0% | no |",
+		} {
+			if !strings.Contains(md, want) {
+				t.Errorf("summary lacks %q:\n%s", want, md)
+			}
+		}
+		if got := readGate(t, c).Excluded; len(got) != 1 || got[0] != outlier {
+			t.Errorf("stored excluded = %v", got)
+		}
+	})
+
+	t.Run("the only baseline excluded: first", func(t *testing.T) {
+		dir := t.TempDir()
+		outlier := store(t, dir, fixture(t, "result.json", at(t2, mainRef, "pass")))
+		code, g, md := gateRun(t, "-results", dir, "-candidate", candidate(t, cand), "-exclusions", list)
+		if code != 0 || g.Verdict != verdictFirst || g.Baseline != nil || len(g.Excluded) != 1 || g.Excluded[0] != outlier {
+			t.Fatalf("code %d, gate %+v, want 0 first naming %s\n%s", code, g, outlier, md)
+		}
+		if !strings.Contains(md, "Skipped excluded run set `"+outlier+"`") {
+			t.Errorf("summary:\n%s", md)
+		}
+	})
+
+	t.Run("P34 skips an excluded run set too", func(t *testing.T) {
+		const genoa = "AMD EPYC 9V45 96-Core Processor"
+		dir := t.TempDir()
+		older := store(t, dir, fixture(t, "result.json", at(t1, mainRef, "pass")))
+		outlier := store(t, dir, fixture(t, "result.json", at(t2, mainRef, "pass")))
+		c := candidate(t, fixture(t, "result.json", edits(at(t3, mainRef, ""), with("hardware.cpu_model", genoa))))
+		code, g, md := gateRun(t, "-results", dir, "-candidate", c, "-exclusions", list)
+		if code != 0 || g.Verdict != verdictFirst || g.CrossModel == nil || g.CrossModel.Baseline != older {
+			t.Fatalf("code %d, gate %+v, want first with P34 against %s\n%s", code, g, older, md)
+		}
+		if len(g.Excluded) != 1 || g.Excluded[0] != outlier || !strings.Contains(md, "Skipped excluded run set `"+outlier+"`") {
+			t.Errorf("excluded = %v\n%s", g.Excluded, md)
+		}
+	})
+
+	t.Run("listed but never a candidate: not named", func(t *testing.T) {
+		// The listed result is flagged (never a baseline anyway), and a
+		// candidate on another target rate would not compare with it.
+		for _, tt := range []struct {
+			name string
+			edit func(m map[string]any)
+			cand func(m map[string]any)
+		}{
+			{"not eligible", at(t2, mainRef, verdictFlagged), nil},
+			{"not comparable", at(t2, mainRef, verdictPass), with("target_rps", 5000.0)},
+		} {
+			t.Run(tt.name, func(t *testing.T) {
+				dir := t.TempDir()
+				store(t, dir, fixture(t, "result.json", tt.edit))
+				c := candidate(t, fixture(t, "result.json", edits(at(t3, mainRef, ""), func(m map[string]any) {
+					if tt.cand != nil {
+						tt.cand(m)
+					}
+				})))
+				code, g, md := gateRun(t, "-results", dir, "-candidate", c, "-out", c, "-exclusions", list)
+				if code != 0 || g.Excluded != nil || strings.Contains(md, "exclusion list") {
+					t.Errorf("code %d, excluded %v\n%s", code, g.Excluded, md)
+				}
+				raw, _ := os.ReadFile(filepath.Clean(c))
+				if strings.Contains(string(raw), `"excluded"`) {
+					t.Errorf("stored result has an excluded field: %s", raw)
+				}
+			})
+		}
+	})
+
+	t.Run("an empty list changes nothing", func(t *testing.T) {
+		dir, _, outlier := history(t)
+		empty := writeFile(t, "exclusions.json", `{"exclusions": []}`)
+		c := candidate(t, cand)
+		code, g, _ := gateRun(t, append([]string{"-results", dir, "-candidate", c, "-out", c, "-exclusions", empty}, rel...)...)
+		if code != 1 || g.Verdict != verdictFlagged || *g.Baseline != outlier || g.Excluded != nil {
+			t.Errorf("code %d, gate %+v", code, g)
+		}
+	})
+
+	t.Run("a bad list fails loudly", func(t *testing.T) {
+		dir, _, _ := history(t)
+		c := candidate(t, cand)
+		entry := func(arch, path, reason, adr string) string {
+			b, _ := json.Marshal(map[string]string{"arch": arch, "path": path, "reason": reason, "adr": adr})
+			return string(b)
+		}
+		good := entry("x64", "results/x64/20261121T031700Z.json", "outlier", "ADR-0107")
+		for name, data := range map[string]string{
+			"not json":            "exclusions:\n  - results/x64/20261121T031700Z.json",
+			"empty file":          "",
+			"no exclusions array": `{}`,
+			"a misspelt key":      `{"exclusion": [` + good + `]}`,
+			"an unknown field":    `{"exclusions": [{"arch": "x64", "path": "results/x64/20261121T031700Z.json", "reason": "outlier", "adr": "ADR-0107", "until": "2027"}]}`,
+			"trailing data":       `{"exclusions": [` + good + `]} {}`,
+			"a bare file name":    `{"exclusions": [` + entry("x64", "20261121T031700Z.json", "outlier", "ADR-0107") + `]}`,
+			"a garbled timestamp": `{"exclusions": [` + entry("x64", "results/x64/2026-11-21T03:17:00Z.json", "outlier", "ADR-0107") + `]}`,
+			"an unknown arch":     `{"exclusions": [` + entry("riscv", "results/riscv/20261121T031700Z.json", "outlier", "ADR-0107") + `]}`,
+			"arch and path":       `{"exclusions": [` + entry("arm64", "results/x64/20261121T031700Z.json", "outlier", "ADR-0107") + `]}`,
+			"no reason":           `{"exclusions": [` + entry("x64", "results/x64/20261121T031700Z.json", " ", "ADR-0107") + `]}`,
+			"no ADR":              `{"exclusions": [` + entry("x64", "results/x64/20261121T031700Z.json", "outlier", "") + `]}`,
+			"a bad ADR":           `{"exclusions": [` + entry("x64", "results/x64/20261121T031700Z.json", "outlier", "0107") + `]}`,
+			"listed twice":        `{"exclusions": [` + good + `, ` + good + `]}`,
+			"no such run set":     `{"exclusions": [` + entry("x64", "results/x64/20261122T031700Z.json", "outlier", "ADR-0107") + `]}`,
+		} {
+			t.Run(name, func(t *testing.T) {
+				code, _, md := gateRun(t, "-results", dir, "-candidate", c, "-exclusions", writeFile(t, "exclusions.json", data))
+				if code != 2 {
+					t.Errorf("code %d, want 2\n%s", code, md)
+				}
+			})
+		}
+		for name, args := range map[string][]string{
+			"a missing list":           {"-results", dir, "-candidate", c, "-exclusions", filepath.Join(dir, "missing.json")},
+			"-exclusions and -ungated": {"-ungated", "-candidate", c, "-exclusions", list},
+		} {
+			if code, _, _ := gateRun(t, args...); code != 2 {
+				t.Errorf("%s: code %d, want 2", name, code)
+			}
+		}
+	})
+}
+
+// The committed list that bench.yml and make bench-gate pass parses, and
+// each entry's ADR exists.
+func TestCommittedExclusions(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "test", "load", "bench-baseline-exclusions.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	list, err := parseExclusions(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range list {
+		adrs, err := filepath.Glob(filepath.Join("..", "..", "docs", "adr", strings.TrimPrefix(e.ADR, "ADR-")+"-*.md"))
+		if err != nil || len(adrs) != 1 {
+			t.Errorf("%s: %s has no ADR file (%v)", e.Path, e.ADR, err)
+		}
+	}
+}

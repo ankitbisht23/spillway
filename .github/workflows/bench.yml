@@ -4,7 +4,8 @@
 # gate off by default. Each architecture runs test/load/bench.sh on its own
 # 4-vCPU runner at its own target rate; cmd/benchgate then judges the run set
 # against its nightly and last-release baselines on a fetched copy of
-# bench-results (same arch, recorded CPU model, target rate and setup only)
+# bench-results (same arch, recorded CPU model, target rate and setup only;
+# never a run set on test/load/bench-baseline-exclusions.json, ADR-0107)
 # and writes the verdict to the job summary. A flagged run set re-runs once
 # in the same job; a re-run flagged again fails both. Every run set's JSON,
 # with its gate field, is pushed to the bench-results branch as
@@ -126,7 +127,7 @@ jobs:
             # Never gated; its own summary is already written.
             args=(-candidate result.json -out result.json -ungated)
           elif [ "$GATE" = true ]; then
-            args+=(-results "$RUNNER_TEMP/bench-results")
+            args+=(-results "$RUNNER_TEMP/bench-results" -exclusions test/load/bench-baseline-exclusions.json)
             if [ -n "${RELEASE_TAG:-}" ]; then args+=(-release-tag "$RELEASE_TAG" -release-commit "$RELEASE_COMMIT"); fi
           else
             args+=(-ungated)
@@ -144,7 +145,7 @@ jobs:
           BENCH_RATE: ${{ matrix.rate }}
         run: |
           test/load/bench.sh > rerun.json
-          args=(-results "$RUNNER_TEMP/bench-results" -candidate rerun.json -out rerun.json -rerun-of result.json -summary "$GITHUB_STEP_SUMMARY")
+          args=(-results "$RUNNER_TEMP/bench-results" -exclusions test/load/bench-baseline-exclusions.json -candidate rerun.json -out rerun.json -rerun-of result.json -summary "$GITHUB_STEP_SUMMARY")
           if [ -n "${RELEASE_TAG:-}" ]; then args+=(-release-tag "$RELEASE_TAG" -release-commit "$RELEASE_COMMIT"); fi
           code=0
           "$RUNNER_TEMP/benchgate" "${args[@]}" > verdict.json || code=$?

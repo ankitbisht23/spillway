@@ -1,0 +1,10 @@
+{
+  "exclusions": [
+    {
+      "arch": "arm64",
+      "path": "results/arm64/20261127T121534Z.json",
+      "reason": "p99 median 3.171 ms (spread 28.4%, main 6f780de, run 45997114752) is an outlier: the arm64 main baseline before it was 3.973 ms and every arm64 run set after it 4.17-4.47 ms on the same CPU model, and main d3a734b (gateway request path unchanged) failed against it at +36.8% with a confirming re-run (run 46122432047)",
+      "adr": "ADR-0107"
+    }
+  ]
+}

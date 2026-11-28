@@ -10,7 +10,9 @@
 // passes -rerun-of, and a re-run flagged again fails both. A run set with
 // nothing comparable (verdict first) is also shown, for information only,
 // against the newest eligible baseline on another CPU model (P34, ADR-0083):
-// that never flags, fails or makes a baseline.
+// that never flags, fails or makes a baseline. A run set on the committed
+// exclusion list (-exclusions, ADR-0107) is never any of these baselines;
+// the summary names the listed run sets it skipped.
 //
 // It prints the gate's verdict as JSON on stdout and a Markdown summary on
 // stderr (also appended to -summary), writes the result with its gate field
@@ -19,6 +21,7 @@
 //
 //	benchgate -results <bench-results checkout> -candidate result.json [-out result.json]
 //	    [-release-tag v1.0.0 -release-commit <sha>] [-rerun-of first.json] [-ungated] [-summary file]
+//	    [-exclusions test/load/bench-baseline-exclusions.json]
 package main
 
 import (
@@ -43,6 +46,7 @@ type options struct {
 	releaseTag    string
 	releaseCommit string
 	rerunOf       string
+	exclusions    string // the committed exclusion list (ADR-0107)
 	ungated       bool
 }
 
@@ -57,6 +61,7 @@ func parseFlags(args []string, stderr io.Writer) (options, error) {
 	fl.StringVar(&o.releaseTag, "release-tag", "", "the last release tag, if any")
 	fl.StringVar(&o.releaseCommit, "release-commit", "", "the commit of -release-tag")
 	fl.StringVar(&o.rerunOf, "rerun-of", "", "the flagged result this run set re-runs; set to fail if the re-run confirms it")
+	fl.StringVar(&o.exclusions, "exclusions", "", "the committed list of stored run sets that are never baselines (ADR-0107)")
 	fl.BoolVar(&o.ungated, "ungated", false, "record the result as ungated: no comparison, never a baseline")
 	if err := fl.Parse(args); err != nil {
 		return o, err
@@ -72,6 +77,8 @@ func parseFlags(args []string, stderr io.Writer) (options, error) {
 		return o, errors.New("-release-tag and -release-commit go together")
 	case o.ungated && o.rerunOf != "":
 		return o, errors.New("-rerun-of needs the gate, not -ungated")
+	case o.ungated && o.exclusions != "":
+		return o, errors.New("-exclusions needs the gate, not -ungated")
 	}
 	return o, nil
 }
@@ -134,6 +141,19 @@ func gateFile(o options, stdout, stderr io.Writer) (int, error) {
 		defer func() { _ = root.Close() }()
 		if hist, err = history(root.FS(), c.Arch); err != nil {
 			return 0, err
+		}
+		if o.exclusions != "" {
+			data, err := os.ReadFile(filepath.Clean(o.exclusions))
+			if err != nil {
+				return 0, err
+			}
+			list, err := parseExclusions(data)
+			if err != nil {
+				return 0, fmt.Errorf("%s: %w", o.exclusions, err)
+			}
+			if err := applyExclusions(hist, list, c.Arch); err != nil {
+				return 0, fmt.Errorf("%s: %w", o.exclusions, err)
+			}
 		}
 		rerunOf := ""
 		if first != nil {
