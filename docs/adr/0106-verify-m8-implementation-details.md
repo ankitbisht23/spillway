@@ -19,6 +19,49 @@ ADR-0098 settles `make verify-m8`: its parts (G0, up, K, D1 – D7, S, end with 
 7. **Output.** The terminal gets a `==` header per part with the time since the start, the check lines as each part ends, then the setup notes, the duration with the commit and the verdict last. Each part's full output (the scenarios' viewer lines and summaries, compose's lines) goes only to `test/verify/out/m8-<UTC timestamp>/<part>.log`. `test/verify/out/m8-<UTC timestamp>.json` holds the start, end, commit, branch, duration, verdict, every step's exit code and time, every check line split into part, ID, verdict and text, and each part's own JSON report (`reports.d5` …) with its measured values. `test/verify/m8.sh report <dir>` prints the lines and writes the JSON again from a run's directory (tested on fixtures in `test/verify/m8_test.go`).
 8. **The trap acts only on what is left.** On an exit before the end it runs `make demo-share-stop` if a share is active, `make demo-fault-clear` if the demo control plane runs and `make demo-down` if any demo container exists, logging to `cleanup.log`. A run that reaches its end has already run `make demo-down` and checked G1, so the trap does nothing more there (no second `make dev`).
 9. **Nothing else changes for the run.** No tracked file is written (the demo runs in managed mode on its own database; the share test's files live in the ignored `deploy/demo/run/` and s10 checks it is empty), the gateways keep compose's defaults, and `make verify-m8` stays out of CI (ADR-0098).
+10. **No generated README block.** Unlike verify-m7 (ADR-0074, ADR-0088), ADR-0098 gives verify-m8 no README output, so `m8.sh` has no `readme` mode and the verify task writes no `verify-m8:begin` block. The README belongs to the readme task (SC-06, ADR-0099 §6), which can cite the run below.
+
+## Measured on the branch (2026-11-28)
+
+### make verify-m8: 3 of 3 full runs PASS
+
+Each run: 73 of 73 checks PASS, on the laptop (Apple M4 Pro, Docker Desktop 14 CPUs, 8.3 GB), within ADR-0098's budget. Run 1 was on 0fe92f8, runs 2 and 3 on 160099a (160099a changes only comments, the fixture test and this ADR). Results in the ignored `test/verify/out/m8-<stamp>.json`.
+
+| | Run 1 | Run 2 | Run 3 |
+|---|---|---|---|
+| Stamp, duration | 20261128T040858Z, 17 min 44 s | 20261128T042732Z, 17 min 36 s | 20261128T044530Z, 17 min 47 s |
+| k3 key expiry (each replica) | applied 0.11 s; 139 before, 30 × 401 after | same | same |
+| d1.3 free held | 300 × 2xx (10.0/s) of 900 | same | same |
+| d2.1 quiet p99 on ÷ off (pro, enterprise) | 0.721, 0.758 | 0.702, 0.695 | 0.821, 0.805 |
+| d2.3 noisy, lowest on slot 429 share | 97.62% | 97.58% | 97.60% |
+| d3.1 most per 1 s / 10 s / 1 min window | 201/300, 1199/1200, 6197/6200 | 201/300, 1199/1200, 6199/6200 | 201/300, 1194/1200, 6193/6200 |
+| d4.1 applied (shadow, promote, rollback) | 0.11, 0.11, 0.11 s | 0.11, 0.11, 0.01 s | 0.11, 0.11, 0.01 s |
+| d4.4 enterprise-co-web 429 share | 64.29% | 64.29% | 64.29% |
+| d5.1 catalog 2xx in the cut | 100.00% of 2000 | 100.00% of 2001 | 100.00% of 2001 |
+| d5.3 orders per replica (limit ÷ 3) | 32.9/s each | 32.9/s each | 32.9/s each |
+| d5.5 Redis checks ≤ 10 ms | 100.00% on each replica | same | same |
+| d6.2 breaker opened (gw-1, 2, 3) | 6.80, 6.80, 5.80 s | 5.80, 5.80, 5.80 s | 6.80, 6.80, 6.80 s |
+| d7.1 leaked key on top | 1.00 s | 1.01 s | 5.00 s |
+| d7.2 block on every replica, 10 rounds | max 0.05 s | max 0.05 s | max 0.05 s |
+
+### The other exits, once each on 160099a
+
+- `make verify-m1`, `verify-m2`, `verify-m4`, `verify-m5`, `verify-m6`: PASS. NFR-03 added p99 0.121 ms; NFR-12's staleness alert at +86 s.
+- `make verify-m3`: **FAIL**, 1 check: the killed primary's surviving primaries' keys had 15,999 Redis decisions and 1 failure-mode answer of 16,000 (rule: none), in a 19 ms timeout burst at +6.4 s after the kill. NFR-04 PASS (0.345 ms added).
+- `make verify-m7` (run m7-20261128T060405Z, 87 min 36 s, budget 150): **FAIL, 3 rows**; every other row PASS, NFR-02 the accepted known limit.
+  - **NFR-05:** bench [run 46114900991](https://github.com/ankitbisht23/spillway/actions/runs/46114900991): x64 landed on Intel Xeon 6975P-C, a model with no `main` baseline (NOT DEMONSTRATED); arm64 flagged against the 3,171 µs nightly (+31%, confirming re-run +40.9%), so `fail`.
+  - **NFR-13:** surviving primaries' keys 15,987 Redis decisions, 13 failure-mode of 16,000, in a 72.6 ms burst at +14 s.
+  - **Chaos Redis +50 ms:** 1,900 of 1,901 fail_closed answers 503, 1 answered 2xx.
+
+### The user's decisions (2026-11-28)
+
+1. **NFR-05: new baseline, then "Exclude outlier".** The arm64 3,171 µs nightly (`results/arm64/20261127T121534Z.json`) is on the committed exclusion list (ADR-0107, #116). The gated bench on `main` caaf832 ([run 46128589731](https://github.com/ankitbisht23/spillway/actions/runs/46128589731)) passed and its run sets are the new baselines: x64 AMD EPYC 9V74 p99 1.619 ms (spread 53.1%), arm64 6,300 rps p99 2.719 ms (spread 8.7%). The comparison the user asked for, on m8-verify 2a6c553 ([run 46130134450](https://github.com/ankitbisht23/spillway/actions/runs/46130134450)), passed on both arches: x64 on AMD EPYC 9V74 (same model, so demonstrated) p99 1.398 ms (−13.7%), arm64 6,300 rps p99 2.827 ms (+4.0%). **NFR-05 is recorded as PASS by that comparison.** The verify-m7 row above stays a FAIL in this record.
+2. **Chaos Redis +50 ms: "Keep the rule".** A reported FAIL. It is a timing edge: `cmd/chaos/latency.go` stamps the toxic-off time after it has removed all six toxics, so an answer from a node whose toxic was removed first can land inside the judged window. No code or rule change.
+3. **NFR-13 and verify-m3's surviving primaries: "Mac constraint".** Reported FAILs under the known Docker Desktop for Mac stall constraint, like NFR-04 at M7's exit (README, Known limits). No rule change, no re-run.
+
+### Known limit: TestGatewayPerIPCap and Docker Desktop's port forwarder
+
+`make test-integration`'s TestGatewayPerIPCap can fail on the laptop with connection resets. Diagnosis: Docker Desktop's host port forwarder (`com.docker.backend`) resets unpaced bursts of host dials. 1,100 sequential host dials (about 8,000/s) were reset in 4 of 12 bursts, at dials 542–989. With 1 ms between dials 5 of 5 bursts were fine, and from inside the compose network 3 of 3. The host's listen-queue overflow counter stayed 0. The gateway's per-IP counters moved +76 closed and 0 shed on good bursts and did not move on reset bursts, so the resets never reached the gateway. Not a gateway defect; the test is unchanged.
 
 ## Consequences
 
