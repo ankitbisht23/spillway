@@ -1,10 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 )
@@ -54,8 +58,9 @@ type result struct {
 	} `json:"hardware"`
 	Gate *gate `json:"gate"`
 
-	name  string // where it is or will be stored: results/<arch>/<timestamp>.json
-	setup any    // Setup, decoded for comparison
+	name     string     // where it is or will be stored: results/<arch>/<timestamp>.json
+	setup    any        // Setup, decoded for comparison
+	excluded *exclusion // its entry on the exclusion list, if any: never a baseline
 }
 
 // gate is what the gate stores in each result it judges.
@@ -69,6 +74,84 @@ type gate struct {
 	// CrossModel is set only with verdict first, when another CPU model has
 	// an eligible baseline (P34): information only.
 	CrossModel *crossModel `json:"cross_model,omitempty"`
+	// Excluded names the run sets on the exclusion list that would otherwise
+	// have been considered as a baseline (ADR-0107), newest first.
+	Excluded []string `json:"excluded,omitempty"`
+}
+
+// exclusion is one entry of the committed exclusion list
+// (test/load/bench-baseline-exclusions.json, ADR-0107): a stored run set
+// that can never be a nightly, release or P34 baseline.
+type exclusion struct {
+	Arch   string `json:"arch"`
+	Path   string `json:"path"` // its stored name, results/<arch>/<timestamp>.json
+	Reason string `json:"reason"`
+	ADR    string `json:"adr"` // the ADR that records it, ADR-NNNN
+}
+
+var (
+	exclusionPath = regexp.MustCompile(`^results/(x64|arm64)/[0-9]{8}T[0-9]{6}Z\.json$`)
+	exclusionADR  = regexp.MustCompile(`^ADR-[0-9]{4}$`)
+)
+
+// parseExclusions decodes and checks the exclusion list. Anything it does
+// not recognise is an error, never skipped: an unknown field, a path that is
+// not a stored name of its arch, an empty reason, a bad ADR or a duplicate.
+func parseExclusions(data []byte) ([]exclusion, error) {
+	var list struct {
+		Exclusions *[]exclusion `json:"exclusions"`
+	}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&list); err != nil {
+		return nil, err
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return nil, errors.New("trailing data after the exclusion list")
+	}
+	if list.Exclusions == nil {
+		return nil, errors.New(`no "exclusions" array`)
+	}
+	seen := map[string]bool{}
+	for i, e := range *list.Exclusions {
+		m := exclusionPath.FindStringSubmatch(e.Path)
+		switch {
+		case m == nil:
+			return nil, fmt.Errorf("exclusion %d: path %q is not results/<x64|arm64>/<YYYYMMDDTHHMMSSZ>.json", i, e.Path)
+		case m[1] != e.Arch:
+			return nil, fmt.Errorf("exclusion %d: arch %q does not match path %s", i, e.Arch, e.Path)
+		case strings.TrimSpace(e.Reason) == "":
+			return nil, fmt.Errorf("exclusion %d (%s): no reason", i, e.Path)
+		case !exclusionADR.MatchString(e.ADR):
+			return nil, fmt.Errorf("exclusion %d (%s): adr %q is not ADR-NNNN", i, e.Path, e.ADR)
+		case seen[e.Path]:
+			return nil, fmt.Errorf("exclusion %d: %s is listed twice", i, e.Path)
+		}
+		seen[e.Path] = true
+	}
+	return *list.Exclusions, nil
+}
+
+// applyExclusions marks the results in hist (one arch's history) that the
+// list excludes. An entry of arch that names no stored result is an error:
+// a typo must not leave the outlier a baseline.
+func applyExclusions(hist []*result, list []exclusion, arch string) error {
+	byName := make(map[string]*result, len(hist))
+	for _, r := range hist {
+		byName[r.name] = r
+	}
+	for i := range list {
+		e := &list[i]
+		if e.Arch != arch {
+			continue
+		}
+		r, ok := byName[e.Path]
+		if !ok {
+			return fmt.Errorf("exclusion %s (%s): no such stored run set", e.Path, e.ADR)
+		}
+		r.excluded = e
+	}
+	return nil
 }
 
 // crossModel is P34's information-only comparison (ADR-0081, ADR-0083): a
@@ -179,8 +262,14 @@ func comparableButModel(b, c *result) bool {
 }
 
 // eligible reports whether r can be a baseline: a valid result from main
-// whose gate passed it, or an M1-era result stored before the gate existed.
+// whose gate passed it, or an M1-era result stored before the gate existed,
+// and not on the exclusion list.
 func eligible(r *result) bool {
+	return r.excluded == nil && eligibleUnlisted(r)
+}
+
+// eligibleUnlisted is eligible without the exclusion list.
+func eligibleUnlisted(r *result) bool {
 	if r.Ref != mainRef || !r.Valid {
 		return false
 	}
@@ -229,6 +318,23 @@ func crossModelCompare(hist []*result, c *result) *crossModel {
 	return nil
 }
 
+// skipped names the excluded results in hist that would otherwise have
+// been considered as c's nightly or release baseline, and with crossModel
+// also as its P34 baseline: stored before c, eligible but for the list, and
+// comparable with c.
+func skipped(hist []*result, c *result, crossModel bool) []string {
+	var out []string
+	for _, b := range hist {
+		if b.excluded == nil || b.name >= c.name || !eligibleUnlisted(b) {
+			continue
+		}
+		if comparable(b, c) || (crossModel && comparableButModel(b, c)) {
+			out = append(out, b.name)
+		}
+	}
+	return out
+}
+
 // compare compares c with baseline b. A metric is flagged when its change
 // is worse than 10% and than b's run-to-run spread of that metric.
 func compare(against string, b, c *result) []comparison {
@@ -269,8 +375,10 @@ func judge(hist []*result, c *result, releaseTag, releaseCommit, rerunOf string)
 	if nightly == nil {
 		g.Verdict = verdictFirst
 		g.CrossModel = crossModelCompare(hist, c)
+		g.Excluded = skipped(hist, c, true)
 		return g
 	}
+	g.Excluded = skipped(hist, c, false)
 	g.Baseline = &nightly.name
 	g.Comparisons = append(g.Comparisons, compare("nightly", nightly, c)...)
 	if release != nil {

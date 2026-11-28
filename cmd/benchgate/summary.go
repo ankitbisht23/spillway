@@ -73,6 +73,13 @@ func summary(c *result, g gate, hist []*result, releaseCommit string) string {
 		default:
 			p("- Release baseline (%s): %s", *g.ReleaseTag, ref(g.ReleaseBaseline, hist))
 		}
+		for _, name := range g.Excluded {
+			for _, r := range hist {
+				if r.name == name && r.excluded != nil {
+					p("- Skipped excluded run set %s: on the committed exclusion list (%s), so never a baseline. Reason: %s", ref(&name, hist), r.excluded.ADR, r.excluded.Reason)
+				}
+			}
+		}
 	}
 
 	if len(g.Comparisons) > 0 {
