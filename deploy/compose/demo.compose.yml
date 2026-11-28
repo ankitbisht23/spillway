@@ -166,7 +166,7 @@ services:
   # env_file: nothing from .env.local reaches it (ADR-0104). The dev Grafana
   # on 3000 does not change.
   grafana-demo:
-    image: grafana/grafana:13.3.0@sha256:488984b716c0862639f91a698adbe2862677a5a07bad42da5f03f3030883b205
+    image: grafana/grafana:13.3.2@sha256:81556409ba48b2b922e0adb69a2511337d8ba7578f11962eefa6149a2d815101
     profiles: [demo]
     labels: { spillway.demo: "true" }
     read_only: true
