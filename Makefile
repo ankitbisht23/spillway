@@ -254,7 +254,7 @@ demo-d1 demo-d2 demo-d3 demo-d4 demo-d5 demo-d6 demo-d7:
 # demo-share-test runs the whole share path against a stand-in tunnel
 # (https://stand-in.spillway.example, resolves nowhere) with throwaway
 # passwords, checks every setting (s1-s13), then stops it: no tunnel, no
-# Cloudflare, no .env.demo. About 5 minutes (deploy/demo/share.sh).
+# Cloudflare, no .env.demo. About 2 minutes (deploy/demo/share.sh).
 demo-share:
 	@deploy/demo/share.sh start
 

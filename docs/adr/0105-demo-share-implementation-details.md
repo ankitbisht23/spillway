@@ -21,7 +21,7 @@ ADR-0097 settles the public demo: Caddy on 8888 (built by grafana-demo, ADR-0104
 
 ## Consequences
 
-- `make demo-share-test` runs the share path end to end in about five minutes (two Keycloak recreates) with no tunnel, network connection or secret; `make verify-m8` runs it (ADR-0098 part S) and prints s1–s13.
+- `make demo-share-test` runs the share path end to end in about two minutes (127–128 s in three runs on this laptop, two Keycloak recreates included; ADR-0098 budgets 5) with no tunnel, network connection or secret; `make verify-m8` runs it (ADR-0098 part S) and prints s1–s13.
 - `make demo` and `make demo-down` each recreate Keycloak once more than before (ADR-0104 §6's shortcut is gone).
 - During a share, `make demo-reset` and `make demo` refuse; faults and scenarios work.
 - The real tunnel's flags and the cloudflared container's read-only root filesystem are untested until the user's first `make demo-share`.
