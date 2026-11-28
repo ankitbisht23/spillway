@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ankitbisht23/spillway/internal/controlplane/demo"
+	"github.com/ankitbisht23/spillway/internal/proxy"
 	"github.com/ankitbisht23/spillway/internal/secret"
 )
 
@@ -190,17 +191,86 @@ func TestPlaygroundStartCap(t *testing.T) {
 	}
 }
 
-// TestClientIP: the caps count IPv4 by address and IPv6 by /64.
+// TestClientIP: the caps count IPv4 by address and IPv6 by /64; without
+// trusted proxies the TCP peer is the client whatever CF-Connecting-IP
+// says.
 func TestClientIP(t *testing.T) {
 	for addr, want := range map[string]string{
 		"192.0.2.1:1234":             "192.0.2.1",
 		"[2001:db8:1:2:3:4:5:6]:443": "2001:db8:1:2::/64",
 		"[2001:db8:1:2:ffff::1]:443": "2001:db8:1:2::/64",
 		"[::ffff:192.0.2.7]:80":      "192.0.2.7",
+		"[fe80::1%eth0]:80":          "fe80::/64",
 		"not an address":             "not an address",
 	} {
-		if got := clientIP(addr); got != want {
+		if got := clientIP(nil, addr, nil); got != want {
 			t.Errorf("clientIP(%q) = %q, want %q", addr, got, want)
+		}
+		if got := clientIP(nil, addr, []string{"203.0.113.7"}); got != want {
+			t.Errorf("clientIP(%q) with CF-Connecting-IP and no trusted proxy = %q, want the peer %q", addr, got, want)
+		}
+	}
+}
+
+// TestClientIPTrustedProxy: CF-Connecting-IP names the client only when
+// the TCP peer is a trusted proxy and the header holds exactly one valid
+// IP address; otherwise the peer is the client (SEC-05, ADR-0097 §2).
+func TestClientIPTrustedProxy(t *testing.T) {
+	trusted, err := proxy.ParseTrustedProxies("172.29.255.10/32,2001:db8:ff::/48")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const caddy = "172.29.255.10:41000"
+	for _, c := range []struct {
+		name, peer string
+		header     []string
+		want       string
+	}{
+		{"trusted peer, valid IPv4", caddy, []string{"203.0.113.7"}, "203.0.113.7"},
+		{"trusted peer, padded", caddy, []string{" 203.0.113.7 "}, "203.0.113.7"},
+		{"trusted peer, IPv6 per /64", caddy, []string{"2001:db8:1:2:3:4:5:6"}, "2001:db8:1:2::/64"},
+		{"trusted peer, IPv4-mapped", caddy, []string{"::ffff:203.0.113.9"}, "203.0.113.9"},
+		{"trusted IPv6 peer", "[2001:db8:ff:1::5]:443", []string{"198.51.100.4"}, "198.51.100.4"},
+		{"trusted mapped peer", "[::ffff:172.29.255.10]:41000", []string{"198.51.100.4"}, "198.51.100.4"},
+		{"trusted peer, missing", caddy, nil, "172.29.255.10"},
+		{"trusted peer, empty", caddy, []string{""}, "172.29.255.10"},
+		{"trusted peer, invalid", caddy, []string{"not-an-ip"}, "172.29.255.10"},
+		{"trusted peer, with a port", caddy, []string{"203.0.113.7:80"}, "172.29.255.10"},
+		{"trusted peer, with a zone", caddy, []string{"fe80::1%eth0"}, "172.29.255.10"},
+		{"trusted peer, a list", caddy, []string{"203.0.113.7, 198.51.100.4"}, "172.29.255.10"},
+		{"trusted peer, two field lines", caddy, []string{"203.0.113.7", "198.51.100.4"}, "172.29.255.10"},
+		{"untrusted peer with the header", "172.29.0.20:5000", []string{"203.0.113.7"}, "172.29.0.20"},
+		{"untrusted neighbour of the proxy", "172.29.255.11:5000", []string{"203.0.113.7"}, "172.29.255.11"},
+		{"untrusted IPv6 peer with the header", "[2001:db8:1:2::9]:443", []string{"203.0.113.7"}, "2001:db8:1:2::/64"},
+	} {
+		if got := clientIP(trusted, c.peer, c.header); got != c.want {
+			t.Errorf("%s: clientIP(%q, %q) = %q, want %q", c.name, c.peer, c.header, got, c.want)
+		}
+	}
+}
+
+// TestGetDemoClientIP: getDemo's client_ip is the address the caps count
+// the caller under: CF-Connecting-IP only from a trusted proxy. A forged
+// header from anyone else is ignored (SEC-05, ADR-0097 §2).
+func TestGetDemoClientIP(t *testing.T) {
+	trusted, err := proxy.ParseTrustedProxies("172.29.255.10/32")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var seen string
+	s := New(nil, nil, nil, fakeAuth{}, secret.Value{}, logger(io.Discard)).WithTrustedProxies(trusted)
+	h := s.withClientIP(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { seen = clientIPOf(r.Context()) }))
+	for peer, want := range map[string]string{
+		"172.29.255.10:41000": "203.0.113.7", // the demo proxy
+		"172.29.0.31:52000":   "172.29.0.31", // anything else on the network
+		"192.0.2.1:1234":      "192.0.2.1",
+	} {
+		r := httptest.NewRequest("GET", "/api/v1/demo", nil)
+		r.RemoteAddr = peer
+		r.Header.Set("CF-Connecting-IP", "203.0.113.7")
+		h.ServeHTTP(httptest.NewRecorder(), r)
+		if seen != want {
+			t.Errorf("from %s with CF-Connecting-IP 203.0.113.7: client IP %q, want %q", peer, seen, want)
 		}
 	}
 }

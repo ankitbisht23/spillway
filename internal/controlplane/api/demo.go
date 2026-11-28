@@ -89,7 +89,7 @@ func (s *Server) GetDemo(ctx context.Context, _ apiv1.GetDemoRequestObject) (api
 	for _, p := range cfg.GetPlans() {
 		plans[p.GetId()] = p
 	}
-	out := apiv1.Demo{Tenants: []apiv1.DemoTenant{}, Routes: []apiv1.DemoRoute{}, Scenarios: demoScenarios, Faults: s.faultStates(ctx), Playground: s.playgroundOf(ctx)}
+	out := apiv1.Demo{Tenants: []apiv1.DemoTenant{}, Routes: []apiv1.DemoRoute{}, Scenarios: demoScenarios, Faults: s.faultStates(ctx), Playground: s.playgroundOf(ctx), ClientIp: clientIPOf(ctx)}
 	for _, t := range tenants[:min(len(tenants), maxLimit)] {
 		dt := apiv1.DemoTenant{Name: t.Name}
 		if p, ok := plans[t.PlanID]; ok {

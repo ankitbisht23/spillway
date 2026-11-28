@@ -36,6 +36,7 @@ const demo: Demo = {
     { name: "upstream-slow", active: true },
   ],
   playground: { max_rate: 200, max_duration_s: 60, active_runs: 0, runs_left_this_hour: 30 },
+  client_ip: "198.51.100.23",
 };
 
 const RUN_ID = "5b0f3c2a-9d4e-4f6a-8b1c-2d3e4f5a6b7c";

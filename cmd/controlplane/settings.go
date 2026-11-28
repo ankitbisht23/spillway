@@ -61,6 +61,11 @@ type settings struct {
 	// ADR-0095 §1); required in demo mode, ignored otherwise. The demo
 	// stack sets http://gateway-1:8000,http://gateway-2:8000,http://gateway-3:8000.
 	demoGateways []string
+	// SPILLWAY_CP_TRUSTED_PROXIES: comma-separated CIDRs of the proxies
+	// whose CF-Connecting-IP names the client, read in every mode (SEC-05,
+	// ADR-0097 §2); empty by default (trust nobody). The demo stack sets
+	// the demo proxy's address, 172.29.255.10/32.
+	trustedProxies proxy.TrustedProxies
 
 	// SPILLWAY_CP_PROMETHEUS_URL: the Prometheus the live-data stream's
 	// named queries and the shadow report's counts run against (UI-01,
@@ -128,6 +133,9 @@ func loadSettings(getenv func(string) string) (settings, error) {
 		if s.devMode, err = strconv.ParseBool(v); err != nil {
 			return s, fmt.Errorf("SPILLWAY_CP_DEV_MODE: %q is not true or false", v)
 		}
+	}
+	if s.trustedProxies, err = proxy.ParseTrustedProxies(getenv("SPILLWAY_CP_TRUSTED_PROXIES")); err != nil {
+		return s, fmt.Errorf("SPILLWAY_CP_TRUSTED_PROXIES: %w", err)
 	}
 	if v := getenv("SPILLWAY_CP_DEMO_MODE"); v != "" {
 		if s.demoMode, err = strconv.ParseBool(v); err != nil {

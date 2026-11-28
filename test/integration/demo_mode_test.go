@@ -24,6 +24,7 @@ import (
 	"github.com/ankitbisht23/spillway/internal/controlplane/store/db"
 	"github.com/ankitbisht23/spillway/internal/demo"
 	"github.com/ankitbisht23/spillway/internal/gen/apiv1"
+	"github.com/ankitbisht23/spillway/internal/proxy"
 	"github.com/ankitbisht23/spillway/internal/secret"
 )
 
@@ -115,7 +116,9 @@ func TestGetDemo(t *testing.T) {
 	// No toxiproxy here: both fault states unknown (TestDemoFaults has one).
 	// No demo gateways either, so no Playground run can start: none left
 	// this hour (TestPlaygroundRun has them).
-	const want = `{"faults":[{"active":null,"name":"redis-cut"},{"active":null,"name":"upstream-slow"}],` +
+	// The test's requests come from 127.0.0.1, and a forged
+	// CF-Connecting-IP from there is ignored: no trusted proxy (SEC-05).
+	const want = `{"client_ip":"127.0.0.1","faults":[{"active":null,"name":"redis-cut"},{"active":null,"name":"upstream-slow"}],` +
 		`"playground":{"active_runs":0,"max_duration_s":60,"max_rate":200,"runs_left_this_hour":0},` +
 		`"routes":[{"limit":null,"name":"orders","policy":"consumer-plan"},` +
 		`{"limit":{"burst":200,"period":"1s","rate":200},"name":"catalog","policy":"catalog-limit"},` +
@@ -126,6 +129,31 @@ func TestGetDemo(t *testing.T) {
 		`{"limit":{"burst":1000,"period":"1s","rate":1000},"name":"enterprise-co","plan":"enterprise"}]}`
 	if string(got) != want {
 		t.Errorf("getDemo:\n%s\nwant\n%s", got, want)
+	}
+	viewer.must(200, "GET", "/demo", nil, "CF-Connecting-IP", "203.0.113.7").decode(t, &d)
+	if d.ClientIp != "127.0.0.1" {
+		t.Errorf("no trusted proxy, a forged CF-Connecting-IP: client_ip %q, want the peer 127.0.0.1", d.ClientIp)
+	}
+
+	// Behind a trusted proxy (here the test's own address), the header
+	// names the client; a list or a non-address does not (ADR-0097 §2).
+	trusted, err := proxy.ParseTrustedProxies("127.0.0.1/32")
+	if err != nil {
+		t.Fatal(err)
+	}
+	behind, iss2, _ := startControlPlaneWith(t, io.Discard, func(s *api.Server) *api.Server { return s.WithDemo(true).WithTrustedProxies(trusted) })
+	viewer = behind.as(iss2.token(t, "sub-viewer", "test-viewer", "viewer"))
+	for header, want := range map[string]string{
+		"203.0.113.7":               "203.0.113.7",
+		"2001:db8:1:2:3:4:5:6":      "2001:db8:1:2::/64",
+		"203.0.113.7, 198.51.100.4": "127.0.0.1",
+		"not-an-address":            "127.0.0.1",
+	} {
+		var b apiv1.Demo
+		viewer.must(200, "GET", "/demo", nil, "CF-Connecting-IP", header).decode(t, &b)
+		if b.ClientIp != want {
+			t.Errorf("from a trusted proxy with CF-Connecting-IP %q: client_ip %q, want %q", header, b.ClientIp, want)
+		}
 	}
 }
 

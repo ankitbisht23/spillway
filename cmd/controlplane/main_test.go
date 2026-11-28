@@ -72,6 +72,31 @@ func TestLoadSettings(t *testing.T) {
 	}
 }
 
+// TestTrustedProxiesSetting: SPILLWAY_CP_TRUSTED_PROXIES is read in every
+// mode; unset it trusts nobody, and a value that is not a CIDR stops the
+// control plane (SEC-05, ADR-0097 §2).
+func TestTrustedProxiesSetting(t *testing.T) {
+	base := func(v string) map[string]string {
+		return withOIDC(map[string]string{
+			"SPILLWAY_CP_DATABASE_URL":      "postgres://spillway_app@db:5432/spillway",
+			"SPILLWAY_CP_DATABASE_PASSWORD": secretValue,
+			"SPILLWAY_CP_ALLOWED_NETWORKS":  "172.29.0.0/16",
+			"SPILLWAY_CP_TRUSTED_PROXIES":   v,
+		})
+	}
+	if s, err := loadSettings(env(base(""))); err != nil || len(s.trustedProxies) != 0 {
+		t.Errorf("unset: %v, %v; want no trusted proxy", s.trustedProxies, err)
+	}
+	if s, err := loadSettings(env(base("172.29.255.10/32, 2001:db8::/64"))); err != nil || fmt.Sprint(s.trustedProxies) != "[172.29.255.10/32 2001:db8::/64]" {
+		t.Errorf("two CIDRs: %v, %v", s.trustedProxies, err)
+	}
+	for _, v := range []string{"172.29.255.10", "caddy", "172.29.255.10/33"} {
+		if _, err := loadSettings(env(base(v))); err == nil || !strings.Contains(err.Error(), "SPILLWAY_CP_TRUSTED_PROXIES: trusted proxy") {
+			t.Errorf("SPILLWAY_CP_TRUSTED_PROXIES=%q: %v, want an error naming the setting", v, err)
+		}
+	}
+}
+
 // TestDemoModeSetting: SPILLWAY_CP_DEMO_MODE is off unless set to a value
 // strconv.ParseBool reads as true (SC-08, ADR-0095 §1); in demo mode
 // SPILLWAY_CP_DEMO_TOXIPROXY_URL (SC-03) and SPILLWAY_CP_DEMO_GATEWAYS

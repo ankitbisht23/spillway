@@ -1746,6 +1746,8 @@ export interface components {
             /** @description The two fault switches (SC-03), redis-cut then upstream-slow, with their states read from toxiproxy (at most 1 s old). */
             faults: components["schemas"]["DemoFault"][];
             playground: components["schemas"]["DemoPlayground"];
+            /** @description The address the Playground's per-IP caps count the caller under, an IPv6 address as its /64: CF-Connecting-IP when the request comes from a trusted proxy (the demo proxy), else the TCP peer's (SEC-05, ADR-0097 §2). Shown to the caller only; never logged, stored or audited. */
+            client_ip: string;
         };
         /** @description The Playground's bounds and the caller's use of them (UI-07, ADR-0096 §3). */
         DemoPlayground: {

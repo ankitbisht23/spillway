@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -16,6 +17,7 @@ import (
 	"github.com/ankitbisht23/spillway/internal/controlplane/demo"
 	"github.com/ankitbisht23/spillway/internal/controlplane/store"
 	"github.com/ankitbisht23/spillway/internal/gen/apiv1"
+	"github.com/ankitbisht23/spillway/internal/proxy"
 	"github.com/ankitbisht23/spillway/internal/secret"
 )
 
@@ -78,26 +80,47 @@ func (p playgroundStore) IssueKey(ctx context.Context, consumerID int64, expires
 
 type clientIPKey struct{}
 
+// cfConnectingIP is the header the tunnel puts the visitor's address in
+// and the demo proxy overwrites on every request (ADR-0097 §1, §2).
+const cfConnectingIP = "CF-Connecting-IP"
+
+// WithTrustedProxies sets the proxies whose CF-Connecting-IP is believed
+// (SEC-05, ADR-0097 §2): SPILLWAY_CP_TRUSTED_PROXIES, empty by default,
+// the demo proxy's address in the public demo.
+func (s *Server) WithTrustedProxies(t proxy.TrustedProxies) *Server {
+	s.trustedProxies = t
+	return s
+}
+
 // withClientIP keeps the address the Playground's per-IP caps count a
-// request under: the TCP peer's, IPv6 per /64 (ADR-0096 §3, ADR-0097 §2).
+// request under and getDemo's client_ip shows (ADR-0096 §3, ADR-0097 §2).
 // It is never logged, stored or audited.
-func withClientIP(next http.Handler) http.Handler {
+func (s *Server) withClientIP(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), clientIPKey{}, clientIP(r.RemoteAddr))))
+		ip := clientIP(s.trustedProxies, r.RemoteAddr, r.Header.Values(cfConnectingIP))
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), clientIPKey{}, ip)))
 	})
 }
 
-// clientIP is addr's host, an IPv6 address as its /64.
-func clientIP(addr string) string {
+// clientIP is the request's client address, an IPv6 address as its /64:
+// the CF-Connecting-IP header's when the TCP peer addr is a trusted proxy
+// and the header holds exactly one valid IP address, else the peer's
+// (SEC-05, ADR-0097 §2).
+func clientIP(trusted proxy.TrustedProxies, addr string, header []string) string {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
 		host = addr
 	}
-	ip, err := netip.ParseAddr(host)
+	peer, err := netip.ParseAddr(host)
 	if err != nil {
 		return host
 	}
-	ip = ip.Unmap()
+	ip := peer.Unmap().WithZone("")
+	if len(header) == 1 && trusted.Trusts(ip) {
+		if h, err := netip.ParseAddr(strings.TrimSpace(header[0])); err == nil && h.Zone() == "" {
+			ip = h.Unmap()
+		}
+	}
 	if ip.Is6() {
 		p, _ := ip.Prefix(64)
 		return p.String()
@@ -105,9 +128,14 @@ func clientIP(addr string) string {
 	return ip.String()
 }
 
-func callerOf(ctx context.Context) demo.Caller {
+// clientIPOf is the client address withClientIP kept.
+func clientIPOf(ctx context.Context) string {
 	ip, _ := ctx.Value(clientIPKey{}).(string)
-	return demo.Caller{Sub: actorOf(ctx).Sub, IP: ip}
+	return ip
+}
+
+func callerOf(ctx context.Context) demo.Caller {
+	return demo.Caller{Sub: actorOf(ctx).Sub, IP: clientIPOf(ctx)}
 }
 
 // playgroundOf is the caller's Playground bounds and use for getDemo.
