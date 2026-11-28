@@ -8,6 +8,9 @@
 //	demo-traffic fault [-note text] clear
 //	demo-traffic run --scenario=<base|d1…d7> [--check] [--out file] [--block]
 //	demo-traffic probe --consumer <name> --route <orders|catalog|payments> [-n 5]
+//	demo-traffic share-config --url <url> [--secrets-dir /run/demo]
+//	demo-traffic share-check --url <url> [--after-stop] [--only s9b]
+//	demo-traffic stand-in-tunnel --url https://<host>.example
 //	demo-traffic healthcheck
 //
 // "seed" (the demo-seed one-shot) imports and publishes the demo config and
@@ -19,7 +22,11 @@
 // make demo-fault-upstream, make demo-fault-clear) switches a demo fault on
 // or off, or both off with clear, through the control plane's setDemoFault
 // with the service token, so the switch has the API's RBAC (admin), audit
-// record and demo-mode check (SC-03, ADR-0095 §5).
+// record and demo-mode check (SC-03, ADR-0095 §5). "share-config",
+// "share-check" and "stand-in-tunnel" are the public demo's (make
+// demo-share, make demo-share-test; SC-09, ADR-0097 §3, §4): Keycloak's
+// admin API changes of a share, its checks, and a stand-in for the quick
+// tunnel that publishes nothing (share.go).
 //
 // Settings come from the environment: SPILLWAY_DEMO_CP_URL (the control
 // plane, default http://controlplane:8080), SPILLWAY_DEMO_TOKEN_URL
@@ -28,7 +35,11 @@
 // and fault; never printed, SEC-09) and SPILLWAY_DEMO_TOXIPROXY_URL (default
 // http://toxiproxy:8474), and for run and probe SPILLWAY_DEMO_GATEWAYS and
 // SPILLWAY_DEMO_ADMIN_URLS (the demo gateways' proxy and admin URLs,
-// comma-separated, in the same order). No key, token or secret is ever
+// comma-separated, in the same order). share-config and share-check also
+// read SPILLWAY_DEMO_KEYCLOAK_URL (default http://keycloak:8080/auth) and
+// the secrets KEYCLOAK_ADMIN_PASSWORD and DEMO_ADMIN_PASSWORD (or their
+// _FILE), share-config the optional GITHUB_OAUTH_CLIENT_ID and
+// GITHUB_OAUTH_CLIENT_SECRET (or _FILE). No key, token or secret is ever
 // printed: keys are named by ID. It exits 0 on success, 1 on failure and 2
 // on bad arguments or settings.
 package main
@@ -57,6 +68,9 @@ commands:
   fault     switch a demo fault: fault <redis-cut|upstream-slow> <on|off>, or fault clear (both off)
   run       send the base load (--scenario=base) or a scenario d1 … d7; --check judges it as make verify-m8 does
   probe     send a few requests with a new key and print their RateLimit fields
+  share-config     change realm spillway for a share through Keycloak's admin API (make demo-share)
+  share-check      check a share's settings, or with --after-stop their restore (make demo-share-test)
+  stand-in-tunnel  print a quick tunnel's lines for a URL under .example and wait; publishes nothing
   healthcheck  exit 0 when a running "run" sends its load`
 
 func main() {
@@ -85,6 +99,12 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		return runRun(ctx, args[1:], getenv, stdout, stderr)
 	case "probe":
 		return runProbe(ctx, args[1:], getenv, stdout, stderr)
+	case "share-config":
+		return runShareConfig(ctx, args[1:], getenv, stdout, stderr)
+	case "share-check":
+		return runShareCheck(ctx, args[1:], getenv, stdout, stderr)
+	case "stand-in-tunnel":
+		return runStandInTunnel(ctx, args[1:], stdout, stderr)
 	case "healthcheck":
 		return runHealthcheck(ctx, args[1:], stderr)
 	}
