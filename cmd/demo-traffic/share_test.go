@@ -28,7 +28,9 @@ func TestStandInTunnel(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	var out, errOut bytes.Buffer
 	done := make(chan int)
-	go func() { done <- run(ctx, []string{"stand-in-tunnel", "--url", "https://stand-in.spillway.example"}, env(nil), &out, &errOut) }()
+	go func() {
+		done <- run(ctx, []string{"stand-in-tunnel", "--url", "https://stand-in.spillway.example"}, env(nil), &out, &errOut)
+	}()
 	select {
 	case code := <-done:
 		t.Fatalf("returned %d before it was stopped", code)
@@ -84,7 +86,7 @@ func TestShareConfigSettings(t *testing.T) {
 		{[]string{"share-config", "--url", "https://x.example"}, with(map[string]string{"DEMO_ADMIN_PASSWORD": "short-one"}), "DEMO_ADMIN_PASSWORD is shorter than 16"},
 		{[]string{"share-config", "--url", "https://x.example"}, with(map[string]string{"DEMO_ADMIN_PASSWORD": devValue}), "DEMO_ADMIN_PASSWORD is the public dev value"},
 		{[]string{"share-config", "--url", "https://x.example"}, with(map[string]string{"GITHUB_OAUTH_CLIENT_ID": "id"}), "GITHUB_OAUTH_CLIENT_ID and GITHUB_OAUTH_CLIENT_SECRET together"},
-		{[]string{"share-config", "--url", "https://x.example"}, with(map[string]string{"GITHUB_OAUTH_CLIENT_SECRET": "gh-dev-only-not-secret"}), "together, or neither"},
+		{[]string{"share-config", "--url", "https://x.example"}, with(map[string]string{"GITHUB_OAUTH_CLIENT_SECRET": "gh-dev-only-not-secret"}), "together, or neither"}, //nolint:gosec // G101: a test value
 		{[]string{"share-check", "--url", "https://x.example"}, map[string]string{"KEYCLOAK_ADMIN_PASSWORD": testKCPassword}, "DEMO_ADMIN_PASSWORD (or DEMO_ADMIN_PASSWORD_FILE) is required"},
 		{[]string{"share-check", "--url", "https://x.example", "--only", "s1"}, good, "only s9b"},
 		{[]string{"share-check", "--url", "https://x.example", "--after-stop"}, nil, "SPILLWAY_DEMO_CLIENT_SECRET (or SPILLWAY_DEMO_CLIENT_SECRET_FILE) is required"},
@@ -119,7 +121,7 @@ func TestShareConfigWritesSecrets(t *testing.T) {
 				w.WriteHeader(401)
 				return
 			}
-			write(map[string]string{"access_token": "admin.tok.en"})
+			write(map[string]string{"access_token": "admin.tok.en"}) //nolint:gosec // G101: a test value
 		case r.Method == "GET" && p == "/clients":
 			id := r.URL.Query().Get("clientId")
 			write([]map[string]any{{"id": "uuid-" + id, "clientId": id, "enabled": true}})

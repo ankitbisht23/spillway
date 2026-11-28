@@ -265,7 +265,7 @@ func TestGetDemoClientIP(t *testing.T) {
 		"172.29.0.31:52000":   "172.29.0.31", // anything else on the network
 		"192.0.2.1:1234":      "192.0.2.1",
 	} {
-		r := httptest.NewRequest("GET", "/api/v1/demo", nil)
+		r := httptest.NewRequestWithContext(t.Context(), "GET", "/api/v1/demo", nil)
 		r.RemoteAddr = peer
 		r.Header.Set("CF-Connecting-IP", "203.0.113.7")
 		h.ServeHTTP(httptest.NewRecorder(), r)

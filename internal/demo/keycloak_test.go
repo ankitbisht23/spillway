@@ -310,8 +310,8 @@ func fakeLogin(t *testing.T, u *string, wantHeader string) http.Handler {
 				return
 			}
 			challenge = q.Get("code_challenge")
-			http.SetCookie(w, &http.Cookie{Name: "AUTH_SESSION_ID", Value: "sess", Path: "/auth/realms/spillway/", Secure: true, HttpOnly: true})
-			http.SetCookie(w, &http.Cookie{Name: "KC_RESTART", Value: "", MaxAge: -1})
+			http.SetCookie(w, &http.Cookie{Name: "AUTH_SESSION_ID", Value: "sess", Path: "/auth/realms/spillway/", Secure: true, HttpOnly: true, SameSite: http.SameSiteLaxMode})
+			http.SetCookie(w, &http.Cookie{Name: "KC_RESTART", Value: "", MaxAge: -1, Secure: true, HttpOnly: true, SameSite: http.SameSiteLaxMode})
 			_, _ = fmt.Fprintf(w, `<html><form id="kc-form-login" onsubmit="x" action="%s/auth/realms/spillway/login-actions/authenticate?session_code=a&amp;execution=b&amp;client_id=admin-ui" method="post"></form></html>`, *u)
 		case "/auth/realms/spillway/login-actions/authenticate":
 			_ = r.ParseForm()

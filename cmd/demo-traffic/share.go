@@ -379,7 +379,9 @@ func (s *shareCheck) during(ctx context.Context) {
 	// A refused password grant is Keycloak's invalid_grant (400 with
 	// brute-force detection on, 401 without); a refused client secret is
 	// 401 invalid_client.
-	refused := func(g demo.Grant) bool { return g.Token == "" && (g.Status == 400 || g.Status == 401) && g.Error == "invalid_grant" }
+	refused := func(g demo.Grant) bool {
+		return g.Token == "" && (g.Status == 400 || g.Status == 401) && g.Error == "invalid_grant"
+	}
 	s.c.report("s7", admin.Status == 200 && slices.Contains(adminRoles, "admin") && refused(adminDev) && viewer.Status == 200 &&
 		ciDev.Status == 401 && gwDev.Status == 401 && kcErr == nil && !rbac.Enabled() && brute &&
 		disabled["test-editor"] && disabled["test-publisher"] && disabled["test-key-admin"],
