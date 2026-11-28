@@ -1,0 +1,35 @@
+# The demo proxy (SC-09, ADR-0097 §1, §2): the only thing a tunnel points
+# at. CF-Connecting-IP is believed only from the tunnel container's fixed
+# address and is overwritten on every request to the control plane and
+# Keycloak. No admin API, no automatic HTTPS (the tunnel terminates TLS),
+# no access log, so no client address is written anywhere.
+{
+	admin off
+	auto_https off
+	servers {
+		trusted_proxies static 172.29.255.11/32
+		client_ip_headers CF-Connecting-IP
+	}
+}
+
+:8888 {
+	@kcadmin path /auth/admin /auth/admin/*
+	handle @kcadmin {
+		respond 404
+	}
+	handle /auth/* {
+		reverse_proxy keycloak:8080 {
+			header_up CF-Connecting-IP {client_ip}
+		}
+	}
+	handle /grafana* {
+		reverse_proxy grafana-demo:3000
+	}
+	handle {
+		reverse_proxy controlplane:8080 {
+			flush_interval -1
+			header_up CF-Connecting-IP {client_ip}
+		}
+	}
+	header -Server
+}

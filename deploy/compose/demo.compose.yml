@@ -154,6 +154,81 @@ services:
       gateway-2: { condition: service_healthy }
       gateway-3: { condition: service_healthy }
 
+  # The demo Grafana (SC-05, ADR-0096 §4): compose's Grafana image with
+  # anonymous viewers (Viewer only), no login form, no basic auth, no
+  # sign-up, no Explore, no external snapshots and no embedding; only the
+  # Prometheus datasource and only the Demo dashboard, which is also the
+  # home page. No host port: Caddy serves it at /grafana (ADR-0097 §1), so
+  # it serves from that sub-path, and its root URL follows DEMO_PUBLIC_URL
+  # (make demo-share sets it; default the local proxy). Its database is on
+  # a tmpfs, so nothing a visitor does outlives the container. The admin
+  # password is unusable (no login form, no basic auth) and dev-only. The
+  # dev Grafana on 3000 does not change.
+  grafana-demo:
+    image: grafana/grafana:13.3.0@sha256:488984b716c0862639f91a698adbe2862677a5a07bad42da5f03f3030883b205
+    profiles: [demo]
+    labels: { spillway.demo: "true" }
+    env_file: *env-local
+    read_only: true
+    tmpfs: ["/var/lib/grafana:uid=472,gid=0", "/tmp:uid=472,gid=0"]
+    environment:
+      GF_SERVER_ROOT_URL: ${DEMO_PUBLIC_URL:-http://localhost:8888}/grafana/
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_AUTH_BASIC_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_EXPLORE_ENABLED: "false"
+      GF_SNAPSHOTS_EXTERNAL_ENABLED: "false"
+      GF_SECURITY_ALLOW_EMBEDDING: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_PLUGINS_PREINSTALL_DISABLED: "true"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana-demo/demo.json
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_DEMO_ADMIN_PASSWORD:-dev-only-not-secret}
+    volumes:
+      - ./deploy/grafana/demo/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./deploy/grafana/demo/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./deploy/grafana/demo/demo.json:/var/lib/grafana-demo/demo.json:ro
+    depends_on: [prometheus]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/grafana/api/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  # The demo proxy (SC-09, ADR-0097 §1), local only until make demo-share:
+  # the UI and /api at /, Keycloak's public endpoints at /auth (its admin
+  # console and admin API answer 404), the demo Grafana at /grafana, on
+  # 127.0.0.1:8888 (docs/ports.md). It never fronts a gateway, an admin
+  # port, the gRPC stream, Prometheus or the dev Grafana. Fixed address
+  # 172.29.255.10, the one the control plane and Keycloak will trust for
+  # forwarded client addresses (ADR-0097 §2); Caddy writes no access log.
+  caddy:
+    image: caddy:2.11.9-alpine@sha256:003a97808e781aa9f7e75cc2f43d34d461099031faf5e20faefb9f61126836f0
+    profiles: [demo]
+    labels: { spillway.demo: "true" }
+    env_file: *env-local
+    ports: ["127.0.0.1:8888:8888"]
+    read_only: true
+    tmpfs: ["/data:uid=1000,gid=1000", "/config:uid=1000,gid=1000"]
+    cap_drop: [ALL]
+    user: "1000:1000"
+    volumes: ["./deploy/demo/Caddyfile:/etc/caddy/Caddyfile:ro"]
+    networks:
+      default:
+        ipv4_address: 172.29.255.10
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8888/api/ui-config"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    depends_on:
+      controlplane: { condition: service_healthy }
+      keycloak: { condition: service_healthy }
+      grafana-demo: { condition: service_healthy }
+
   # The demo gateways: always these three (ADR-0094 §4); gateway-4 and
   # gateway-5 stay down.
   gateway-1:

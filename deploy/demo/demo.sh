@@ -26,7 +26,7 @@ services=(
 	redis-0 redis-1 redis-2 redis-3 redis-4 redis-5 postgres keycloak
 	otel-collector tempo loki prometheus redis-exporter grafana toxiproxy
 	upstream-1 upstream-2 upstream-3 controlplane gateway-1 gateway-2 gateway-3
-	demo-traffic
+	demo-traffic grafana-demo caddy
 )
 
 # demo_containers lists the IDs of the spillway project's demo containers.
@@ -66,7 +66,9 @@ up() {
 		demo: up in $((SECONDS - start)) s
 		  admin UI       http://localhost:8080 (the realm's test users, docs/setup.md Step 4)
 		  gateway-1      http://localhost:8000 (gateway-2 and gateway-3 inside the network)
-		  Grafana        http://localhost:3000
+		  demo proxy     http://localhost:8888 (the UI; Keycloak at /auth)
+		  demo Grafana   http://localhost:8888/grafana (anonymous, the Demo dashboard)
+		  dev Grafana    http://localhost:3000
 		  base load      258 rps per the demo-traffic service; make demo-d1 … make demo-d7 run a scenario
 		  make demo-reset restores the seed; make demo-down returns to make dev
 	EOF
