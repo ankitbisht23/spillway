@@ -264,7 +264,7 @@ Postgres holds every config and identity entity; the control plane validates and
 
 - **CP-10** (M5) REST + JSON under `/api/v1`, OpenAPI-first: `api/openapi.yaml` is checked in, Go server stubs (oapi-codegen) and the UI client are generated from it, and `oasdiff` in CI guards it; the UI is its first-party client.
 - **CP-11** (M5) Humans log in through Keycloak only (OIDC; “local accounts” are Keycloak users, GitHub brokered in the demo); service tokens are Keycloak confidential clients (client credentials). The control plane stores no passwords.
-- **CP-12** (M5) RBAC with five global roles, each able to read everything except the audit log: viewer (read only), editor (config working set and import), publisher (publish and rollback), key-admin (consumers, API keys, overrides and access lists), admin (everything, including tenants and the audit log).
+- **CP-12** (M5, M8 Playground) RBAC with five global roles, each able to read everything except the audit log: viewer (read only, plus starting Playground runs in demo mode, UI-07), editor (config working set and import), publisher (publish and rollback), key-admin (consumers, API keys, overrides and access lists), admin (everything, including tenants and the audit log).
 - **CP-13** (M5) Every mutation writes an audit record: actor, action, entity, before/after diff, timestamp, change note.
 - **CP-14** (M5) Optimistic concurrency: updates require `If-Match` with the entity version.
 
@@ -287,7 +287,7 @@ A React + TypeScript single-page app over the admin API covers operating (traffi
 | Consumers & keys | Tenants, consumers, plans, keys (prefix, created, expires, revoked); quota usage today and this month (RL-10) | Issue, rotate, revoke keys; set overrides; edit allow and deny lists |
 | Replicas | Gateway replicas, applied config and identity versions, staleness, last heartbeat | View only |
 | History | Config versions, diffs, audit log | Roll back to a version |
-| Playground (demo mode) | Allowed vs denied per tenant, `RateLimit` headers, token-bucket visual, live over SSE | Pick tenant and rate, fire traffic (generated server-side, UI-07), run a scenario |
+| Playground (demo mode) | Allowed vs denied per tenant, `RateLimit` headers, token-bucket visual, live over SSE | Pick tenant, route and rate, fire traffic (generated server-side, UI-07), run a traffic scenario (D1–D3); admins switch the D5 and D6 faults (SC-03) |
 
 - **UI-01** (M6) Shadow report: would-be-rejected count and share for a shadow policy over a chosen window, broken down by key from the heavy-hitter windows (RL-21).
 - **UI-02** (M6) Diff preview before publish; the publish sends `If-Match` with the working-set revision the preview showed (CP-02), and every publish requires a change note, stored in the audit log.
@@ -295,7 +295,7 @@ A React + TypeScript single-page app over the admin API covers operating (traffi
 - **UI-04** (M6) Role-aware UI: actions hidden or disabled per RBAC role, and enforced again server-side.
 - **UI-05** (M6) Typed API client generated from the OpenAPI spec; server state via TanStack Query.
 - **UI-06** (M6) Loading, empty and error states on every screen; large tables paginated server-side.
-- **UI-07** (M8) Playground traffic is generated server-side: the control plane drives the real gateway in-network with short-lived demo keys, and the browser only shows results over SSE, so there are no cross-origin calls. Available only when `DEMO_MODE=true` (SC-08).
+- **UI-07** (M8) Playground traffic is generated server-side: the control plane drives the real gateways in-network, round robin, with short-lived demo keys that never leave its memory, and the browser only shows results over a per-run SSE stream, so there are no cross-origin calls. Every role may start runs; only the caller who started a run may watch or stop it. Available only when `DEMO_MODE=true` (SC-08).
 - **UI-08** (M6) Session model: OIDC code flow with PKCE; access token held in memory (never localStorage) with silent refresh; the API takes bearer tokens, so there is no cookie CSRF surface.
 - **UI-09** (M6) The production UI build is embedded in the control-plane binary and served at `/`, same origin as `/api/v1`, so no CORS; in dev, the Vite server proxies `/api` to the control plane.
 
@@ -491,8 +491,11 @@ plans:
 | GET | `/api/v1/config/versions`, `/{v}/diff` | History and diffs |
 | GET | `/api/v1/policies/{id}/shadow-report` | Would-be denials over a window |
 | GET | `/api/v1/replicas` | Replicas, applied config and identity versions, last heartbeat |
-| GET | `/api/v1/stream` | SSE: live metrics, replica status, heavy hitters, Playground results (demo mode) |
+| GET | `/api/v1/stream` | SSE: live metrics, replica status, heavy hitters |
 | GET | `/api/v1/demo` | Demo mode: tenants, routes, scenarios, fault states and the caller's Playground limits (404 when demo mode is off, SC-08) |
+| POST | `/api/v1/demo/playground/runs` | Start a Playground run (UI-07) |
+| DELETE | `/api/v1/demo/playground/runs/{id}` | Stop one's own run |
+| GET | `/api/v1/demo/playground/runs/{id}/stream` | SSE: one run's results |
 | PUT | `/api/v1/demo/faults/{name}` | Switch a D5 or D6 fault on or off (admin, SC-03) |
 | GET | `/api/v1/audit` | Audit log, paginated |
 | GET | `/api/v1/me` | The caller’s subject, display name and Spillway roles (UI-04) |
@@ -725,9 +728,9 @@ Exit (`make verify-m7`): every NFR row (NFR-01 – NFR-15) meets its target, wit
 ### M8 Showcase · est. 1.5 weeks
 
 - [x] Demo seed data, `make demo` and `make demo-reset` (SC-01)
-- [ ] Traffic simulator and toxiproxy-only fault switches for D1–D7 (SC-02, SC-03)
+- [x] Traffic simulator and toxiproxy-only fault switches for D1–D7 (SC-02, SC-03)
 - [ ] Playground screen with server-side traffic, and Grafana Demo dashboard (SC-04, SC-05, UI-07)
-- [ ] Demo-mode guards and expiring demo keys (SC-08)
+- [x] Demo-mode guards and expiring demo keys (SC-08)
 - [ ] Public demo: Caddy on 8888 behind one tunnel, `make demo-share` (SC-09)
 - [ ] README GIFs (vhs for terminal scenes, a screen recorder for the UI), tables and quick start (SC-06)
 - [ ] Walkthrough video and `docs/demo.md` live-demo script (SC-07)

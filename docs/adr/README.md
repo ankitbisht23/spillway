@@ -111,3 +111,4 @@ Decisions that shape Spillway and are not obvious from the code or from docs/des
 | [0100](0100-demo-guards-implementation-details.md) | Demo guards: implementation details | Accepted | 2026-11-27 |
 | [0101](0101-fault-switches-implementation-details.md) | Fault switches: implementation details | Accepted | 2026-11-27 |
 | [0102](0102-traffic-simulator-implementation-details.md) | Traffic simulator: implementation details | Accepted | 2026-11-27 |
+| [0103](0103-playground-implementation-details.md) | Playground: implementation details | Accepted | 2026-11-28 |

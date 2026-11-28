@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -55,6 +56,11 @@ type settings struct {
 	// required in demo mode, ignored otherwise. The demo stack sets
 	// http://toxiproxy:8474.
 	demoToxiproxyURL string
+	// SPILLWAY_CP_DEMO_GATEWAYS: the demo gateways' base URLs, comma
+	// separated, that the Playground sends to round robin (UI-07,
+	// ADR-0095 §1); required in demo mode, ignored otherwise. The demo
+	// stack sets http://gateway-1:8000,http://gateway-2:8000,http://gateway-3:8000.
+	demoGateways []string
 
 	// SPILLWAY_CP_PROMETHEUS_URL: the Prometheus the live-data stream's
 	// named queries and the shadow report's counts run against (UI-01,
@@ -139,6 +145,9 @@ func loadSettings(getenv func(string) string) (settings, error) {
 			return s, fmt.Errorf("SPILLWAY_CP_DEMO_TOXIPROXY_URL: %w", err)
 		}
 		s.demoToxiproxyURL = v
+		if s.demoGateways, err = parseGateways(getenv("SPILLWAY_CP_DEMO_GATEWAYS")); err != nil {
+			return s, fmt.Errorf("SPILLWAY_CP_DEMO_GATEWAYS: %w", err)
+		}
 	}
 	s.oidcIssuer, s.oidcJWKSURL = getenv("SPILLWAY_CP_OIDC_ISSUER"), getenv("SPILLWAY_CP_OIDC_JWKS_URL")
 	s.oidcAudience = cmp.Or(getenv("SPILLWAY_CP_OIDC_AUDIENCE"), "spillway-controlplane")
@@ -195,4 +204,32 @@ func loadMigrateSettings(getenv func(string) string) (migrateSettings, error) {
 
 func adminAddr(getenv func(string) string) string {
 	return cmp.Or(getenv("SPILLWAY_CP_ADMIN_ADDR"), defaultAdminAddr)
+}
+
+// parseGateways reads SPILLWAY_CP_DEMO_GATEWAYS: one or more distinct http
+// or https base URLs, comma separated, each with a host and no user info,
+// path, query or fragment.
+func parseGateways(v string) ([]string, error) {
+	var out []string
+	for g := range strings.SplitSeq(v, ",") {
+		if g = strings.TrimSpace(g); g == "" {
+			continue
+		}
+		u, err := live.ParsePrometheusURL(g)
+		if err != nil {
+			return nil, fmt.Errorf("%q: %w", g, err)
+		}
+		if u.Path != "" && u.Path != "/" {
+			return nil, fmt.Errorf("%q: a path is not allowed", g)
+		}
+		g = strings.TrimSuffix(g, "/")
+		if slices.Contains(out, g) {
+			return nil, fmt.Errorf("%q is listed twice", g)
+		}
+		out = append(out, g)
+	}
+	if len(out) == 0 {
+		return nil, errors.New("required in demo mode: the gateways the Playground sends to (UI-07)")
+	}
+	return out, nil
 }

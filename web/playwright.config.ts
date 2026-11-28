@@ -11,8 +11,9 @@ export default defineConfig({
   testDir: "e2e",
   testMatch: "*.spec.ts",
   // make verify-m6's exit flow needs its managed gateways and probe; it
-  // runs with playwright.m6.config.ts only.
-  testIgnore: "m6-exit.spec.ts",
+  // runs with playwright.m6.config.ts only. The Playground's flows need the
+  // demo stack: make test-e2e-demo runs them with playwright.demo.config.ts.
+  testIgnore: ["m6-exit.spec.ts", "playground.spec.ts"],
   globalSetup: "./e2e/global-setup.ts",
   globalTeardown: "./e2e/global-teardown.ts",
   retries: 0,

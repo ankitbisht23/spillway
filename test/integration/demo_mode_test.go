@@ -113,7 +113,10 @@ func TestGetDemo(t *testing.T) {
 	viewer.must(200, "GET", "/demo", nil).decode(t, &d)
 	got, _ := json.Marshal(d)
 	// No toxiproxy here: both fault states unknown (TestDemoFaults has one).
+	// No demo gateways either, so no Playground run can start: none left
+	// this hour (TestPlaygroundRun has them).
 	const want = `{"faults":[{"active":null,"name":"redis-cut"},{"active":null,"name":"upstream-slow"}],` +
+		`"playground":{"active_runs":0,"max_duration_s":60,"max_rate":200,"runs_left_this_hour":0},` +
 		`"routes":[{"limit":null,"name":"orders","policy":"consumer-plan"},` +
 		`{"limit":{"burst":200,"period":"1s","rate":200},"name":"catalog","policy":"catalog-limit"},` +
 		`{"limit":{"burst":200,"period":"1s","rate":100},"name":"payments","policy":"payments-limit"}],` +
@@ -193,7 +196,8 @@ func TestDemoKeys(t *testing.T) {
 	iss := newTestIssuer(t)
 	database := migratedDatabase(t)
 	grpcAddr := freeAddr(t)
-	cp := startCP(t, "controlplane", database, grpcAddr, iss, "SPILLWAY_CP_DEMO_MODE=true", "SPILLWAY_CP_DEMO_TOXIPROXY_URL="+toxiproxyAPI) // required in demo mode (ADR-0101)
+	cp := startCP(t, "controlplane", database, grpcAddr, iss, "SPILLWAY_CP_DEMO_MODE=true", "SPILLWAY_CP_DEMO_TOXIPROXY_URL="+toxiproxyAPI, // required in demo mode (ADR-0101)
+		"SPILLWAY_CP_DEMO_GATEWAYS=http://127.0.0.1:9") // required in demo mode; no run here
 	v := publishYAML(t, cp.rest, demoKeyConfig(upstreamAnswering(t, "ok")), "demo keys")
 	tenant, _ := created(t, cp.rest, "/tenants", map[string]any{"name": "free-co", "plan_id": planID(t, cp.rest)})
 	consumer := func(name string) int64 {

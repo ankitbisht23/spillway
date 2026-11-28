@@ -151,8 +151,8 @@ func serve(log *slog.Logger, getenv func(string) string) error {
 	}
 	apiServer := api.New(st, s.allow, net.DefaultResolver, api.OIDC{Verifier: verifier}, s.hitterSecret, log).WithPrometheus(prom).WithDemo(s.demoMode)
 	if s.demoMode {
-		apiServer.WithDemoToxiproxy(s.demoToxiproxyURL)
-		log.Info("demo mode is on: the /api/v1/demo operations answer and every key issued or rotated expires within 30 minutes", "toxiproxy", s.demoToxiproxyURL)
+		apiServer.WithDemoToxiproxy(s.demoToxiproxyURL).WithDemoGateways(s.demoGateways)
+		log.Info("demo mode is on: the /api/v1/demo operations answer and every key issued or rotated expires within 30 minutes", "toxiproxy", s.demoToxiproxyURL, "gateways", s.demoGateways)
 	}
 	hub := live.NewHub(live.Config{Prometheus: prom, Postgres: apiServer.LiveSource(), Registerer: reg, Log: log})
 	// The REST API and the admin UI share the listener, same origin (UI-09,
@@ -172,6 +172,7 @@ func serve(log *slog.Logger, getenv func(string) string) error {
 	// Streams end with an end event at shutdown, so they do not hold
 	// Shutdown for its whole timeout (ADR-0059).
 	apiSrv.RegisterOnShutdown(hub.Shutdown)
+	apiSrv.RegisterOnShutdown(apiServer.ShutdownPlayground) // ends every Playground run and stream (ADR-0096 §3)
 	errc := make(chan error, 2)
 	lc := &net.ListenConfig{}
 	for _, srv := range []struct {
