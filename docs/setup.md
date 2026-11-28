@@ -281,8 +281,8 @@ Your part: after `make dev`, open the Keycloak admin console at `http://localhos
    `<demo-host>` is the demo proxy’s hostname, `admin.<domain>` in Step 7. The callback must stay fixed, so GitHub login needs that named tunnel; a quick tunnel’s URL changes every run, so use the realm’s test users with it.
 3. Register, then Generate a new client secret. Copy the client ID and secret into your password manager immediately; the secret is shown once.
 4. Optional: register a second app for local testing with callback `http://localhost:<keycloak-port>/auth/realms/spillway/broker/github/endpoint` (Keycloak’s port is in `docs/ports.md`), since each OAuth app takes one callback URL.
-5. Give the values to the deployment as `GITHUB_OAUTH_CLIENT_ID` and `GITHUB_OAUTH_CLIENT_SECRET` (Step 8). The agent wires Keycloak’s GitHub identity provider to read them.
-6. After your first GitHub login on the demo, grant your user the `admin` role in Keycloak; leave visitors on `viewer`.
+5. Give the values to the deployment as `GITHUB_OAUTH_CLIENT_ID` and `GITHUB_OAUTH_CLIENT_SECRET` in `.env.demo` (Step 8). `TUNNEL=named make demo-share` (Step 7) adds Keycloak’s GitHub identity provider from them (ADR-0097 §3); a quick tunnel never does.
+6. Every GitHub login gets the `viewer` role, yours included: the identity provider has a hardcoded-role mapper, and Keycloak loses brokered users whenever the share recreates it, so a role granted by hand would not last. For admin work on the public demo, log in as `test-admin` with your `DEMO_ADMIN_PASSWORD` (Step 8), which `make demo-share` sets.
 
 The agent cannot register OAuth apps: it takes your GitHub session in a browser and produces a secret only you should hold.
 
@@ -359,13 +359,16 @@ No cloud account is needed. Kubernetes runs as a local kind cluster, benchmarks 
 ### Live demo from your laptop (you)
 
 1. Start the stack: `make demo` (built in M8).
-2. Share it:
+2. Share it, from a terminal (it asks you to type `share` before it publishes anything):
 
    ```bash
-   make demo-share   # quick tunnel to the demo proxy on 8888; prints a trycloudflare.com URL
+   make demo-share        # quick tunnel to the demo proxy on 8888; prints a trycloudflare.com URL
+   make demo-share-stop   # removes the tunnel and restores the localhost settings and the dev realm
    ```
 
-   Everything public goes through one reverse proxy (Caddy on 8888, see `docs/ports.md`) behind one tunnel: the admin UI and `/api/v1` at `/` (behind OIDC and RBAC), Keycloak at `/auth`, Grafana at `/grafana`. `make demo-share` points a quick tunnel at the proxy (the same as `cloudflared tunnel --url http://localhost:8888`) and, from the URL it prints, sets Keycloak’s `KC_HOSTNAME` (`<url>/auth`), the services’ expected issuer (`<url>/auth/realms/spillway`), the UI’s OIDC authority, Grafana’s `GF_SERVER_ROOT_URL` (`<url>/grafana`, with `GF_SERVER_SERVE_FROM_SUB_PATH=true`) and the `admin-ui` client’s redirect URIs and web origins (through the Keycloak admin API), then restarts what changed, so logins and links use the public address (SC-09). While a share runs, log in through the public URL; localhost logins fail until you stop it. Visitors drive the gateway from the Playground, which generates traffic server-side (UI-07), so the gateway needs no tunnel of its own. Never tunnel an admin port (8001, 8081) or the gRPC stream (9090).
+   It needs `.env.demo` (Step 8) with your own `KEYCLOAK_ADMIN_PASSWORD` and `DEMO_ADMIN_PASSWORD` (each at least 16 characters, not the dev value); it reads nothing else from that file for a quick tunnel and never prints a value. Because the realm’s dev passwords and client secrets are public in the repository, a share also disables every test user except `test-viewer` (the visitors’ account, password as in Step 4), sets `test-admin`’s password to `DEMO_ADMIN_PASSWORD` (your admin login), gives `spillway-ci` and `gateway-tests` new secrets (kept in `0600` files under the ignored `deploy/demo/run/`, never printed), disables `rbac-tests` and turns on Keycloak’s brute-force detection; `make demo-share-stop` (and `make demo-down`) bring the dev realm back. `make demo` and `make demo-reset` refuse to run while a share is active. `make demo-share-test` runs the whole share path against a stand-in tunnel (`https://stand-in.spillway.example`, which resolves nowhere) with throwaway passwords and checks every setting below, without a Cloudflare account or `.env.demo`.
+
+   Everything public goes through one reverse proxy (Caddy on 8888, see `docs/ports.md`) behind one tunnel: the admin UI and `/api/v1` at `/` (behind OIDC and RBAC), Keycloak’s login pages at `/auth` (its admin console and admin API answer 404 at the proxy), the demo Grafana at `/grafana` (anonymous viewers, the Demo dashboard and Prometheus only). `make demo-share` points a quick tunnel at the proxy (the same as `cloudflared tunnel --url http://localhost:8888`) and, from the URL it prints, sets Keycloak’s `KC_HOSTNAME` (`<url>/auth`), the services’ expected issuer (`<url>/auth/realms/spillway`), the UI’s OIDC authority, Grafana’s `GF_SERVER_ROOT_URL` (`<url>/grafana`, with `GF_SERVER_SERVE_FROM_SUB_PATH=true`) and the `admin-ui` client’s redirect URIs and web origins (through the Keycloak admin API), then restarts what changed, so logins and links use the public address (SC-09). While a share runs, log in through the public URL; localhost logins fail until you stop it. Visitors drive the gateway from the Playground, which generates traffic server-side (UI-07), so the gateway needs no tunnel of its own. Never tunnel an admin port (8001, 8081) or the gRPC stream (9090).
 3. Before an interview, rehearse with `docs/demo.md` and keep the recorded video ready as a fallback.
 4. Record: terminal scenes as scripted GIFs with `vhs`; UI scenes with OBS Studio (free, all platforms) or QuickTime on macOS.
 
@@ -388,10 +391,10 @@ Buying a domain is the one paid item here.
 
 1. Add the domain to a free Cloudflare account and switch its nameservers to Cloudflare’s.
 2. Cloudflare dashboard → Zero Trust → Networks → Tunnels → Create a tunnel → copy its token.
-3. Add a public hostname for the demo proxy on 8888, the same one the quick tunnel uses: `admin.<domain>` → proxy (UI and API at `/`, Keycloak at `/auth`, Grafana at `/grafana`). No gateway hostname is needed: the Playground drives the gateway server-side (UI-07). Never route a hostname to 8001, 8081 or 9090.
-4. Store the token as `CLOUDFLARE_TUNNEL_TOKEN` (Step 8). The agent runs `cloudflared` as a container beside the stack (laptop) or in k3s (cloud VM).
+3. Add a public hostname for the demo proxy on 8888, the same one the quick tunnel uses: `admin.<domain>` → service `http://caddy:8888` (the tunnel container runs inside the compose network; UI and API at `/`, Keycloak at `/auth`, Grafana at `/grafana`). No gateway hostname is needed: the Playground drives the gateway server-side (UI-07). Never route a hostname to 8001, 8081 or 9090.
+4. Store the token as `CLOUDFLARE_TUNNEL_TOKEN` and the hostname as `DEMO_PUBLIC_URL=https://admin.<domain>` in `.env.demo` (Step 8), then run `TUNNEL=named make demo-share`: it runs `cloudflared` as a container beside the stack with the token passed by name (never on a command line, never printed) and sets everything from `DEMO_PUBLIC_URL`, plus GitHub login when Step 4’s two variables are set. On a cloud VM, run it in k3s instead.
 
-Tell the agent three things: the tunnel is outbound-only, so no inbound ports open; the client IP arrives in `CF-Connecting-IP`, which the control plane must trust only from the demo proxy (SEC-05; the gateway is never tunnelled); and Keycloak’s `KC_HOSTNAME`, the services’ expected issuer and the `admin-ui` redirect URIs must all use the public URL (`https://admin.<domain>/auth`), or logins fail or redirect to localhost (`make demo-share` sets all of them for quick tunnels, SC-09).
+Three rules the demo follows: the tunnel is outbound-only, so no inbound ports open; the client IP arrives in `CF-Connecting-IP`, which Caddy believes only from the tunnel container’s fixed address and the control plane only from Caddy’s (`SPILLWAY_CP_TRUSTED_PROXIES`, SEC-05; the gateway is never tunnelled); and Keycloak’s `KC_HOSTNAME`, the services’ expected issuer and the `admin-ui` redirect URIs must all use the public URL (`https://admin.<domain>/auth`), or logins fail or redirect to localhost (`make demo-share` sets all of them for both tunnel kinds, SC-09).
 
 A public playground invites abuse. Keep demo mode’s per-session limits (SC-08 in the design doc) and Cloudflare’s free protections on.
 
@@ -422,8 +425,9 @@ Secrets live in three places only: your password manager (source of truth), an u
 | --- | --- | --- | --- |
 | Local dev passwords and client secrets (Postgres, Keycloak admin, test users, `gateway-tests`, `spillway-ci`, `rbac-tests`) | Agent generates | `.env.example` and the realm import; obviously fake values, allowlisted in `.gitleaks.toml` | M0 |
 | `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET` | GitHub OAuth app (Step 4) | Password manager, `.env.demo` or k8s secret | M8, optional |
-| `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `KEYCLOAK_ADMIN_PASSWORD` (public demo) | You generate | Password manager, `.env.demo` or k8s secret | M8, optional |
-| `CLOUDFLARE_TUNNEL_TOKEN` | Cloudflare (Step 7) | `.env.demo` or k8s secret | M8, optional |
+| `KEYCLOAK_ADMIN_PASSWORD`, `DEMO_ADMIN_PASSWORD` (public demo: Keycloak’s admin and `test-admin` during a share; `make demo-share` reads only these two, and for a named tunnel the four below) | You generate | Password manager, `.env.demo` | M8, optional |
+| `POSTGRES_PASSWORD`, `REDIS_PASSWORD` (hosted demo only; `make demo-share` leaves compose’s Postgres and Redis as they are, since the proxy never reaches them) | You generate | Password manager, `.env.demo` or k8s secret | M8, optional |
+| `CLOUDFLARE_TUNNEL_TOKEN`, `DEMO_PUBLIC_URL` (named tunnel; the URL is not a secret) | Cloudflare (Step 7) | `.env.demo` or k8s secret | M8, optional |
 | `GRAFANA_CLOUD_OTLP_ENDPOINT`, `GRAFANA_CLOUD_INSTANCE_ID`, `GRAFANA_CLOUD_TOKEN` | Grafana Cloud (Step 7) | GitHub secret, `.env.demo` | M8, optional |
 | `~/.ssh/spillway_cloud` | ssh-keygen, only with a cloud VM (Step 6) | Your machine only | Optional |
 
