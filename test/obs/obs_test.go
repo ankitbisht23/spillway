@@ -597,7 +597,8 @@ func TestDemoDashboard(t *testing.T) {
 // one datasource, compose's Prometheus, and the Demo dashboard alone; the
 // demo override runs it from compose's Grafana image, in profile demo, with
 // no host port and ADR-0096's anonymous-Viewer settings, behind Caddy on
-// 127.0.0.1:8888 only (ADR-0097 §1); and the dev Grafana stays as it was:
+// 127.0.0.1:8888 only (ADR-0097 §1), neither of them given .env.local
+// (ADR-0104); and the dev Grafana stays as it was:
 // no anonymous access, its own provisioning.
 func TestDemoGrafana(t *testing.T) {
 	read := func(name string, out any) {
@@ -636,6 +637,7 @@ func TestDemoGrafana(t *testing.T) {
 		Ports       []string          `yaml:"ports"`
 		Environment map[string]string `yaml:"environment"`
 		Volumes     []string          `yaml:"volumes"`
+		EnvFile     any               `yaml:"env_file"`
 	}
 	var base, demo struct {
 		Services map[string]service `yaml:"services"`
@@ -676,6 +678,9 @@ func TestDemoGrafana(t *testing.T) {
 		"./deploy/grafana/demo/demo.json:/var/lib/grafana-demo/demo.json:ro",
 	}; !slices.Equal(g.Volumes, want) {
 		t.Errorf("grafana-demo mounts %v, want only the demo provisioning and demo.json, read-only: %v", g.Volumes, want)
+	}
+	if g.EnvFile != nil || caddy.EnvFile != nil {
+		t.Errorf("grafana-demo env_file %v, caddy env_file %v; want none: nothing from .env.local reaches the anonymous surfaces (ADR-0104)", g.EnvFile, caddy.EnvFile)
 	}
 	if !slices.Equal(caddy.Ports, []string{"127.0.0.1:8888:8888"}) || !slices.Equal(caddy.Profiles, []string{"demo"}) {
 		t.Errorf("caddy: ports %v, profiles %v; want 127.0.0.1:8888:8888 (docs/ports.md) and profile demo", caddy.Ports, caddy.Profiles)

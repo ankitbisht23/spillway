@@ -162,13 +162,13 @@ services:
   # it serves from that sub-path, and its root URL follows DEMO_PUBLIC_URL
   # (make demo-share sets it; default the local proxy). Its database is on
   # a tmpfs, so nothing a visitor does outlives the container. The admin
-  # password is unusable (no login form, no basic auth) and dev-only. The
-  # dev Grafana on 3000 does not change.
+  # password is unusable (no login form, no basic auth) and dev-only. No
+  # env_file: nothing from .env.local reaches it (ADR-0104). The dev Grafana
+  # on 3000 does not change.
   grafana-demo:
     image: grafana/grafana:13.3.0@sha256:488984b716c0862639f91a698adbe2862677a5a07bad42da5f03f3030883b205
     profiles: [demo]
     labels: { spillway.demo: "true" }
-    env_file: *env-local
     read_only: true
     tmpfs: ["/var/lib/grafana:uid=472,gid=0", "/tmp:uid=472,gid=0"]
     environment:
@@ -204,12 +204,12 @@ services:
   # 127.0.0.1:8888 (docs/ports.md). It never fronts a gateway, an admin
   # port, the gRPC stream, Prometheus or the dev Grafana. Fixed address
   # 172.29.255.10, the one the control plane and Keycloak will trust for
-  # forwarded client addresses (ADR-0097 §2); Caddy writes no access log.
+  # forwarded client addresses (ADR-0097 §2); Caddy writes no access log
+  # and, like grafana-demo, gets nothing from .env.local (ADR-0104).
   caddy:
     image: caddy:2.11.9-alpine@sha256:003a97808e781aa9f7e75cc2f43d34d461099031faf5e20faefb9f61126836f0
     profiles: [demo]
     labels: { spillway.demo: "true" }
-    env_file: *env-local
     ports: ["127.0.0.1:8888:8888"]
     read_only: true
     tmpfs: ["/data:uid=1000,gid=1000", "/config:uid=1000,gid=1000"]
