@@ -11,6 +11,8 @@
 //	demo-traffic share-config --url <url> [--secrets-dir /run/demo]
 //	demo-traffic share-check --url <url> [--after-stop] [--only s9b]
 //	demo-traffic stand-in-tunnel --url https://<host>.example
+//	demo-traffic verify guards --phase <G0|G1> [--out file]
+//	demo-traffic verify keys [--out file]
 //	demo-traffic healthcheck
 //
 // "seed" (the demo-seed one-shot) imports and publishes the demo config and
@@ -26,7 +28,9 @@
 // "share-check" and "stand-in-tunnel" are the public demo's (make
 // demo-share, make demo-share-test; SC-09, ADR-0097 §3, §4): Keycloak's
 // admin API changes of a share, its checks, and a stand-in for the quick
-// tunnel that publishes nothing (share.go).
+// tunnel that publishes nothing (share.go). "verify" runs make verify-m8's
+// demo-mode-off guards (G0, G1) and demo-key checks (K) (ADR-0098 §2,
+// verify.go).
 //
 // Settings come from the environment: SPILLWAY_DEMO_CP_URL (the control
 // plane, default http://controlplane:8080), SPILLWAY_DEMO_TOKEN_URL
@@ -71,6 +75,7 @@ commands:
   share-config     change realm spillway for a share through Keycloak's admin API (make demo-share)
   share-check      check a share's settings, or with --after-stop their restore (make demo-share-test)
   stand-in-tunnel  print a quick tunnel's lines for a URL under .example and wait; publishes nothing
+  verify    make verify-m8's checks: verify guards --phase G0|G1 (demo mode off), verify keys (demo keys)
   healthcheck  exit 0 when a running "run" sends its load`
 
 func main() {
@@ -105,6 +110,8 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		return runShareCheck(ctx, args[1:], getenv, stdout, stderr)
 	case "stand-in-tunnel":
 		return runStandInTunnel(ctx, args[1:], stdout, stderr)
+	case "verify":
+		return runVerify(ctx, args[1:], getenv, stderr)
 	case "healthcheck":
 		return runHealthcheck(ctx, args[1:], stderr)
 	}
