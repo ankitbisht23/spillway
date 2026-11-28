@@ -18,6 +18,11 @@ cd "$(dirname "$0")/../.."
 compose=(docker compose --env-file .env.example)
 if [ -f .env.local ]; then compose+=(--env-file .env.local); fi
 demo=("${compose[@]}" -f compose.yaml -f deploy/compose/demo.compose.yml --profile replicas --profile demo)
+# While make demo-share runs, its settings and secret files apply here too
+# (ADR-0105).
+if [ -f deploy/demo/run/share.env ]; then
+	demo+=(--env-file deploy/demo/run/share.env -f deploy/compose/share.compose.yml)
+fi
 
 case "${1:-}" in
 d[1-7]) ;;
