@@ -1,0 +1,263 @@
+{
+  "achieved_rps": {
+    "median": 4599.988888888889,
+    "min": 4599.977777777778,
+    "max": 4600,
+    "spread": 4.8309295432377764e-06
+  },
+  "arch": "x64",
+  "commit": "160099ac2d6330b310247ba2ed94b98b44240a46",
+  "gate": {
+    "verdict": "first",
+    "baseline": null,
+    "release_baseline": null,
+    "release_tag": "v1.0.0",
+    "comparisons": [],
+    "rerun_of": null,
+    "cross_model": {
+      "info": "information only (P34): another CPU model, never flagged, never fails, never makes or blocks a baseline",
+      "baseline": "results/x64/20261127T121534Z.json",
+      "cpu_model": "AMD EPYC 9V74 80-Core Processor",
+      "comparisons": [
+        {
+          "metric": "achieved_rps_median",
+          "base": 4600,
+          "value": 4599.988888888889,
+          "change": -0.000002415458937162918
+        },
+        {
+          "metric": "p99_us_median",
+          "base": 1610,
+          "value": 1741,
+          "change": 0.08136645962732919
+        }
+      ]
+    }
+  },
+  "hardware": {
+    "cpu_model": "Intel(R) Xeon(R) 6975P-C",
+    "cpus": 4,
+    "memory_bytes": 16463380480,
+    "os": "Ubuntu 26.04.1 LTS",
+    "kernel": "7.0.0-1018-aws",
+    "topology": [
+      {
+        "cpu": 0,
+        "core": 0,
+        "socket": 0,
+        "thread_siblings": "0,2"
+      },
+      {
+        "cpu": 1,
+        "core": 1,
+        "socket": 0,
+        "thread_siblings": "1,3"
+      },
+      {
+        "cpu": 2,
+        "core": 0,
+        "socket": 0,
+        "thread_siblings": "0,2"
+      },
+      {
+        "cpu": 3,
+        "core": 1,
+        "socket": 0,
+        "thread_siblings": "1,3"
+      }
+    ]
+  },
+  "invalid_reasons": [],
+  "latency_us": {
+    "p50": {
+      "median": 521,
+      "min": 517,
+      "max": 533,
+      "spread": 0.030710172744721688
+    },
+    "p99": {
+      "median": 1741,
+      "min": 1734,
+      "max": 1787,
+      "spread": 0.030442274554853533
+    },
+    "p99_9": {
+      "median": 2945,
+      "min": 2813,
+      "max": 3023,
+      "spread": 0.07130730050933787
+    }
+  },
+  "ref": "refs/heads/m8-verify",
+  "rps_per_vcpu": 4599.988888888889,
+  "run_url": "https://github.com/ankitbisht23/spillway/actions/runs/46114900991",
+  "runs": [
+    {
+      "url": "http://gateway:8000/bytes/1024",
+      "protocol": "HTTP/1.1",
+      "target_rps": 4600,
+      "achieved_rps": 4599.977777777778,
+      "valid": true,
+      "warmup_s": 30,
+      "duration_s": 180,
+      "requests": {
+        "scheduled": 828000,
+        "sent": 827996,
+        "dropped": 4
+      },
+      "status": {
+        "2xx": 827996
+      },
+      "errors": {},
+      "latency_us": {
+        "p50": 521,
+        "p99": 1781,
+        "p99_9": 2947,
+        "max": 7667
+      },
+      "hardware": {
+        "cpu_model": "Intel(R) Xeon(R) 6975P-C",
+        "goarch": "amd64",
+        "num_cpu": 2,
+        "gomaxprocs": 2
+      }
+    },
+    {
+      "url": "http://gateway:8000/bytes/1024",
+      "protocol": "HTTP/1.1",
+      "target_rps": 4600,
+      "achieved_rps": 4599.988888888889,
+      "valid": true,
+      "warmup_s": 30,
+      "duration_s": 180,
+      "requests": {
+        "scheduled": 828000,
+        "sent": 827998,
+        "dropped": 2
+      },
+      "status": {
+        "2xx": 827998
+      },
+      "errors": {},
+      "latency_us": {
+        "p50": 533,
+        "p99": 1734,
+        "p99_9": 3023,
+        "max": 6231
+      },
+      "hardware": {
+        "cpu_model": "Intel(R) Xeon(R) 6975P-C",
+        "goarch": "amd64",
+        "num_cpu": 2,
+        "gomaxprocs": 2
+      }
+    },
+    {
+      "url": "http://gateway:8000/bytes/1024",
+      "protocol": "HTTP/1.1",
+      "target_rps": 4600,
+      "achieved_rps": 4599.983333333334,
+      "valid": true,
+      "warmup_s": 30,
+      "duration_s": 180,
+      "requests": {
+        "scheduled": 828000,
+        "sent": 827997,
+        "dropped": 3
+      },
+      "status": {
+        "2xx": 827997
+      },
+      "errors": {},
+      "latency_us": {
+        "p50": 517,
+        "p99": 1787,
+        "p99_9": 2945,
+        "max": 10511
+      },
+      "hardware": {
+        "cpu_model": "Intel(R) Xeon(R) 6975P-C",
+        "goarch": "amd64",
+        "num_cpu": 2,
+        "gomaxprocs": 2
+      }
+    },
+    {
+      "url": "http://gateway:8000/bytes/1024",
+      "protocol": "HTTP/1.1",
+      "target_rps": 4600,
+      "achieved_rps": 4600,
+      "valid": true,
+      "warmup_s": 30,
+      "duration_s": 180,
+      "requests": {
+        "scheduled": 828000,
+        "sent": 828000,
+        "dropped": 0
+      },
+      "status": {
+        "2xx": 828000
+      },
+      "errors": {},
+      "latency_us": {
+        "p50": 518,
+        "p99": 1741,
+        "p99_9": 2817,
+        "max": 6079
+      },
+      "hardware": {
+        "cpu_model": "Intel(R) Xeon(R) 6975P-C",
+        "goarch": "amd64",
+        "num_cpu": 2,
+        "gomaxprocs": 2
+      }
+    },
+    {
+      "url": "http://gateway:8000/bytes/1024",
+      "protocol": "HTTP/1.1",
+      "target_rps": 4600,
+      "achieved_rps": 4600,
+      "valid": true,
+      "warmup_s": 30,
+      "duration_s": 180,
+      "requests": {
+        "scheduled": 828000,
+        "sent": 828000,
+        "dropped": 0
+      },
+      "status": {
+        "2xx": 828000
+      },
+      "errors": {},
+      "latency_us": {
+        "p50": 526,
+        "p99": 1736,
+        "p99_9": 2813,
+        "max": 5991
+      },
+      "hardware": {
+        "cpu_model": "Intel(R) Xeon(R) 6975P-C",
+        "goarch": "amd64",
+        "num_cpu": 2,
+        "gomaxprocs": 2
+      }
+    }
+  ],
+  "setup": {
+    "gateway_vcpus": 1,
+    "cpus": {
+      "gateway": "0",
+      "loadgen": "1-2",
+      "upstream": "3"
+    },
+    "url": "http://gateway:8000/bytes/1024",
+    "protocol": "HTTP/1.1",
+    "warmup": "30s",
+    "duration": "3m",
+    "access_log_sample_rate": 0.01,
+    "trace_sample_ratio": 0.01
+  },
+  "target_rps": 4600,
+  "timestamp": "2026-11-28T06:04:32Z",
+  "valid": true
+}
