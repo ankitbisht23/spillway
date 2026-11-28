@@ -33,6 +33,9 @@ func ParseTrustedProxies(s string) (TrustedProxies, error) {
 	return t, nil
 }
 
+// Trusts reports whether ip (unmapped) is in one of the networks.
+func (t TrustedProxies) Trusts(ip netip.Addr) bool { return t.trusts(ip.Unmap()) }
+
 func (t TrustedProxies) trusts(ip netip.Addr) bool {
 	for _, p := range t {
 		if p.Contains(ip) {

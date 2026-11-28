@@ -1,0 +1,23 @@
+# make demo-share's third compose file (SC-09, ADR-0097 §3, ADR-0105),
+# used with demo.compose.yml and deploy/demo/run/share.env only while a
+# share runs (deploy/demo/share.sh, deploy/demo/demo.sh): the demo's
+# service-token clients read spillway-ci's rotated secret from the 0600
+# file share-config wrote into deploy/demo/run/ (never from the
+# environment, never printed), as the user who owns that directory, so a
+# Linux host's file modes hold as they do on Docker Desktop. demo-seed's
+# one-shots (share-config, share-check, the seed, the fault switches) may
+# write there; the base load only reads.
+services:
+  demo-seed:
+    user: "${DEMO_SHARE_UID:?run make demo-share}:${DEMO_SHARE_GID:?run make demo-share}"
+    environment:
+      SPILLWAY_DEMO_CLIENT_SECRET: ""
+      SPILLWAY_DEMO_CLIENT_SECRET_FILE: /run/demo/spillway-ci-secret
+    volumes: ["./deploy/demo/run:/run/demo"]
+
+  demo-traffic:
+    user: "${DEMO_SHARE_UID:?run make demo-share}:${DEMO_SHARE_GID:?run make demo-share}"
+    environment:
+      SPILLWAY_DEMO_CLIENT_SECRET: ""
+      SPILLWAY_DEMO_CLIENT_SECRET_FILE: /run/demo/spillway-ci-secret
+    volumes: ["./deploy/demo/run:/run/demo:ro"]

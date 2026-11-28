@@ -149,7 +149,7 @@ func serve(log *slog.Logger, getenv func(string) string) error {
 	} else {
 		log.Warn("SPILLWAY_CP_PROMETHEUS_URL is not set: the stream's Prometheus queries and the shadow report's counts answer prometheus_not_configured")
 	}
-	apiServer := api.New(st, s.allow, net.DefaultResolver, api.OIDC{Verifier: verifier}, s.hitterSecret, log).WithPrometheus(prom).WithDemo(s.demoMode)
+	apiServer := api.New(st, s.allow, net.DefaultResolver, api.OIDC{Verifier: verifier}, s.hitterSecret, log).WithPrometheus(prom).WithDemo(s.demoMode).WithTrustedProxies(s.trustedProxies)
 	if s.demoMode {
 		apiServer.WithDemoToxiproxy(s.demoToxiproxyURL).WithDemoGateways(s.demoGateways)
 		log.Info("demo mode is on: the /api/v1/demo operations answer and every key issued or rotated expires within 30 minutes", "toxiproxy", s.demoToxiproxyURL, "gateways", s.demoGateways)

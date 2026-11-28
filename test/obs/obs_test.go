@@ -9,6 +9,7 @@ package obs
 
 import (
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"os"
 	"path"
@@ -692,5 +693,119 @@ func TestDemoGrafana(t *testing.T) {
 	}
 	if slices.ContainsFunc(dev.Volumes, func(v string) bool { return strings.Contains(v, "deploy/grafana/demo") }) {
 		t.Errorf("the dev Grafana mounts the demo Grafana's files: %v", dev.Volumes)
+	}
+}
+
+// TestDemoShare checks the public demo's compose settings (SC-09, SEC-05,
+// ADR-0097 §1, §2, ADR-0105): the tunnel is cloudflared pinned by digest,
+// only under profile share, with no port, a read-only root, loopback-only
+// metrics, no remote diagnostics, the token only by name, pointing at
+// Caddy alone, at 172.29.255.11, the one address Caddy believes
+// CF-Connecting-IP from; the stand-in shares that address under profile
+// share-test with a URL under .example; Caddy is at 172.29.255.10, the one
+// address the control plane and Keycloak believe forwarded addresses from;
+// the issuers and Keycloak's hostname default to compose's; the share's
+// third file only mounts the secret files and runs as their owner.
+func TestDemoShare(t *testing.T) {
+	type service struct {
+		Image       string            `yaml:"image"`
+		Profiles    []string          `yaml:"profiles"`
+		Labels      map[string]string `yaml:"labels"`
+		Ports       []string          `yaml:"ports"`
+		ReadOnly    bool              `yaml:"read_only"`
+		User        string            `yaml:"user"`
+		Command     any               `yaml:"command"`
+		Environment any               `yaml:"environment"`
+		Volumes     []string          `yaml:"volumes"`
+		DependsOn   any               `yaml:"depends_on"`
+		Networks    map[string]struct {
+			IPv4 string `yaml:"ipv4_address"`
+		} `yaml:"networks"`
+	}
+	var demo, share struct {
+		Services map[string]service `yaml:"services"`
+	}
+	for name, out := range map[string]any{"deploy/compose/demo.compose.yml": &demo, "deploy/compose/share.compose.yml": &share} {
+		b, err := fs.ReadFile(repo, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := yaml.Unmarshal(b, out); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	env := func(s service) map[string]string {
+		m := map[string]string{}
+		switch e := s.Environment.(type) {
+		case map[string]any:
+			for k, v := range e {
+				m[k], _ = v.(string)
+			}
+		case []any:
+			for _, v := range e {
+				k, val, _ := strings.Cut(v.(string), "=")
+				m[k] = val
+			}
+		}
+		return m
+	}
+	tun, stand, caddy := demo.Services["tunnel"], demo.Services["tunnel-stand-in"], demo.Services["caddy"]
+	if tun.Image != "cloudflare/cloudflared:2026.11.0@sha256:b94b96edf2c9c4360f8879c8580cfaa99077f19c849ec595ca2f711b27d4f344" {
+		t.Errorf("tunnel image %q, want ADR-0097's cloudflared by digest", tun.Image)
+	}
+	cmd, _ := tun.Command.(string)
+	for _, want := range []string{"tunnel --no-autoupdate", "--metrics 127.0.0.1:0", "--management-diagnostics=false", "--url http://caddy:8888}"} {
+		if !strings.Contains(cmd, want) {
+			t.Errorf("tunnel command %q lacks %q", cmd, want)
+		}
+	}
+	if e := env(tun); len(e) != 1 || e["TUNNEL_TOKEN"] != "" {
+		t.Errorf("tunnel environment %v, want only TUNNEL_TOKEN, by name", tun.Environment)
+	}
+	if !slices.Equal(tun.Profiles, []string{"share"}) || len(tun.Ports) != 0 || !tun.ReadOnly || tun.Labels["spillway.demo"] != "true" ||
+		tun.Networks["default"].IPv4 != "172.29.255.11" || tun.DependsOn != nil {
+		t.Errorf("tunnel: profiles %v, ports %v, read-only %v, labels %v, address %q", tun.Profiles, tun.Ports, tun.ReadOnly, tun.Labels, tun.Networks["default"].IPv4)
+	}
+	sc := fmt.Sprint(stand.Command)
+	if !slices.Equal(stand.Profiles, []string{"share-test"}) || len(stand.Ports) != 0 || stand.Networks["default"].IPv4 != "172.29.255.11" ||
+		!strings.Contains(sc, "stand-in-tunnel") || !strings.Contains(sc, ".example") || strings.Contains(stand.Image, "cloudflared") {
+		t.Errorf("tunnel-stand-in: profiles %v, ports %v, address %q, command %v, image %q", stand.Profiles, stand.Ports, stand.Networks["default"].IPv4, sc, stand.Image)
+	}
+	if caddy.Networks["default"].IPv4 != "172.29.255.10" {
+		t.Errorf("caddy's address %q, want 172.29.255.10", caddy.Networks["default"].IPv4)
+	}
+	for svc, want := range map[string]map[string]string{
+		"keycloak":     {"KC_HOSTNAME": "${DEMO_KC_HOSTNAME:-http://localhost:8180/auth}", "KC_PROXY_HEADERS": "xforwarded", "KC_PROXY_TRUSTED_ADDRESSES": "172.29.255.10/32"},
+		"controlplane": {"SPILLWAY_CP_OIDC_ISSUER": "${DEMO_ISSUER:-http://localhost:8180/auth/realms/spillway}", "SPILLWAY_CP_TRUSTED_PROXIES": "172.29.255.10/32"},
+		"gateway-1":    {"SPILLWAY_GATEWAY_JWT_ISSUER": "${DEMO_ISSUER:-http://localhost:8180/auth/realms/spillway}"},
+		"gateway-3":    {"SPILLWAY_GATEWAY_JWT_ISSUER": "${DEMO_ISSUER:-http://localhost:8180/auth/realms/spillway}"},
+	} {
+		e := env(demo.Services[svc])
+		for k, v := range want {
+			if e[k] != v {
+				t.Errorf("%s: %s=%q, want %q", svc, k, e[k], v)
+			}
+		}
+		if demo.Services[svc].Labels["spillway.demo"] != "true" {
+			t.Errorf("%s has no spillway.demo label", svc)
+		}
+	}
+	b, err := fs.ReadFile(repo, "deploy/demo/Caddyfile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "trusted_proxies static 172.29.255.11/32") || !strings.Contains(string(b), "client_ip_headers CF-Connecting-IP") {
+		t.Error("the Caddyfile must believe CF-Connecting-IP from the tunnel's address only")
+	}
+	if len(share.Services) != 2 {
+		t.Errorf("share.compose.yml overrides %d services, want demo-seed and demo-traffic only", len(share.Services))
+	}
+	for name, mount := range map[string]string{"demo-seed": "./deploy/demo/run:/run/demo", "demo-traffic": "./deploy/demo/run:/run/demo:ro"} {
+		s := share.Services[name]
+		e := env(s)
+		if !slices.Equal(s.Volumes, []string{mount}) || !strings.HasPrefix(s.User, "${DEMO_SHARE_UID:?") ||
+			e["SPILLWAY_DEMO_CLIENT_SECRET"] != "" || e["SPILLWAY_DEMO_CLIENT_SECRET_FILE"] != "/run/demo/spillway-ci-secret" || s.Image != "" || len(s.Ports) != 0 {
+			t.Errorf("share.compose.yml %s: volumes %v, user %q, environment %v", name, s.Volumes, s.User, s.Environment)
+		}
 	}
 }

@@ -1,9 +1,11 @@
 # The demo stack (SC-01, ADR-0094 §2): everything demo-only, used only by
 # the demo targets as a second file after compose.yaml, with --profile
-# replicas --profile demo (deploy/demo/demo.sh). compose.yaml does not
-# change. Every container this file creates or overrides carries the label
-# spillway.demo=true, and make dev removes such containers before it starts
-# the dev stack, so no dev, verify or bench run meets a demo container.
+# replicas --profile demo (deploy/demo/demo.sh); make demo-share adds the
+# profiles share or share-test and deploy/compose/share.compose.yml
+# (deploy/demo/share.sh). compose.yaml does not change. Every container
+# this file creates or overrides carries the label spillway.demo=true, and
+# make dev removes such containers before it starts the dev stack, so no
+# dev, verify or bench run meets a demo container.
 #
 # The demo runs on its own database, spillway_demo, in compose's Postgres
 # (ADR-0094 §1); gateway-1 … gateway-3 run in managed mode and reach Redis
@@ -31,6 +33,9 @@ x-demo-gateway: &demo-gateway
     SPILLWAY_GATEWAY_IDENTITY: ""
     SPILLWAY_GATEWAY_CONTROL_PLANE: controlplane:9090
     SPILLWAY_REDIS_ADDR_MAP: redis-0:6379=toxiproxy:26380,redis-1:6379=toxiproxy:26381,redis-2:6379=toxiproxy:26382,redis-3:6379=toxiproxy:26383,redis-4:6379=toxiproxy:26384,redis-5:6379=toxiproxy:26385
+    # The expected issuer: the public URL's while make demo-share runs
+    # (SC-09, ADR-0097 §1), compose's otherwise.
+    SPILLWAY_GATEWAY_JWT_ISSUER: ${DEMO_ISSUER:-http://localhost:8180/auth/realms/spillway}
   depends_on:
     demo-init: { condition: service_completed_successfully }
     demo-seed: { condition: service_completed_successfully }
@@ -109,9 +114,16 @@ services:
   # fault switches (SC-03, ADR-0095 §5) speak only HTTP to toxiproxy's API;
   # the Playground (UI-07, ADR-0096 §3) sends its runs round robin to the
   # three demo gateways inside the network.
+  #
+  # The expected issuer, and so the UI's OIDC authority, is the public
+  # URL's while make demo-share runs (SC-09, ADR-0097 §1), compose's
+  # otherwise. CF-Connecting-IP names the client only on requests from the
+  # demo proxy's fixed address (SEC-05, ADR-0097 §2).
   controlplane:
     labels: { spillway.demo: "true" }
     environment:
+      SPILLWAY_CP_OIDC_ISSUER: ${DEMO_ISSUER:-http://localhost:8180/auth/realms/spillway}
+      SPILLWAY_CP_TRUSTED_PROXIES: 172.29.255.10/32
       SPILLWAY_CP_DATABASE_URL: postgres://spillway_app@postgres:5432/spillway_demo?sslmode=disable
       SPILLWAY_CP_REDIS_ADDRS: ""
       SPILLWAY_CP_DEMO_MODE: ${DEMO_MODE:-false}
@@ -228,6 +240,50 @@ services:
       controlplane: { condition: service_healthy }
       keycloak: { condition: service_healthy }
       grafana-demo: { condition: service_healthy }
+
+  # Keycloak behind the demo proxy (SC-09, ADR-0097 §1): X-Forwarded-*
+  # believed only from Caddy's fixed address; the hostname, and so every
+  # token's issuer, is the public URL's /auth while make demo-share runs,
+  # compose's otherwise. Recreating it re-imports the dev realm.
+  keycloak:
+    labels: { spillway.demo: "true" }
+    environment:
+      KC_HOSTNAME: ${DEMO_KC_HOSTNAME:-http://localhost:8180/auth}
+      KC_PROXY_HEADERS: xforwarded
+      KC_PROXY_TRUSTED_ADDRESSES: 172.29.255.10/32
+
+  # The tunnel (SC-09, ADR-0097 §1), only from make demo-share after the
+  # user typed "share": outbound only, no port, pointing at Caddy alone.
+  # Quick tunnel by default; TUNNEL=named runs the named tunnel with
+  # TUNNEL_TOKEN, which share.sh passes by name from CLOUDFLARE_TUNNEL_TOKEN
+  # (never on a command line, never printed). Metrics on the container's
+  # loopback only, no remote diagnostics. Fixed address 172.29.255.11, the
+  # only one Caddy believes CF-Connecting-IP from.
+  tunnel:
+    image: cloudflare/cloudflared:2026.11.0@sha256:b94b96edf2c9c4360f8879c8580cfaa99077f19c849ec595ca2f711b27d4f344
+    profiles: [share]
+    labels: { spillway.demo: "true" }
+    read_only: true
+    command: ${DEMO_TUNNEL_COMMAND:-tunnel --no-autoupdate --metrics 127.0.0.1:0 --management-diagnostics=false --url http://caddy:8888}
+    environment:
+      TUNNEL_TOKEN: # no value: only from share.sh's environment, for TUNNEL=named
+    networks:
+      default:
+        ipv4_address: 172.29.255.11
+
+  # make demo-share-test's stand-in for the tunnel (ADR-0097 §4): the
+  # demo-traffic image printing a quick tunnel's lines for a URL under
+  # .example (RFC 2606, resolves nowhere); it opens no connection. Same
+  # address as the tunnel, never beside it, so share-check's s9b runs
+  # inside it as a tunnel's request would arrive.
+  tunnel-stand-in:
+    <<: *demo-traffic
+    profiles: [share-test]
+    labels: { spillway.demo: "true" }
+    command: ["stand-in-tunnel", "--url", "https://stand-in.spillway.example"]
+    networks:
+      default:
+        ipv4_address: 172.29.255.11
 
   # The demo gateways: always these three (ADR-0094 §4); gateway-4 and
   # gateway-5 stay down.

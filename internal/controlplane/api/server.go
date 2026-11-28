@@ -30,6 +30,7 @@ import (
 	"github.com/ankitbisht23/spillway/internal/controlplane/live"
 	"github.com/ankitbisht23/spillway/internal/controlplane/store"
 	"github.com/ankitbisht23/spillway/internal/gen/apiv1"
+	"github.com/ankitbisht23/spillway/internal/proxy"
 	"github.com/ankitbisht23/spillway/internal/secret"
 	"github.com/ankitbisht23/spillway/internal/telemetry"
 )
@@ -71,7 +72,10 @@ type Server struct {
 	// playground runs the Playground's runs (UI-07, ADR-0096 §3); nil
 	// without demo gateways, which starts answer 503.
 	playground *demo.Playground
-	log        *slog.Logger
+	// trustedProxies are the proxies whose CF-Connecting-IP names the
+	// client (SEC-05, ADR-0097 §2); none by default.
+	trustedProxies proxy.TrustedProxies
+	log            *slog.Logger
 }
 
 // Allowlist is the upstream allow-list of SEC-06, the same networks as the
@@ -122,7 +126,7 @@ func (s *Server) Handler() http.Handler {
 		}
 		guarded.Handle(pattern, s.guard(op, next))
 	}
-	return requestID(withClientIP(s.demoGuard(guarded, notFound)))
+	return requestID(s.withClientIP(s.demoGuard(guarded, notFound)))
 }
 
 type requestIDKey struct{}

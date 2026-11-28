@@ -31,6 +31,7 @@ describe("the Playground's RateLimit reading (ADR-0018)", () => {
         { name: "catalog", policy: "catalog-limit", limit: { rate: 200, burst: 200, period: "1s" } },
       ],
       scenarios: [], faults: [], playground: { max_rate: 200, max_duration_s: 60, active_runs: 0, runs_left_this_hour: 30 },
+      client_ip: "198.51.100.23",
     };
     expect(limitOf(demo, "free-co", "orders")).toEqual({ policy: "consumer-plan", limit: { rate: 10, burst: 20, period: "1s" } });
     expect(limitOf(demo, "free-co", "catalog")).toEqual({ policy: "catalog-limit", limit: { rate: 200, burst: 200, period: "1s" } });

@@ -11,7 +11,7 @@ FUZZTIME ?= 5s
 # Committed dev defaults first, then local overrides if present (ADR-0004).
 COMPOSE := docker compose --env-file .env.example $(if $(wildcard .env.local),--env-file .env.local)
 
-.PHONY: tools hooks certs dev demo demo-reset demo-down demo-fault-redis demo-fault-upstream demo-fault-clear demo-d1 demo-d2 demo-d3 demo-d4 demo-d5 demo-d6 demo-d7 test-demo kind-up kind-down kind-smoke kind-rollout kind-images kind-grafana kind-prometheus test test-go test-web test-e2e test-e2e-demo fuzz test-integration proto api sqlc web-gen web-build lint lint-go lint-web lint-proto lint-api lint-sql lint-helm lint-obs lint-actions release-build release-publish bench bench-gate verify-m0 verify-m0-stack verify-m1 verify-m1-reload verify-m2 verify-m2-shadow verify-m3 verify-m4 verify-m5 verify-m6 verify-m7 accuracy chaos-redis-outage chaos-redis-primary chaos-cp-outage nfr-keys nfr-soak nfr-noisy chaos-redis-latency chaos-gateway-kill chaos
+.PHONY: tools hooks certs dev demo demo-reset demo-down demo-share demo-share-stop demo-share-test demo-fault-redis demo-fault-upstream demo-fault-clear demo-d1 demo-d2 demo-d3 demo-d4 demo-d5 demo-d6 demo-d7 test-demo kind-up kind-down kind-smoke kind-rollout kind-images kind-grafana kind-prometheus test test-go test-web test-e2e test-e2e-demo fuzz test-integration proto api sqlc web-gen web-build lint lint-go lint-web lint-proto lint-api lint-sql lint-helm lint-obs lint-actions release-build release-publish bench bench-gate verify-m0 verify-m0-stack verify-m1 verify-m1-reload verify-m2 verify-m2-shadow verify-m3 verify-m4 verify-m5 verify-m6 verify-m7 accuracy chaos-redis-outage chaos-redis-primary chaos-cp-outage nfr-keys nfr-soak nfr-noisy chaos-redis-latency chaos-gateway-kill chaos
 
 # Host-run processes and tests reach Redis Cluster nodes through this map
 # (ADR-0004). Set only here, never in compose or .env files.
@@ -202,8 +202,8 @@ dev: certs
 # mode through toxiproxy's demo proxies, and DEMO_MODE=true. Running it
 # again recreates only what changed. make demo-reset drops and re-seeds
 # spillway_demo and restarts the demo gateways, without touching the dev
-# database or Redis; make demo-down deletes the demo proxies, removes every
-# demo container and runs make dev (deploy/demo/demo.sh).
+# database or Redis; make demo-down stops a running share, deletes the demo
+# proxies, removes every demo container and runs make dev (deploy/demo/demo.sh).
 demo: certs
 	@deploy/demo/demo.sh up
 
@@ -240,6 +240,29 @@ demo-fault-clear:
 # replica. Keys are named by ID, never printed.
 demo-d1 demo-d2 demo-d3 demo-d4 demo-d5 demo-d6 demo-d7:
 	@BLOCK="$(BLOCK)" deploy/demo/scenario.sh $(@:demo-%=%)
+
+# The public demo (SC-09, ADR-0097 §3, ADR-0105) on the running demo:
+# make demo-share starts a Cloudflare quick tunnel to the demo proxy on
+# 8888 (TUNNEL=named: the named tunnel of CLOUDFLARE_TUNNEL_TOKEN and
+# DEMO_PUBLIC_URL) and, from its URL, sets Keycloak's KC_HOSTNAME, the
+# control plane's and gateways' issuer, the UI's OIDC authority and the
+# demo Grafana's root URL, adds the URL to the admin-ui client and hardens
+# the realm (docs/setup.md Step 6). It needs .env.demo (Step 8) and asks
+# you to type "share" in a terminal; nothing else opens a tunnel. make
+# demo-share-stop removes the tunnel and restores the localhost settings
+# and the dev realm (make demo-down does it first too). make
+# demo-share-test runs the whole share path against a stand-in tunnel
+# (https://stand-in.spillway.example, resolves nowhere) with throwaway
+# passwords, checks every setting (s1-s13), then stops it: no tunnel, no
+# Cloudflare, no .env.demo. About 2 minutes (deploy/demo/share.sh).
+demo-share:
+	@deploy/demo/share.sh start
+
+demo-share-stop:
+	@deploy/demo/share.sh stop
+
+demo-share-test:
+	@deploy/demo/share.sh test
 
 # The demo's tests (SC-01, SC-08, ADR-0094, ADR-0095, test/demo, build tag
 # demo): make demo prints no secret, token or key and runs in demo mode

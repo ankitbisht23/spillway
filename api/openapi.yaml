@@ -2867,7 +2867,7 @@ components:
     Demo:
       type: object
       additionalProperties: false
-      required: [tenants, routes, scenarios, faults, playground]
+      required: [tenants, routes, scenarios, faults, playground, client_ip]
       properties:
         tenants:
           type: array
@@ -2886,6 +2886,14 @@ components:
           description: The two fault switches (SC-03), redis-cut then upstream-slow, with their states read from toxiproxy (at most 1 s old).
           items: { $ref: '#/components/schemas/DemoFault' }
         playground: { $ref: '#/components/schemas/DemoPlayground' }
+        client_ip:
+          type: string
+          description: >-
+            The address the Playground's per-IP caps count the caller under,
+            an IPv6 address as its /64: CF-Connecting-IP when the request
+            comes from a trusted proxy (the demo proxy), otherwise the TCP
+            peer's (SEC-05, ADR-0097 §2). Shown to the caller only; never
+            logged, stored or audited.
     DemoPlayground:
       type: object
       additionalProperties: false

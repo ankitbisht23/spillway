@@ -35,3 +35,6 @@ test-results/
 
 # verify-m7 results and logs (ADR-0074)
 test/verify/out/
+
+# make demo-share's URL settings and rotated client secrets (ADR-0097 §3)
+deploy/demo/run/

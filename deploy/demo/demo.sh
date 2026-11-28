@@ -3,7 +3,8 @@
 #
 #   demo.sh up          make demo: boot the stack with the demo override and the seed
 #   demo.sh reset       make demo-reset: drop and re-seed spillway_demo, restart the demo gateways
-#   demo.sh down        make demo-down, before make dev: delete the demo proxies, remove the demo containers
+#   demo.sh down        make demo-down, before make dev: stop a running share (make
+#                       demo-share-stop), delete the demo proxies, remove the demo containers
 #   demo.sh down-check  make demo-down, after make dev: no demo container, no demo proxy
 #   demo.sh clean       make dev, before up: remove every demo container
 #   demo.sh fault <redis-cut|upstream-slow> <1|0>, demo.sh fault clear
@@ -18,6 +19,13 @@ cd "$(dirname "$0")/../.."
 compose=(docker compose --env-file .env.example)
 if [ -f .env.local ]; then compose+=(--env-file .env.local); fi
 demo=("${compose[@]}" -f compose.yaml -f deploy/compose/demo.compose.yml --profile replicas --profile demo)
+# While make demo-share runs, the share's settings and its secret files
+# apply here too (ADR-0105), so a fault switch or a one-shot keeps the
+# public URL's issuer and the rotated secrets; make demo and make
+# demo-reset refuse to run during a share.
+if [ -f deploy/demo/run/share.env ]; then
+	demo+=(--env-file deploy/demo/run/share.env -f deploy/compose/share.compose.yml)
+fi
 
 # Every long-running service of the demo. Naming them keeps gateway-4 and
 # gateway-5 down although the replicas profile is on; the one-shots start
@@ -59,6 +67,10 @@ realm_fresh() {
 
 up() {
 	local start=$SECONDS
+	if deploy/demo/share.sh active; then
+		echo "demo: a share is running; make demo-share-stop ends it before make demo" >&2
+		exit 1
+	fi
 	realm_fresh
 	DEMO_MODE=true "${demo[@]}" up -d --build --wait --wait-timeout 300 "${services[@]}"
 	"${demo[@]}" logs --no-log-prefix demo-seed | tail -n 1
@@ -66,7 +78,7 @@ up() {
 		demo: up in $((SECONDS - start)) s
 		  admin UI       http://localhost:8080 (the realm's test users, docs/setup.md Step 4)
 		  gateway-1      http://localhost:8000 (gateway-2 and gateway-3 inside the network)
-		  demo proxy     http://localhost:8888 (the UI; Keycloak at /auth)
+		  demo proxy     http://localhost:8888 (the UI; Keycloak at /auth); make demo-share publishes it
 		  demo Grafana   http://localhost:8888/grafana (anonymous, the Demo dashboard)
 		  dev Grafana    http://localhost:3000
 		  base load      258 rps per the demo-traffic service; make demo-d1 … make demo-d7 run a scenario
@@ -96,6 +108,12 @@ fault() {
 
 reset() {
 	local start=$SECONDS id
+	# The reset starts the control plane with its dependencies, which would
+	# recreate a shared Keycloak without the share's admin password.
+	if deploy/demo/share.sh active; then
+		echo "demo-reset: a share is running; make demo-share-stop ends it before make demo-reset" >&2
+		exit 1
+	fi
 	id=$("${compose[@]}" ps -q controlplane)
 	if [ -z "$id" ] || [ "$(docker inspect -f '{{index .Config.Labels "spillway.demo"}}' "$id")" != "true" ]; then
 		echo "demo-reset: the demo is not running; start it with make demo" >&2
@@ -126,6 +144,13 @@ reset() {
 
 down() {
 	local id
+	# A running share is stopped first (ADR-0097 §3): the tunnel goes and
+	# the dev realm and localhost settings come back.
+	# Then this script runs again, without the share's compose settings.
+	if deploy/demo/share.sh active; then
+		deploy/demo/share.sh stop
+		exec deploy/demo/demo.sh down
+	fi
 	# Both faults off through the API while the demo control plane runs
 	# (ADR-0094 §2), so the switch is audited; deleting the proxies below
 	# removes any toxic left either way.
