@@ -61,7 +61,7 @@ Each run: 73 of 73 checks PASS, on the laptop (Apple M4 Pro, Docker Desktop 14 C
 
 ### Known limit: TestGatewayPerIPCap and Docker Desktop's port forwarder
 
-`make test-integration`'s TestGatewayPerIPCap can fail on the laptop with connection resets. Diagnosis: Docker Desktop's host port forwarder (`com.docker.backend`) resets unpaced bursts of host dials. 1,100 sequential host dials (about 8,000/s) were reset in 4 of 12 bursts, at dials 542–989. With 1 ms between dials 5 of 5 bursts were fine, and from inside the compose network 3 of 3. The host's listen-queue overflow counter stayed 0. The gateway's per-IP counters moved +76 closed and 0 shed on good bursts and did not move on reset bursts, so the resets never reached the gateway. Not a gateway defect; the test is unchanged.
+`make test-integration`'s TestGatewayPerIPCap can fail on the laptop with connection resets. Diagnosis: Docker Desktop's host port forwarder (`com.docker.backend`) resets unpaced bursts of host dials. 1,100 sequential host dials (about 8,000/s) were reset in 4 of 12 bursts, at dials 542–989. With 1 ms between dials 5 of 5 bursts were fine, and from inside the compose network 3 of 3. The host's listen-queue overflow counter stayed 0. The gateway's per-IP counters moved +76 closed and 0 shed on good bursts and did not move on reset bursts, so the resets never reached the gateway. Not a gateway defect; the test is unchanged. On this branch (2a6c553 plus this ADR), `make test-integration` failed only this test, at dial 1,086 of 1,100 ("connection reset by peer"); run alone afterwards for information, it failed 1 of 3 times (dial 742) and passed 2 of 3.
 
 ## Consequences
 
