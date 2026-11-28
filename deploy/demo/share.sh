@@ -53,12 +53,19 @@ die() {
 # demo_running: the demo's control plane runs, in demo mode (getDemo needs
 # a token, so 401 rather than demo mode off's 404), behind the proxy.
 demo_running() {
-	local id code
-	id=$("${compose[@]}" ps -q --status running controlplane)
-	[ -n "$id" ] && [ "$(docker inspect -f '{{index .Config.Labels "spillway.demo"}}' "$id")" = "true" ] || return 1
+	local code
+	demo_cp_running || return 1
 	[ -n "$("${demo[@]}" ps -q --status running caddy)" ] || return 1
 	code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 http://127.0.0.1:8080/api/v1/demo || true)
 	[ "$code" = 401 ]
+}
+
+# demo_cp_running: a control plane runs and it is the demo's (label
+# spillway.demo), not the dev stack's.
+demo_cp_running() {
+	local id
+	id=$("${compose[@]}" ps -q --status running controlplane)
+	[ -n "$id" ] && [ "$(docker inspect -f '{{index .Config.Labels "spillway.demo"}}' "$id")" = "true" ]
 }
 
 # tunnel_containers lists the IDs of the tunnel and stand-in containers.
@@ -246,7 +253,10 @@ stop() {
 		find "$run_dir" -mindepth 1 -delete
 	fi
 	unset KEYCLOAK_ADMIN_PASSWORD DEMO_ADMIN_PASSWORD GITHUB_OAUTH_CLIENT_ID GITHUB_OAUTH_CLIENT_SECRET
-	if [ -z "$("${compose[@]}" ps -q --status running controlplane)" ]; then
+	# Only the demo's services are restored: after make dev (which removes
+	# every demo container, the tunnel included) the dev stack runs and is
+	# left alone.
+	if ! demo_cp_running; then
 		say "the tunnel is gone and deploy/demo/run/ is empty; the demo is not running, so there is nothing else to restore"
 		return 0
 	fi
@@ -334,7 +344,6 @@ test_share() {
 		echo "share-check: s13 PASS: no password, rotated secret or token in the test's output"
 	else
 		echo "share-check: s13 FAIL: a password, secret or token reached the output (or no rotated secret was seen)"
-		rc=1
 	fi | tee -a "$tmp/out.log"
 	fails=$(grep -c '^share-check: .*FAIL' "$tmp/out.log" || true)
 	if [ "$rc" = 0 ] && [ "$fails" = 0 ]; then
