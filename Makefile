@@ -248,8 +248,11 @@ demo-d1 demo-d2 demo-d3 demo-d4 demo-d5 demo-d6 demo-d7:
 # database as it was; the fault switches show D5's failure modes and D6's
 # breaker and retry budget on gateway-1 (SC-03, ADR-0101); make demo-d1
 # runs its scenario with the base load and starts the base load again
-# (SC-02). Then make demo-down, whatever the result. About 8 minutes on a
-# built stack.
+# (SC-02); through the demo proxy on 8888 an anonymous visitor gets the UI,
+# Keycloak's public endpoints and the demo Grafana as a Viewer, never
+# Keycloak's admin API, and every Demo dashboard query returns data over the
+# base load, make demo-d5 and make demo-d6 (SC-05, ADR-0104). Then make
+# demo-down, whatever the result. About 11 minutes on a built stack.
 test-demo:
 	@go test -tags demo -count=1 -timeout 30m -v ./test/demo/; rc=$$?; \
 		$(MAKE) --no-print-directory demo-down; exit $$rc
