@@ -1,0 +1,263 @@
+{
+  "achieved_rps": {
+    "median": 4600,
+    "min": 4599.9944444444445,
+    "max": 4600,
+    "spread": 1.207729468581459e-06
+  },
+  "arch": "x64",
+  "commit": "2a6c553e51b900cdf0a2333dd70aca387ab80b15",
+  "gate": {
+    "verdict": "pass",
+    "baseline": "results/x64/20261128T090257Z.json",
+    "release_baseline": null,
+    "release_tag": "v1.0.0",
+    "comparisons": [
+      {
+        "against": "nightly",
+        "metric": "achieved_rps_median",
+        "base": 4600,
+        "value": 4600,
+        "change": 0,
+        "spread": 0,
+        "flagged": false
+      },
+      {
+        "against": "nightly",
+        "metric": "p99_us_median",
+        "base": 1619,
+        "value": 1398,
+        "change": -0.1365040148239654,
+        "spread": 0.5305744286596664,
+        "flagged": false
+      }
+    ],
+    "rerun_of": null
+  },
+  "hardware": {
+    "cpu_model": "AMD EPYC 9V74 80-Core Processor",
+    "cpus": 4,
+    "memory_bytes": 16759431168,
+    "os": "Ubuntu 26.04.1 LTS",
+    "kernel": "7.0.0-1020-azure",
+    "topology": [
+      {
+        "cpu": 0,
+        "core": 0,
+        "socket": 0,
+        "thread_siblings": "0-1"
+      },
+      {
+        "cpu": 1,
+        "core": 0,
+        "socket": 0,
+        "thread_siblings": "0-1"
+      },
+      {
+        "cpu": 2,
+        "core": 1,
+        "socket": 0,
+        "thread_siblings": "2-3"
+      },
+      {
+        "cpu": 3,
+        "core": 1,
+        "socket": 0,
+        "thread_siblings": "2-3"
+      }
+    ]
+  },
+  "invalid_reasons": [],
+  "latency_us": {
+    "p50": {
+      "median": 359,
+      "min": 354,
+      "max": 361,
+      "spread": 0.019498607242339833
+    },
+    "p99": {
+      "median": 1398,
+      "min": 1245,
+      "max": 1579,
+      "spread": 0.23891273247496422
+    },
+    "p99_9": {
+      "median": 3807,
+      "min": 3663,
+      "max": 5059,
+      "spread": 0.3666929340688206
+    }
+  },
+  "ref": "refs/heads/m8-verify",
+  "rps_per_vcpu": 4600,
+  "run_url": "https://github.com/ankitbisht23/spillway/actions/runs/46130134450",
+  "runs": [
+    {
+      "url": "http://gateway:8000/bytes/1024",
+      "protocol": "HTTP/1.1",
+      "target_rps": 4600,
+      "achieved_rps": 4600,
+      "valid": true,
+      "warmup_s": 30,
+      "duration_s": 180,
+      "requests": {
+        "scheduled": 828000,
+        "sent": 828000,
+        "dropped": 0
+      },
+      "status": {
+        "2xx": 828000
+      },
+      "errors": {},
+      "latency_us": {
+        "p50": 361,
+        "p99": 1579,
+        "p99_9": 5059,
+        "max": 51167
+      },
+      "hardware": {
+        "cpu_model": "AMD EPYC 9V74 80-Core Processor",
+        "goarch": "amd64",
+        "num_cpu": 2,
+        "gomaxprocs": 2
+      }
+    },
+    {
+      "url": "http://gateway:8000/bytes/1024",
+      "protocol": "HTTP/1.1",
+      "target_rps": 4600,
+      "achieved_rps": 4599.9944444444445,
+      "valid": true,
+      "warmup_s": 30,
+      "duration_s": 180,
+      "requests": {
+        "scheduled": 828000,
+        "sent": 827999,
+        "dropped": 1
+      },
+      "status": {
+        "2xx": 827999
+      },
+      "errors": {},
+      "latency_us": {
+        "p50": 360,
+        "p99": 1445,
+        "p99_9": 3953,
+        "max": 12295
+      },
+      "hardware": {
+        "cpu_model": "AMD EPYC 9V74 80-Core Processor",
+        "goarch": "amd64",
+        "num_cpu": 2,
+        "gomaxprocs": 2
+      }
+    },
+    {
+      "url": "http://gateway:8000/bytes/1024",
+      "protocol": "HTTP/1.1",
+      "target_rps": 4600,
+      "achieved_rps": 4600,
+      "valid": true,
+      "warmup_s": 30,
+      "duration_s": 180,
+      "requests": {
+        "scheduled": 828000,
+        "sent": 828000,
+        "dropped": 0
+      },
+      "status": {
+        "2xx": 828000
+      },
+      "errors": {},
+      "latency_us": {
+        "p50": 354,
+        "p99": 1245,
+        "p99_9": 3663,
+        "max": 9303
+      },
+      "hardware": {
+        "cpu_model": "AMD EPYC 9V74 80-Core Processor",
+        "goarch": "amd64",
+        "num_cpu": 2,
+        "gomaxprocs": 2
+      }
+    },
+    {
+      "url": "http://gateway:8000/bytes/1024",
+      "protocol": "HTTP/1.1",
+      "target_rps": 4600,
+      "achieved_rps": 4600,
+      "valid": true,
+      "warmup_s": 30,
+      "duration_s": 180,
+      "requests": {
+        "scheduled": 828000,
+        "sent": 828000,
+        "dropped": 0
+      },
+      "status": {
+        "2xx": 828000
+      },
+      "errors": {},
+      "latency_us": {
+        "p50": 358,
+        "p99": 1315,
+        "p99_9": 3721,
+        "max": 10975
+      },
+      "hardware": {
+        "cpu_model": "AMD EPYC 9V74 80-Core Processor",
+        "goarch": "amd64",
+        "num_cpu": 2,
+        "gomaxprocs": 2
+      }
+    },
+    {
+      "url": "http://gateway:8000/bytes/1024",
+      "protocol": "HTTP/1.1",
+      "target_rps": 4600,
+      "achieved_rps": 4600,
+      "valid": true,
+      "warmup_s": 30,
+      "duration_s": 180,
+      "requests": {
+        "scheduled": 828000,
+        "sent": 828000,
+        "dropped": 0
+      },
+      "status": {
+        "2xx": 828000
+      },
+      "errors": {},
+      "latency_us": {
+        "p50": 359,
+        "p99": 1398,
+        "p99_9": 3807,
+        "max": 9367
+      },
+      "hardware": {
+        "cpu_model": "AMD EPYC 9V74 80-Core Processor",
+        "goarch": "amd64",
+        "num_cpu": 2,
+        "gomaxprocs": 2
+      }
+    }
+  ],
+  "setup": {
+    "gateway_vcpus": 1,
+    "cpus": {
+      "gateway": "0",
+      "loadgen": "1-2",
+      "upstream": "3"
+    },
+    "url": "http://gateway:8000/bytes/1024",
+    "protocol": "HTTP/1.1",
+    "warmup": "30s",
+    "duration": "3m",
+    "access_log_sample_rate": 0.01,
+    "trace_sample_ratio": 0.01
+  },
+  "target_rps": 4600,
+  "timestamp": "2026-11-28T09:22:17Z",
+  "valid": true
+}
