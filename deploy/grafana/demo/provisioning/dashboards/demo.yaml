@@ -1,0 +1,11 @@
+# The Demo dashboard (SC-05, ADR-0096 §4), deploy/grafana/demo/demo.json,
+# which the demo override mounts alone at /var/lib/grafana-demo/demo.json;
+# it is also the home dashboard.
+apiVersion: 1
+providers:
+  - name: spillway-demo
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana-demo

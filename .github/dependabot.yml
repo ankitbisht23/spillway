@@ -20,6 +20,6 @@ updates:
     schedule: { interval: weekly }
     groups: { docker: { patterns: ["*"] } }
   - package-ecosystem: docker-compose
-    directory: /
+    directories: ["/", "/deploy/compose"]
     schedule: { interval: weekly }
     groups: { docker-compose: { patterns: ["*"] } }

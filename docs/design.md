@@ -583,7 +583,7 @@ A reviewer should see the limiter earn its keep in under five minutes: `make dem
 - **SC-02** (M8) Traffic simulator `cmd/demo-traffic --scenario=base|d1…d7` drives each tenant's base load (`base`, running while the demo runs) and, for one minute per scenario, base load plus that scenario's bursts, faults or actions (`make demo-d1` … `make demo-d7`).
 - **SC-03** (M8) Fault switches for D5 and D6 as `make` targets and Playground buttons, both through one audited control-plane endpoint, toxiproxy only: the demo gateways' Redis traffic runs through per-node toxiproxy proxies via the ADR-0004 address map, which D5 cuts, and D6's upstream latency is added in toxiproxy. Admin role only, `DEMO_MODE=true` only; no container gets the Docker socket.
 - **SC-04** (M8) Playground screen in the admin UI (UI-07).
-- **SC-05** (M8) Grafana Demo dashboard: allowed vs denied and p99 per tenant, limiter mode, replica count.
+- **SC-05** (M8) Grafana Demo dashboard: allowed vs denied and p99 per tenant, limiter mode, replica count, in a demo Grafana (`grafana-demo`: anonymous viewers, Prometheus only, no login) that the demo proxy serves at `/grafana`.
 - **SC-06** (M8) README: architecture diagram, one GIF per scenario, benchmark, accuracy and chaos tables, a quick start of three commands or fewer.
 - **SC-07** (M8) A 3–4 minute walkthrough video (D1, D2, D4, D5) and a live-demo script in `docs/demo.md`.
 - **SC-08** (M8) Demo mode is off by default: the Playground, demo endpoints and fault switches (everything under `/api/v1/demo/`) return 404 unless the control plane runs with `DEMO_MODE=true`, and the UI then hides the Playground. In demo mode every API key the control plane issues or rotates expires within 30 minutes; Playground keys never leave the control plane, belong to per-tenant playground consumers with their own counters, and Playground runs are capped per run, per caller, per client IP and in total.
@@ -729,7 +729,7 @@ Exit (`make verify-m7`): every NFR row (NFR-01 – NFR-15) meets its target, wit
 
 - [x] Demo seed data, `make demo` and `make demo-reset` (SC-01)
 - [x] Traffic simulator and toxiproxy-only fault switches for D1–D7 (SC-02, SC-03)
-- [ ] Playground screen with server-side traffic, and Grafana Demo dashboard (SC-04, SC-05, UI-07)
+- [x] Playground screen with server-side traffic, and Grafana Demo dashboard (SC-04, SC-05, UI-07)
 - [x] Demo-mode guards and expiring demo keys (SC-08)
 - [ ] Public demo: Caddy on 8888 behind one tunnel, `make demo-share` (SC-09)
 - [ ] README GIFs (vhs for terminal scenes, a screen recorder for the UI), tables and quick start (SC-06)

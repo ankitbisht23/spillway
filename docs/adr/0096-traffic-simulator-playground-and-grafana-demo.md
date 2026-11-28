@@ -1,6 +1,6 @@
 # 0096. Traffic simulator, Playground and the Grafana Demo dashboard
 
-- **Status:** Accepted; D4's policy level amended by 0102
+- **Status:** Accepted; D4's policy level amended by 0102; §4's demo Grafana settings extended by 0104
 - **Date:** 2026-11-27
 - **Requirement IDs:** SC-02, SC-04, SC-05, SC-08, UI-03, UI-04, UI-06, UI-07, CP-12, RL-03, RL-05, RL-08, RL-09, RL-11 – RL-14, RL-21 – RL-26, GW-13, GW-14, UI-01, CP-04, CP-20, NFR-15, OB-01
 

@@ -1,0 +1,15 @@
+apiVersion: 1
+
+# The demo Grafana's only datasource (SC-05, ADR-0096 §4): compose's
+# Prometheus, under the uid the dashboards use. No Loki and no Tempo: logs
+# and traces carry key-hash prefixes and request details an anonymous
+# visitor must not query; Prometheus holds no key, consumer or client
+# address (OB-01).
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
