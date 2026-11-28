@@ -114,3 +114,4 @@ Decisions that shape Spillway and are not obvious from the code or from docs/des
 | [0103](0103-playground-implementation-details.md) | Playground: implementation details | Accepted | 2026-11-28 |
 | [0104](0104-grafana-demo-implementation-details.md) | Demo Grafana and the demo proxy: implementation details | Accepted | 2026-11-28 |
 | [0105](0105-demo-share-implementation-details.md) | Public demo share: implementation details | Accepted | 2026-11-28 |
+| [0106](0106-verify-m8-implementation-details.md) | make verify-m8: implementation details | Accepted | 2026-11-28 |

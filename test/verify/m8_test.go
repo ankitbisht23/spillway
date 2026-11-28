@@ -37,8 +37,8 @@ var m8Steps = []struct {
 }
 
 // m8Total is the number of check lines of a passing run: every check
-// once, and s10 twice.
-const m8Total = 5 + 1 + 4 + 4 + 4 + 4 + 6 + 9 + 4 + 4 + 15 + 1 + 5 + 1 + 1
+// once, s10 six times and s11 twice, as make demo-share-test prints them.
+const m8Total = 5 + 1 + 4 + 4 + 4 + 4 + 6 + 9 + 4 + 4 + 15 + 5 + 1 + 5 + 1 + 1
 
 // m8Run is a fixture of one verify-m8 run's directory.
 type m8Run struct {
@@ -62,7 +62,10 @@ func m8Passing() *m8Run {
 			for _, id := range s.ids {
 				fmt.Fprintf(&b, "share-check: %s PASS: what %s saw\n", id, id)
 			}
-			b.WriteString("share-check: s10 PASS: no tunnel container left, deploy/demo/run/ empty\ndemo-share-test: PASS (16 PASS lines) in 140 s\n")
+			for range 5 {
+				b.WriteString("share-check: s10 PASS: no tunnel container left, deploy/demo/run/ empty\n")
+			}
+			b.WriteString("share-check: s11 PASS: no container from the cloudflared image\ndemo-share-test: PASS (21 PASS lines) in 130 s\n")
 		case s.ids != nil:
 			fmt.Fprintf(&b, "   0s  base load 258 rps\n")
 			for _, id := range s.ids {
@@ -188,7 +191,7 @@ func TestM8ReportPassing(t *testing.T) {
 	for _, s := range m8Steps {
 		want = append(want, s.ids...)
 		if s.name == "s" {
-			want = append(want, "s10")
+			want = append(want, "s10", "s10", "s10", "s10", "s10", "s11")
 		}
 	}
 	if strings.Join(ids, " ") != strings.Join(want, " ") {

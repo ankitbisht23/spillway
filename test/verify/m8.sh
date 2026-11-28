@@ -5,7 +5,7 @@
 # orders-guard) and §14 (d6.1's before-the-fault window); ADR-0106 records
 # this script's own choices.
 #
-#   make verify-m8                  the full run, about 31 minutes on a built stack
+#   make verify-m8                  the full run, about 18 minutes on a built stack
 #   test/verify/m8.sh report <dir>  prints a run's check lines and verdict again
 #                                   from its logs, and writes <dir>.json again
 #

@@ -578,9 +578,9 @@ verify-m7:
 # in a one-off, with the base-load service stopped), make demo-share-test
 # against the stand-in tunnel (S, never a real tunnel), make demo-down and
 # demo mode off again (G1). One PASS/FAIL line per check with its measured
-# number; no re-run. About 31 minutes on a built stack; results in
-# test/verify/out/m8-<UTC timestamp>/ and .json. Compose only, never in CI;
-# on every exit the stack is left as make dev leaves it.
+# number; no re-run. About 18 minutes on a built stack (ADR-0098 budgets
+# 31); results in test/verify/out/m8-<UTC timestamp>/ and .json. Compose
+# only, never in CI; on every exit the stack is left as make dev leaves it.
 verify-m8: dev
 	@test/verify/m8.sh
 
