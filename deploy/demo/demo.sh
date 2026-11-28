@@ -146,8 +146,10 @@ down() {
 	local id
 	# A running share is stopped first (ADR-0097 §3): the tunnel goes and
 	# the dev realm and localhost settings come back.
+	# Then this script runs again, without the share's compose settings.
 	if deploy/demo/share.sh active; then
 		deploy/demo/share.sh stop
+		exec deploy/demo/demo.sh down
 	fi
 	# Both faults off through the API while the demo control plane runs
 	# (ADR-0094 §2), so the switch is audited; deleting the proxies below
