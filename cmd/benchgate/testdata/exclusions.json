@@ -1,0 +1,16 @@
+{
+  "exclusions": [
+    {
+      "arch": "x64",
+      "path": "results/x64/20261121T031700Z.json",
+      "reason": "p99 median 1.500 ms is an outlier against every run set around it",
+      "adr": "ADR-0107"
+    },
+    {
+      "arch": "arm64",
+      "path": "results/arm64/20261121T031700Z.json",
+      "reason": "another arch's entry: checked only by that arch's gate",
+      "adr": "ADR-0107"
+    }
+  ]
+}

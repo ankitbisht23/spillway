@@ -474,7 +474,8 @@ bench:
 	go test -run '^$$' -bench . -benchmem ./...
 
 # The NFR-05 gate (ADR-0073 §D8) on a local bench.sh result, against a copy
-# of origin/bench-results in bin/bench-results and the newest local v* tag:
+# of origin/bench-results in bin/bench-results, the committed exclusion list
+# (ADR-0107) and the newest local v* tag:
 # prints the verdict and the summary bench.yml writes, and changes no file.
 #   make bench-gate FILE=result.json
 bench-gate:
@@ -483,7 +484,7 @@ bench-gate:
 	@rm -rf bin/bench-results && mkdir -p bin/bench-results
 	@git archive origin/bench-results results | tar -x -C bin/bench-results
 	@tag=$$(git tag -l 'v*' | sort -V | tail -n 1); \
-		go run ./cmd/benchgate -results bin/bench-results -candidate "$(FILE)" \
+		go run ./cmd/benchgate -results bin/bench-results -exclusions test/load/bench-baseline-exclusions.json -candidate "$(FILE)" \
 			$$([ -z "$$tag" ] || echo "-release-tag $$tag -release-commit $$(git rev-parse "$$tag^{commit}")")
 
 # Checks that measure latency run the gateways at the benchmarks' fixed 1%
