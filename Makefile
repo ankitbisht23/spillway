@@ -11,7 +11,7 @@ FUZZTIME ?= 5s
 # Committed dev defaults first, then local overrides if present (ADR-0004).
 COMPOSE := docker compose --env-file .env.example $(if $(wildcard .env.local),--env-file .env.local)
 
-.PHONY: tools hooks certs dev demo demo-reset demo-down demo-share demo-share-stop demo-share-test demo-fault-redis demo-fault-upstream demo-fault-clear demo-d1 demo-d2 demo-d3 demo-d4 demo-d5 demo-d6 demo-d7 test-demo kind-up kind-down kind-smoke kind-rollout kind-images kind-grafana kind-prometheus test test-go test-web test-e2e test-e2e-demo fuzz test-integration proto api sqlc web-gen web-build lint lint-go lint-web lint-proto lint-api lint-sql lint-helm lint-obs lint-actions release-build release-publish bench bench-gate verify-m0 verify-m0-stack verify-m1 verify-m1-reload verify-m2 verify-m2-shadow verify-m3 verify-m4 verify-m5 verify-m6 verify-m7 accuracy chaos-redis-outage chaos-redis-primary chaos-cp-outage nfr-keys nfr-soak nfr-noisy chaos-redis-latency chaos-gateway-kill chaos
+.PHONY: tools hooks certs dev demo demo-reset demo-down demo-share demo-share-stop demo-share-test demo-fault-redis demo-fault-upstream demo-fault-clear demo-d1 demo-d2 demo-d3 demo-d4 demo-d5 demo-d6 demo-d7 test-demo kind-up kind-down kind-smoke kind-rollout kind-images kind-grafana kind-prometheus test test-go test-web test-e2e test-e2e-demo fuzz test-integration proto api sqlc web-gen web-build lint lint-go lint-web lint-proto lint-api lint-sql lint-helm lint-obs lint-actions release-build release-publish bench bench-gate verify-m0 verify-m0-stack verify-m1 verify-m1-reload verify-m2 verify-m2-shadow verify-m3 verify-m4 verify-m5 verify-m6 verify-m7 verify-m8 accuracy chaos-redis-outage chaos-redis-primary chaos-cp-outage nfr-keys nfr-soak nfr-noisy chaos-redis-latency chaos-gateway-kill chaos
 
 # Host-run processes and tests reach Redis Cluster nodes through this map
 # (ADR-0004). Set only here, never in compose or .env files.
@@ -571,6 +571,18 @@ verify-m6: dev
 # compose, kind, chaos) runs a subset, which is never the exit evidence.
 verify-m7:
 	@README=$(README) test/verify/m7.sh $(PARTS)
+
+# M8 exit (docs/design.md, ADR-0098, ADR-0106): demo mode off on the dev
+# stack (G0), make demo and make demo-reset, the demo keys (K), D1–D7 each
+# judged by the rule of the requirement it proves (demo-traffic run --check
+# in a one-off, with the base-load service stopped), make demo-share-test
+# against the stand-in tunnel (S, never a real tunnel), make demo-down and
+# demo mode off again (G1). One PASS/FAIL line per check with its measured
+# number; no re-run. About 31 minutes on a built stack; results in
+# test/verify/out/m8-<UTC timestamp>/ and .json. Compose only, never in CI;
+# on every exit the stack is left as make dev leaves it.
+verify-m8: dev
+	@test/verify/m8.sh
 
 # Accuracy harness v1 (NFR-06, NFR-07, ADR-0021, ADR-0069): gateway-1 …
 # gateway-$(REPLICAS) (1 to 5) run test/accuracy/gateway.yaml, or with
