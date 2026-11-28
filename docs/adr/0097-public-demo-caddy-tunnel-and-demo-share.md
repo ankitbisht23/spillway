@@ -1,6 +1,6 @@
 # 0097. Public demo: Caddy, the tunnel, make demo-share and its stand-in test
 
-- **Status:** Accepted
+- **Status:** Accepted; §1's Caddyfile `/auth/admin` rule amended by 0104
 - **Date:** 2026-11-27
 - **Requirement IDs:** SC-09, SC-08, SEC-02, SEC-04, SEC-05, CP-11, UI-08, UI-09, OB-01
 
