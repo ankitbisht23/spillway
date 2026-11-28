@@ -272,64 +272,76 @@ func TestDashboards(t *testing.T) {
 			t.Errorf("no dashboard %s", file)
 			continue
 		}
-		if d.UID != uid || !strings.HasPrefix(d.Title, "Spillway / ") || !slices.Contains(d.Tags, "spillway") {
-			t.Errorf("%s: uid %q, title %q, tags %v; want uid %q, a \"Spillway / \" title and the spillway tag", file, d.UID, d.Title, d.Tags, uid)
-		}
 		if prev, dup := uids[d.UID]; dup {
 			t.Errorf("%s and %s share uid %s", prev, file, d.UID)
 		}
 		uids[d.UID] = file
-		vars := map[string]bool{"__rate_interval": true, "__interval": true, "__range": true}
-		for _, v := range d.Templating.List {
-			vars[v.Name] = true
-			if v.Datasource.UID != "prometheus" {
-				t.Errorf("%s: variable %s uses datasource %q, want prometheus", file, v.Name, v.Datasource.UID)
-			}
-			checkExpr(t, file+" variable "+v.Name, v.Definition, k, rec)
-		}
-		ids := map[int]bool{}
-		targets := 0
-		for _, p := range d.Panels {
-			where := file + " panel " + p.Title
-			if ids[p.ID] || p.ID == 0 {
-				t.Errorf("%s: id %d missing or not unique", where, p.ID)
-			}
-			ids[p.ID] = true
-			if g := p.GridPos; g.W <= 0 || g.H <= 0 || g.X < 0 || g.X+g.W > 24 {
-				t.Errorf("%s: gridPos %+v outside the 24-column grid", where, g)
-			}
-			if p.Type == "row" {
-				continue
-			}
-			if p.Datasource.UID != "prometheus" || len(p.Targets) == 0 {
-				t.Errorf("%s: datasource %q with %d targets, want prometheus and at least one", where, p.Datasource.UID, len(p.Targets))
-			}
-			for _, tg := range p.Targets {
-				targets++
-				if tg.Data.UID != "prometheus" {
-					t.Errorf("%s: target datasource %q, want prometheus", where, tg.Data.UID)
-				}
-				checkExpr(t, where, tg.Expr, k, rec)
-				for _, v := range regexp.MustCompile(`\$\{?(\w+)`).FindAllStringSubmatch(tg.Expr, -1) {
-					if !vars[v[1]] {
-						t.Errorf("%s: uses $%s, which the dashboard does not define", where, v[1])
-					}
-				}
-				if tg.Exemplar {
-					exemplars++
-					if !strings.Contains(tg.Expr, "gw_request_duration_seconds_bucket") && !strings.Contains(tg.Expr, "gw_upstream_duration_seconds_bucket") {
-						t.Errorf("%s: asks for exemplars of %q; only the latency histograms carry them", where, tg.Expr)
-					}
-				}
-			}
-		}
-		if targets == 0 {
-			t.Errorf("%s: no queries", file)
-		}
+		exemplars += checkDashboard(t, file, d, uid, k, rec)
 	}
 	if exemplars < 3 {
 		t.Errorf("%d latency queries ask for exemplars, want those of the route, tenant and upstream latency panels (OB-06)", exemplars)
 	}
+}
+
+// checkDashboard applies TestDashboards' rules to one dashboard: its UID,
+// a "Spillway / " title and the spillway tag, unique panel IDs on a
+// 24-column grid, every variable and target on the provisioned Prometheus
+// datasource (uid prometheus) with a query whose metrics exist and whose
+// variables are defined, and exemplars only on the latency histograms. It
+// returns how many targets ask for exemplars.
+func checkDashboard(t *testing.T, file string, d dashboard, uid string, k, rec map[string]bool) (exemplars int) {
+	t.Helper()
+	if d.UID != uid || !strings.HasPrefix(d.Title, "Spillway / ") || !slices.Contains(d.Tags, "spillway") {
+		t.Errorf("%s: uid %q, title %q, tags %v; want uid %q, a \"Spillway / \" title and the spillway tag", file, d.UID, d.Title, d.Tags, uid)
+	}
+	vars := map[string]bool{"__rate_interval": true, "__interval": true, "__range": true}
+	for _, v := range d.Templating.List {
+		vars[v.Name] = true
+		if v.Datasource.UID != "prometheus" {
+			t.Errorf("%s: variable %s uses datasource %q, want prometheus", file, v.Name, v.Datasource.UID)
+		}
+		checkExpr(t, file+" variable "+v.Name, v.Definition, k, rec)
+	}
+	ids := map[int]bool{}
+	targets := 0
+	for _, p := range d.Panels {
+		where := file + " panel " + p.Title
+		if ids[p.ID] || p.ID == 0 {
+			t.Errorf("%s: id %d missing or not unique", where, p.ID)
+		}
+		ids[p.ID] = true
+		if g := p.GridPos; g.W <= 0 || g.H <= 0 || g.X < 0 || g.X+g.W > 24 {
+			t.Errorf("%s: gridPos %+v outside the 24-column grid", where, g)
+		}
+		if p.Type == "row" {
+			continue
+		}
+		if p.Datasource.UID != "prometheus" || len(p.Targets) == 0 {
+			t.Errorf("%s: datasource %q with %d targets, want prometheus and at least one", where, p.Datasource.UID, len(p.Targets))
+		}
+		for _, tg := range p.Targets {
+			targets++
+			if tg.Data.UID != "prometheus" {
+				t.Errorf("%s: target datasource %q, want prometheus", where, tg.Data.UID)
+			}
+			checkExpr(t, where, tg.Expr, k, rec)
+			for _, v := range regexp.MustCompile(`\$\{?(\w+)`).FindAllStringSubmatch(tg.Expr, -1) {
+				if !vars[v[1]] {
+					t.Errorf("%s: uses $%s, which the dashboard does not define", where, v[1])
+				}
+			}
+			if tg.Exemplar {
+				exemplars++
+				if !strings.Contains(tg.Expr, "gw_request_duration_seconds_bucket") && !strings.Contains(tg.Expr, "gw_upstream_duration_seconds_bucket") {
+					t.Errorf("%s: asks for exemplars of %q; only the latency histograms carry them", where, tg.Expr)
+				}
+			}
+		}
+	}
+	if targets == 0 {
+		t.Errorf("%s: no queries", file)
+	}
+	return exemplars
 }
 
 // TestRules: every alert OB-05 asks for exists with a severity, every
@@ -510,5 +522,170 @@ func TestProvisioning(t *testing.T) {
 	}
 	if !linked {
 		t.Error("the Prometheus datasource does not link exemplars' trace_id to Tempo (OB-06)")
+	}
+}
+
+// demoQueries are the Demo dashboard's queries, in ADR-0096 §4's order:
+// allowed, denied and refused per tenant, p99 per tenant, limiter mode,
+// limiter backend and Redis errors, replicas, upstream protection (SC-05).
+var demoQueries = []string{
+	`count(up{job="gateway"} == 1)`,
+	`sum by (replica) (rate(gw_requests_total[30s]))`,
+	`sum by (tenant) (rate(gw_requests_total{code_class="2xx"}[30s]))`,
+	`sum by (tenant) (rate(gw_requests_total{reason="ratelimited"}[30s]))`,
+	`histogram_quantile(0.99, sum by (tenant, le) (rate(gw_request_duration_seconds_bucket[30s])))`,
+	`sum by (tenant, reason) (rate(gw_requests_total{reason=~"fail_closed|circuit_open|shed"}[30s]))`,
+	`sum by (policy, mode, decision) (rate(gw_ratelimit_decisions_total[30s]))`,
+	`sum by (backend) (rate(gw_ratelimit_check_duration_seconds_count[30s]))`,
+	`sum by (kind) (rate(gw_redis_errors_total[30s]))`,
+	`max by (replica) (gw_circuit_state{upstream="orders"})`,
+	`sum by (outcome) (rate(gw_retries_total{upstream="orders"}[30s]))`,
+}
+
+// TestDemoDashboard: the demo Grafana's one dashboard,
+// deploy/grafana/demo/demo.json (SC-05, ADR-0096 §4), passes the rules
+// TestDashboards applies to the five OB-04 dashboards, has uid
+// spillway-demo, refreshes every 5 s over the last 15 minutes, and asks
+// exactly ADR-0096's queries. It is the only dashboard under
+// deploy/grafana/demo, and the OB-04 count stays five.
+func TestDemoDashboard(t *testing.T) {
+	files, err := fs.Glob(repo, "deploy/grafana/demo/*.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var all []string
+	_ = fs.WalkDir(repo, "deploy/grafana/demo", func(p string, e fs.DirEntry, err error) error {
+		if err == nil && !e.IsDir() && strings.HasSuffix(p, ".json") {
+			all = append(all, p)
+		}
+		return err
+	})
+	if !slices.Equal(files, []string{"deploy/grafana/demo/demo.json"}) || len(all) != 1 {
+		t.Fatalf("deploy/grafana/demo holds dashboards %v, want only demo.json", all)
+	}
+	b, err := fs.ReadFile(repo, files[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var d struct {
+		dashboard
+		Refresh string `json:"refresh"`
+		Time    struct {
+			From string `json:"from"`
+			To   string `json:"to"`
+		} `json:"time"`
+	}
+	if err := json.Unmarshal(b, &d); err != nil {
+		t.Fatalf("demo.json: %v", err)
+	}
+	checkDashboard(t, "demo.json", d.dashboard, "spillway-demo", known(t), recordings(loadRules(t)))
+	if d.Title != "Spillway / Demo" || d.Refresh != "5s" || d.Time.From != "now-15m" || d.Time.To != "now" {
+		t.Errorf("demo.json: title %q, refresh %q, time %s to %s; want Spillway / Demo, 5s, now-15m to now", d.Title, d.Refresh, d.Time.From, d.Time.To)
+	}
+	var got []string
+	for _, p := range d.Panels {
+		for _, tg := range p.Targets {
+			got = append(got, tg.Expr)
+		}
+	}
+	if !slices.Equal(got, demoQueries) {
+		t.Errorf("demo.json asks\n  %s\nwant ADR-0096 §4's\n  %s", strings.Join(got, "\n  "), strings.Join(demoQueries, "\n  "))
+	}
+}
+
+// TestDemoGrafana: the demo Grafana (SC-05, ADR-0096 §4) provisions exactly
+// one datasource, compose's Prometheus, and the Demo dashboard alone; the
+// demo override runs it from compose's Grafana image, in profile demo, with
+// no host port and ADR-0096's anonymous-Viewer settings, behind Caddy on
+// 127.0.0.1:8888 only (ADR-0097 §1); and the dev Grafana stays as it was:
+// no anonymous access, its own provisioning.
+func TestDemoGrafana(t *testing.T) {
+	read := func(name string, out any) {
+		t.Helper()
+		b, err := fs.ReadFile(repo, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := yaml.Unmarshal(b, out); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	var dsFile struct {
+		Datasources []map[string]any `yaml:"datasources"`
+	}
+	read("deploy/grafana/demo/provisioning/datasources/datasources.yaml", &dsFile)
+	if len(dsFile.Datasources) != 1 || dsFile.Datasources[0]["uid"] != "prometheus" || dsFile.Datasources[0]["type"] != "prometheus" ||
+		dsFile.Datasources[0]["url"] != "http://prometheus:9090" {
+		t.Errorf("the demo Grafana's datasources: %v; want exactly one, Prometheus (uid prometheus, http://prometheus:9090)", dsFile.Datasources)
+	}
+	var prov struct {
+		Providers []struct {
+			Type    string            `yaml:"type"`
+			Options map[string]string `yaml:"options"`
+		} `yaml:"providers"`
+	}
+	read("deploy/grafana/demo/provisioning/dashboards/demo.yaml", &prov)
+	if len(prov.Providers) != 1 || prov.Providers[0].Type != "file" || prov.Providers[0].Options["path"] != "/var/lib/grafana-demo" {
+		t.Errorf("the demo Grafana's dashboard providers: %+v; want one file provider for /var/lib/grafana-demo", prov.Providers)
+	}
+
+	type service struct {
+		Image       string            `yaml:"image"`
+		Profiles    []string          `yaml:"profiles"`
+		Labels      map[string]string `yaml:"labels"`
+		Ports       []string          `yaml:"ports"`
+		Environment map[string]string `yaml:"environment"`
+		Volumes     []string          `yaml:"volumes"`
+	}
+	var base, demo struct {
+		Services map[string]service `yaml:"services"`
+	}
+	read("compose.yaml", &base)
+	read("deploy/compose/demo.compose.yml", &demo)
+	dev, g, caddy := base.Services["grafana"], demo.Services["grafana-demo"], demo.Services["caddy"]
+	if g.Image == "" || g.Image != dev.Image {
+		t.Errorf("grafana-demo's image %q, want compose's Grafana image %q", g.Image, dev.Image)
+	}
+	if !slices.Equal(g.Profiles, []string{"demo"}) || g.Labels["spillway.demo"] != "true" || len(g.Ports) != 0 {
+		t.Errorf("grafana-demo: profiles %v, labels %v, ports %v; want profile demo, spillway.demo=true, no host port", g.Profiles, g.Labels, g.Ports)
+	}
+	for k, want := range map[string]string{ //nolint:gosec // G101: compose's dev-only default, not a credential
+		"GF_SERVER_ROOT_URL":                        "${DEMO_PUBLIC_URL:-http://localhost:8888}/grafana/",
+		"GF_SERVER_SERVE_FROM_SUB_PATH":             "true",
+		"GF_AUTH_ANONYMOUS_ENABLED":                 "true",
+		"GF_AUTH_ANONYMOUS_ORG_ROLE":                "Viewer",
+		"GF_AUTH_DISABLE_LOGIN_FORM":                "true",
+		"GF_AUTH_BASIC_ENABLED":                     "false",
+		"GF_USERS_ALLOW_SIGN_UP":                    "false",
+		"GF_EXPLORE_ENABLED":                        "false",
+		"GF_SNAPSHOTS_EXTERNAL_ENABLED":             "false",
+		"GF_SECURITY_ALLOW_EMBEDDING":               "false",
+		"GF_ANALYTICS_REPORTING_ENABLED":            "false",
+		"GF_ANALYTICS_CHECK_FOR_UPDATES":            "false",
+		"GF_PLUGINS_PREINSTALL_DISABLED":            "true",
+		"GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH": "/var/lib/grafana-demo/demo.json",
+		"GF_SECURITY_ADMIN_PASSWORD":                "${GRAFANA_DEMO_ADMIN_PASSWORD:-dev-only-not-secret}",
+	} {
+		if got := g.Environment[k]; got != want {
+			t.Errorf("grafana-demo: %s=%q, want %q", k, got, want)
+		}
+	}
+	if want := []string{
+		"./deploy/grafana/demo/provisioning/datasources:/etc/grafana/provisioning/datasources:ro",
+		"./deploy/grafana/demo/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro",
+		"./deploy/grafana/demo/demo.json:/var/lib/grafana-demo/demo.json:ro",
+	}; !slices.Equal(g.Volumes, want) {
+		t.Errorf("grafana-demo mounts %v, want only the demo provisioning and demo.json, read-only: %v", g.Volumes, want)
+	}
+	if !slices.Equal(caddy.Ports, []string{"127.0.0.1:8888:8888"}) || !slices.Equal(caddy.Profiles, []string{"demo"}) {
+		t.Errorf("caddy: ports %v, profiles %v; want 127.0.0.1:8888:8888 (docs/ports.md) and profile demo", caddy.Ports, caddy.Profiles)
+	}
+	for k := range dev.Environment {
+		if strings.HasPrefix(k, "GF_AUTH_") {
+			t.Errorf("the dev Grafana sets %s; its access stays as it was (ADR-0096 §4)", k)
+		}
+	}
+	if slices.ContainsFunc(dev.Volumes, func(v string) bool { return strings.Contains(v, "deploy/grafana/demo") }) {
+		t.Errorf("the dev Grafana mounts the demo Grafana's files: %v", dev.Volumes)
 	}
 }
